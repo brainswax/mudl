@@ -2,6 +2,7 @@
 Yet Another MUD Language
 
 # Project Structure
+```
 mudl/
 ├── README.md
 ├── ARCHITECTURE.md          # High-level diagrams + decisions
