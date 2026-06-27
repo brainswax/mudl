@@ -15,6 +15,7 @@ A living, collaborative text world where:
 The system emphasizes **separation of concerns**, extensibility, and safety (especially for live/LLM-generated code).
 
 ## High-Level Architecture
+```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Frontends / Input Layers                  │
 │  • IRC Bot (primary)                                         │
@@ -43,7 +44,7 @@ The system emphasizes **separation of concerns**, extensibility, and safety (esp
 │  • Event System + Scheduler (timers, hooks)                  │
 │  • Persistence Layer (SQLite / JSON)                         │
 └──────────────────────────────────────────────────────────────┘
-
+```
 **Key Principles**:
 - Core Engine is pure (no knowledge of IRC or auth).
 - All modifications go through the Gateway.
@@ -110,12 +111,3 @@ The system emphasizes **separation of concerns**, extensibility, and safety (esp
 - Multi-agent development support within the MUD itself.
 - WebSocket/web client.
 - Rich event system and procedural generation.
-
----
-
-**This document is a living artifact.** Update it as decisions are made.
-
-**Next steps**:
-- Refine Object Model and DSL syntax.
-- Implement Core Engine skeleton.
-- Set up Gateway + basic RBAC.
