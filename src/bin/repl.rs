@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
                     continue;
                 }
 
-                rl.add_history_entry(line.as_str());
+                let _ = rl.add_history_entry(line.as_str());
 
                 let parts: Vec<&str> = input.split_whitespace().collect();
                 let cmd = parts[0];
