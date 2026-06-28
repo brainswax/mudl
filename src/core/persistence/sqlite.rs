@@ -29,12 +29,12 @@ impl SqlitePersistence {
 
         // Ensure parent directory exists for file-based databases
         if !is_memory {
-            let path_str = if connect_url.starts_with("sqlite:") {
-                &connect_url[7..]
-            } else {
-                &connect_url
-            };
-            if let Some(parent) = Path::new(path_str).parent() {
+            let path_str = connect_url
+                .strip_prefix("sqlite:")
+                .unwrap_or(&connect_url)
+                .to_string();
+
+            if let Some(parent) = Path::new(&path_str).parent() {
                 if !parent.as_os_str().is_empty() {
                     std::fs::create_dir_all(parent)?;
                 }
