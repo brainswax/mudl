@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::io::{self, Write};
 
 use anyhow::Result;
+use rustyline::{DefaultEditor, error::ReadlineError};
 
 use mudl::core::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
 use mudl::core::persistence::{Persistence, SqlitePersistence};
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
     println!("Default owner: {}", default_owner);
     println!("Type 'help' for commands.");
 
-    let mut rl = rustyline::Editor::<(), rustyline::DefaultHelper>::new()?;
+    let mut rl = DefaultEditor::new()?;
     let history_path = if let Ok(home) = std::env::var("HOME") {
         std::path::PathBuf::from(home).join(".mudl_history")
     } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
