@@ -51,6 +51,18 @@ async fn main() -> Result<()> {
     println!("Default owner: {}", default_owner);
     println!("Type 'help' for commands.");
 
+    println!("Bootstrapping default world if needed...");
+    let mut current_location: Option<ObjectId> = None;
+    match factory.bootstrap(default_owner.clone()).await {
+        Ok(loc_id) => {
+            println!("Bootstrap complete. Starting at: {}", loc_id);
+            current_location = Some(loc_id);
+        }
+        Err(e) => {
+            println!("Warning: Bootstrap failed: {}", e);
+        }
+    }
+
     let mut rl = DefaultEditor::new()?;
     let history_path = if let Ok(home) = std::env::var("HOME") {
         std::path::PathBuf::from(home).join(".mudl_history")
@@ -82,7 +94,8 @@ async fn main() -> Result<()> {
                         println!("Commands:");
                         println!("  create <type> <base_name>   - e.g. create room cozy-kitchen");
                         println!("  list                        - list objects in session cache");
-                        println!("  look <id>                   - show object details");
+                        println!("  look [id]                   - show object details (or current location if no id)");
+                        println!("  go <dir>                    - move to another location (e.g. go north)");
                         println!("  add_prop <id> <name> <value> - add string property");
                         println!("  add_verb <id> <name> <code> - add verb with code");
                         println!("  load <id>                   - load object from persistence");
@@ -118,11 +131,16 @@ async fn main() -> Result<()> {
                         }
                     }
                     "look" => {
-                        if parts.len() < 2 {
-                            println!("Usage: look <id>");
-                            continue;
-                        }
-                        let id = ObjectId::new(parts[1]);
+                        let id = if parts.len() < 2 {
+                            if let Some(loc) = &current_location {
+                                loc.clone()
+                            } else {
+                                println!("No current location. Use 'look <id>'.");
+                                continue;
+                            }
+                        } else {
+                            ObjectId::new(parts[1])
+                        };
                         let obj = if let Some(o) = cache.get(&id) {
                             o.clone()
                         } else {
@@ -142,6 +160,67 @@ async fn main() -> Result<()> {
                             }
                         };
                         print_object(&obj);
+                    }
+                    "go" => {
+                        if parts.len() < 2 {
+                            println!("Usage: go <direction>");
+                            continue;
+                        }
+                        let dir = parts[1];
+                        if let Some(loc_id) = &current_location {
+                            let loc = if let Some(o) = cache.get(loc_id) {
+                                o.clone()
+                            } else {
+                                match persistence.load_object(loc_id).await {
+                                    Ok(Some(o)) => {
+                                        cache.insert(loc_id.clone(), o.clone());
+                                        o
+                                    }
+                                    Ok(None) => {
+                                        println!("Current location not found.");
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        println!("Error loading location: {}", e);
+                                        continue;
+                                    }
+                                }
+                            };
+                            let exits = loc.get_exits();
+                            if let Some(target_id) = exits.get(dir) {
+                                let mut player = if let Some(o) = cache.remove(&default_owner) {
+                                    o
+                                } else {
+                                    match persistence.load_object(&default_owner).await {
+                                        Ok(Some(o)) => o,
+                                        Ok(None) => {
+                                            println!("Player not found.");
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            println!("Error loading player: {}", e);
+                                            continue;
+                                        }
+                                    }
+                                };
+                                player.location = Some(target_id.clone());
+                                if let Err(e) = persistence.save_object(&player).await {
+                                    println!("Error saving player location: {}", e);
+                                } else {
+                                    println!("You go {}.", dir);
+                                    current_location = Some(target_id.clone());
+                                }
+                                cache.insert(default_owner.clone(), player);
+                                // Preload the new location into cache
+                                if let Ok(Some(new_loc)) = persistence.load_object(target_id).await {
+                                    cache.insert(target_id.clone(), new_loc);
+                                }
+                            } else {
+                                println!("There is no exit {}.", dir);
+                            }
+                        } else {
+                            println!("No current location set. Use 'look' or bootstrap.");
+                        }
                     }
                     "add_prop" => {
                         if parts.len() < 4 {
