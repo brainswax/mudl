@@ -35,14 +35,16 @@ fn print_object(obj: &Object) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenv::dotenv().ok();
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "repl.db".to_string());
+
     println!("MUDL REPL starting...");
-    let db_path = "repl.db";
-    let persistence = SqlitePersistence::new(db_path).await?;
+    let persistence = SqlitePersistence::new(&db_url).await?;
     let factory = ObjectFactory::new(persistence.clone());
     let mut cache: HashMap<ObjectId, Object> = HashMap::new();
     let default_owner = ObjectId::new("player:admin-001");
 
-    println!("Using database: {}", db_path);
+    println!("Using database: {}", db_url);
     println!("Default owner: {}", default_owner);
     println!("Type 'help' for commands.");
 
