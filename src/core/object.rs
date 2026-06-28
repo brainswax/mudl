@@ -24,10 +24,6 @@ impl ObjectId {
         Self(id.into())
     }
 
-    pub fn generate_id(obj_type: &str, base_name: &str, counter: u32) -> Self {
-        generate_object_id(obj_type, base_name, counter)
-    }
-
     pub fn as_str(&self) -> &str {
         &self.0
     }
