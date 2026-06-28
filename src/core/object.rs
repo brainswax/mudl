@@ -23,9 +23,7 @@ impl ObjectId {
     }
 
     pub fn generate_id(obj_type: &str, base_name: &str) -> Self {
-        // MVP implementation: uses fixed counter 001.
-        // Full implementation would track counters per type/base_name.
-        Self(format!("{}:{}-001", obj_type, base_name))
+        generate_object_id(obj_type, base_name)
     }
 
     pub fn as_str(&self) -> &str {
@@ -84,9 +82,15 @@ pub struct Object {
     pub event_handlers: HashMap<String, Vec<Behavior>>,
 }
 
-impl Object {
-    pub fn new(id: ObjectId, name: String, owner: ObjectId) -> Self {
-        Self {
+pub fn generate_object_id(obj_type: &str, base_name: &str) -> ObjectId {
+    ObjectId(format!("{}:{}-{:03x}", obj_type, base_name, 1))
+}
+
+pub struct ObjectFactory;
+
+impl ObjectFactory {
+    pub fn new(id: ObjectId, name: String, owner: ObjectId) -> Object {
+        Object {
             id,
             name,
             aliases: Vec::new(),
@@ -100,6 +104,14 @@ impl Object {
         }
     }
 
+    pub fn create_with_generated_id(type_name: &str, base_name: &str, owner: ObjectId) -> Object {
+        let id = generate_object_id(type_name, base_name);
+        let name = base_name.to_string();
+        Self::new(id, name, owner)
+    }
+}
+
+impl Object {
     /// Returns a direct property if present.
     pub fn get_property(&self, name: &str) -> Option<&Property> {
         self.properties.get(name)
