@@ -3,6 +3,8 @@ use std::collections::HashMap;
 
 use bitflags::bitflags;
 
+use super::persistence::Persistence;
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct PermissionFlags: u8 {
@@ -22,8 +24,8 @@ impl ObjectId {
         Self(id.into())
     }
 
-    pub fn generate_id(obj_type: &str, base_name: &str) -> Self {
-        generate_object_id(obj_type, base_name)
+    pub fn generate_id(obj_type: &str, base_name: &str, counter: u32) -> Self {
+        generate_object_id(obj_type, base_name, counter)
     }
 
     pub fn as_str(&self) -> &str {
@@ -82,15 +84,31 @@ pub struct Object {
     pub event_handlers: HashMap<String, Vec<Behavior>>,
 }
 
-pub fn generate_object_id(obj_type: &str, base_name: &str) -> ObjectId {
-    ObjectId(format!("{}:{}-{:03x}", obj_type, base_name, 1))
+pub fn generate_object_id(obj_type: &str, base_name: &str, counter: u32) -> ObjectId {
+    ObjectId(format!("{}:{}-{:03x}", obj_type, base_name, counter))
 }
 
-pub struct ObjectFactory;
+pub struct ObjectFactory<P: Persistence> {
+    persistence: P,
+}
 
-impl ObjectFactory {
-    pub fn new(id: ObjectId, name: String, owner: ObjectId) -> Object {
-        Object {
+impl<P: Persistence> ObjectFactory<P> {
+    pub fn new(persistence: P) -> Self {
+        Self { persistence }
+    }
+
+    pub async fn create(
+        &self,
+        type_name: &str,
+        base_name: &str,
+        owner: ObjectId,
+    ) -> anyhow::Result<Object> {
+        let counter = self.persistence.get_next_id_counter(type_name, base_name).await?;
+        let id = generate_object_id(type_name, base_name, counter);
+        self.persistence.increment_counter(type_name, base_name).await?;
+
+        let name = base_name.to_string();
+        let object = Object {
             id,
             name,
             aliases: Vec::new(),
@@ -101,13 +119,10 @@ impl ObjectFactory {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
-        }
-    }
+        };
 
-    pub fn create_with_generated_id(type_name: &str, base_name: &str, owner: ObjectId) -> Object {
-        let id = generate_object_id(type_name, base_name);
-        let name = base_name.to_string();
-        Self::new(id, name, owner)
+        self.persistence.save_object(&object).await?;
+        Ok(object)
     }
 }
 
