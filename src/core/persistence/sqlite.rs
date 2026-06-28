@@ -121,3 +121,17 @@ impl Persistence for SqlitePersistence {
         Ok(new_counter as u32)
     }
 }
+
+impl SqlitePersistence {
+    /// Load every persisted object (used to build display context for look/examine).
+    pub async fn list_objects(&self) -> Result<Vec<Object>> {
+        let rows: Vec<String> =
+            sqlx::query_scalar::<_, String>("SELECT data FROM objects ORDER BY id")
+                .fetch_all(&self.pool)
+                .await?;
+
+        rows.into_iter()
+            .map(|data| serde_json::from_str(&data).map_err(Into::into))
+            .collect()
+    }
+}
