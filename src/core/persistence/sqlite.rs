@@ -5,6 +5,7 @@ use anyhow::Result;
 use super::super::object::{Object, ObjectId};
 use super::r#trait::Persistence;
 
+#[derive(Clone)]
 pub struct SqlitePersistence {
     pool: SqlitePool,
 }
