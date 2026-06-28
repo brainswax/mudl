@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
                 let base_name = parts[2];
                 match factory.create(type_name, base_name, default_owner.clone()).await {
                     Ok(obj) => {
-                        println!("Created: {} ({})", obj.name, obj.id);
+                        println!("Created: {} ({})", &obj.name, &obj.id);
                         cache.insert(obj.id.clone(), obj);
                     }
                     Err(e) => println!("Error creating: {}", e),
