@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use anyhow::Result;
 
 use mudl::core::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
-use mudl::core::persistence::SqlitePersistence;
+use mudl::core::persistence::{Persistence, SqlitePersistence};
 
 fn print_object(obj: &Object) {
     println!("=== {} ===", obj.id);
