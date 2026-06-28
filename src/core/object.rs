@@ -3,6 +3,8 @@ use std::collections::HashMap;
 
 use bitflags::bitflags;
 
+use super::persistence::Persistence;
+
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[derive(serde::Serialize, serde::Deserialize)]
