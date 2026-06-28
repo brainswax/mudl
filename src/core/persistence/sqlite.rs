@@ -56,7 +56,7 @@ impl Persistence for SqlitePersistence {
     }
 
     async fn load_object(&self, id: &ObjectId) -> Result<Option<Object>> {
-        let data: Option<String> = sqlx::query_scalar(
+        let data: Option<String> = sqlx::query_scalar::<_, String>(
             "SELECT data FROM objects WHERE id = ?",
         )
         .bind(id.to_string())
@@ -73,7 +73,7 @@ impl Persistence for SqlitePersistence {
 
     async fn get_next_id_counter(&self, obj_type: &str, base_name: &str) -> Result<u32> {
         let key = format!("{}:{}", obj_type, base_name);
-        let counter: Option<i64> = sqlx::query_scalar(
+        let counter: Option<i64> = sqlx::query_scalar::<_, i64>(
             "SELECT counter FROM counters WHERE type_base = ?",
         )
         .bind(&key)
@@ -85,7 +85,7 @@ impl Persistence for SqlitePersistence {
 
     async fn increment_counter(&self, obj_type: &str, base_name: &str) -> Result<u32> {
         let key = format!("{}:{}", obj_type, base_name);
-        let new_counter: i64 = sqlx::query_scalar(
+        let new_counter: i64 = sqlx::query_scalar::<_, i64>(
             r#"
             INSERT INTO counters (type_base, counter) VALUES (?, 1)
             ON CONFLICT(type_base) DO UPDATE SET counter = counter + 1
