@@ -1,0 +1,5 @@
+type: item
+base_name: lantern
+name: Rusty Lantern
+description: An old rusty lantern that might provide light in dark areas.
+location: the-void

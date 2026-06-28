@@ -1,0 +1,4 @@
+type: world
+base_name: default
+name: Default World
+description: The default starting world for MUDL. A small set of connected locations for new players to explore.

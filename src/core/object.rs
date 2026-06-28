@@ -85,6 +85,87 @@ pub fn generate_object_id(obj_type: &str, base_name: &str, counter: u32) -> Obje
     ObjectId(format!("{}:{}-{:03x}", obj_type, base_name, counter))
 }
 
+struct WorldDef {
+    obj_type: String,
+    base_name: String,
+    name: String,
+    description: Option<String>,
+    exits: HashMap<String, String>,
+    location: Option<String>,
+    starting_location: Option<String>,
+}
+
+fn parse_mudl_file(path: &std::path::Path) -> anyhow::Result<Vec<WorldDef>> {
+    let content = std::fs::read_to_string(path)?;
+    let mut defs: Vec<WorldDef> = Vec::new();
+    let mut current = WorldDef {
+        obj_type: "room".to_string(),
+        base_name: "unknown".to_string(),
+        name: "Unknown".to_string(),
+        description: None,
+        exits: HashMap::new(),
+        location: None,
+        starting_location: None,
+    };
+    let mut in_exits = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            if current.base_name != "unknown" {
+                defs.push(current);
+                current = WorldDef {
+                    obj_type: "room".to_string(),
+                    base_name: "unknown".to_string(),
+                    name: "Unknown".to_string(),
+                    description: None,
+                    exits: HashMap::new(),
+                    location: None,
+                    starting_location: None,
+                };
+                in_exits = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with('#') || trimmed.starts_with("//") {
+            continue;
+        }
+        if trimmed == "exits:" {
+            in_exits = true;
+            continue;
+        }
+        if in_exits && trimmed.contains(':') {
+            let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
+            if parts.len() == 2 {
+                let dir = parts[0].trim().to_string();
+                let target = parts[1].trim().to_string();
+                current.exits.insert(dir, target);
+            }
+            continue;
+        }
+        if trimmed.contains(':') {
+            in_exits = false;
+            let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
+            if parts.len() == 2 {
+                let key = parts[0].trim().to_lowercase();
+                let value = parts[1].trim().to_string();
+                match key.as_str() {
+                    "type" => current.obj_type = value,
+                    "base_name" => current.base_name = value,
+                    "name" => current.name = value,
+                    "description" => current.description = Some(value),
+                    "location" => current.location = Some(value),
+                    "starting_location" => current.starting_location = Some(value),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if current.base_name != "unknown" {
+        defs.push(current);
+    }
+    Ok(defs)
+}
+
 pub struct ObjectFactory<P: Persistence> {
     persistence: P,
 }
@@ -126,6 +207,116 @@ impl<P: Persistence> ObjectFactory<P> {
         self.persistence.save_object(&object).await?;
         Ok(object)
     }
+
+    pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
+        self.persistence.load_object(id).await
+    }
+
+    pub async fn load_world(&self, dir: &str, owner: ObjectId) -> anyhow::Result<ObjectId> {
+        let world_id = ObjectId::new("world:default-001");
+        let is_loaded = self.load_object(&world_id).await?.is_some();
+
+        let mut world_defs: Vec<WorldDef> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("mudl") {
+                        if let Ok(defs) = parse_mudl_file(&path) {
+                            world_defs.extend(defs);
+                        }
+                    }
+                }
+            }
+        }
+
+        if world_defs.is_empty() {
+            return Err(anyhow::anyhow!("No .mudl files found in {}", dir));
+        }
+
+        let mut starting_location: Option<String> = None;
+        for def in &world_defs {
+            if def.obj_type == "config" {
+                starting_location = def.starting_location.clone();
+                continue;
+            }
+        }
+
+        if is_loaded {
+            if let Some(start_base) = &starting_location {
+                let start_id = ObjectId::new(format!("room:{}-001", start_base));
+                return Ok(start_id);
+            }
+            return Err(anyhow::anyhow!("No starting location specified in init.mudl"));
+        }
+
+        let mut name_to_id: HashMap<String, ObjectId> = HashMap::new();
+
+        for def in &world_defs {
+            if def.obj_type == "config" {
+                continue;
+            }
+            let mut obj = self.create(&def.obj_type, &def.base_name, owner.clone()).await?;
+            obj.name = def.name.clone();
+            if let Some(desc) = &def.description {
+                let desc_prop = Property {
+                    name: "description".to_string(),
+                    value: Value::String(desc.clone()),
+                    permissions: PermissionFlags::EVERYONE,
+                    behavior: None,
+                };
+                obj.add_property(desc_prop);
+            }
+            self.persistence.save_object(&obj).await?;
+            name_to_id.insert(def.base_name.clone(), obj.id.clone());
+        }
+
+        for def in &world_defs {
+            if def.obj_type == "config" {
+                continue;
+            }
+            if let Some(id) = name_to_id.get(&def.base_name) {
+                let mut obj = if let Some(o) = self.load_object(id).await? {
+                    o
+                } else {
+                    continue;
+                };
+                if let Some(loc_base) = &def.location {
+                    if let Some(loc_id) = name_to_id.get(loc_base) {
+                        obj.location = Some(loc_id.clone());
+                    }
+                }
+                for (dir, target_base) in &def.exits {
+                    if let Some(target_id) = name_to_id.get(target_base) {
+                        obj.add_exit(dir, target_id.clone());
+                    }
+                }
+                self.persistence.save_object(&obj).await?;
+            }
+        }
+
+        if self.load_object(&owner).await?.is_none() {
+            let mut player = self.create("player", "admin", owner.clone()).await?;
+            player.name = "Admin".to_string();
+            if let Some(start_base) = &starting_location {
+                if let Some(start_id) = name_to_id.get(start_base) {
+                    player.location = Some(start_id.clone());
+                }
+            }
+            self.persistence.save_object(&player).await?;
+        }
+
+        let start_id = if let Some(start_base) = &starting_location {
+            name_to_id.get(start_base).cloned().unwrap_or_else(|| ObjectId::new(format!("room:{}-001", start_base)))
+        } else {
+            name_to_id.values().next().cloned().unwrap_or_else(|| ObjectId::new("room:the-void-001"))
+        };
+        Ok(start_id)
+    }
+
+    pub async fn bootstrap(&self, owner: ObjectId) -> anyhow::Result<ObjectId> {
+        self.load_world("worlds/default", owner).await
+    }
 }
 
 impl Object {
@@ -165,5 +356,49 @@ impl Object {
             .entry(event_name)
             .or_default()
             .push(behavior);
+    }
+
+    pub fn get_description(&self) -> Option<String> {
+        self.get_property("description").and_then(|prop| {
+            if let Value::String(s) = &prop.value {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn get_exits(&self) -> HashMap<String, ObjectId> {
+        if let Some(prop) = self.get_property("exits") {
+            if let Value::Map(map) = &prop.value {
+                let mut result = HashMap::new();
+                for (key, val) in map {
+                    if let Value::ObjectRef(id) = val {
+                        result.insert(key.clone(), id.clone());
+                    }
+                }
+                return result;
+            }
+        }
+        HashMap::new()
+    }
+
+    pub fn add_exit(&mut self, direction: &str, target: ObjectId) {
+        let exits_prop = self.properties.get_mut("exits");
+        if let Some(prop) = exits_prop {
+            if let Value::Map(map) = &mut prop.value {
+                map.insert(direction.to_string(), Value::ObjectRef(target));
+                return;
+            }
+        }
+        let mut map = HashMap::new();
+        map.insert(direction.to_string(), Value::ObjectRef(target));
+        let prop = Property {
+            name: "exits".to_string(),
+            value: Value::Map(map),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        };
+        self.properties.insert("exits".to_string(), prop);
     }
 }
