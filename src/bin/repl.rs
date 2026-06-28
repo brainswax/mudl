@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
     let factory = ObjectFactory::new(persistence.clone());
     let mut cache: HashMap<ObjectId, Object> = HashMap::new();
     let default_owner = ObjectId::new(
-        std::env::var("DEFAULT_PLAYER").unwrap_or_else(|_| "player:admin-001".to_string())
+        std::env::var("DEFAULT_PLAYER").unwrap_or_else(|_| "player:admin-001".to_string()),
     );
 
     println!("Using database: {}", db_url);
@@ -213,7 +213,8 @@ async fn main() -> Result<()> {
                                     current_location = Some(target_id.clone());
                                 }
                                 cache.insert(default_owner.clone(), player);
-                                if let Ok(Some(new_loc)) = persistence.load_object(target_id).await {
+                                if let Ok(Some(new_loc)) = persistence.load_object(target_id).await
+                                {
                                     cache.insert(target_id.clone(), new_loc);
                                 }
                             } else {

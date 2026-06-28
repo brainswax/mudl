@@ -218,13 +218,11 @@ impl<P: Persistence> ObjectFactory<P> {
 
         let mut world_defs: Vec<WorldDef> = Vec::new();
         if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if path.extension().and_then(|s| s.to_str()) == Some("mudl") {
-                        if let Ok(defs) = parse_mudl_file(&path) {
-                            world_defs.extend(defs);
-                        }
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("mudl") {
+                    if let Ok(defs) = parse_mudl_file(&path) {
+                        world_defs.extend(defs);
                     }
                 }
             }
@@ -247,7 +245,9 @@ impl<P: Persistence> ObjectFactory<P> {
                 let start_id = ObjectId::new(format!("room:{}-001", start_base));
                 return Ok(start_id);
             }
-            return Err(anyhow::anyhow!("No starting location specified in init.mudl"));
+            return Err(anyhow::anyhow!(
+                "No starting location specified in init.mudl"
+            ));
         }
 
         let mut name_to_id: HashMap<String, ObjectId> = HashMap::new();
@@ -256,7 +256,9 @@ impl<P: Persistence> ObjectFactory<P> {
             if def.obj_type == "config" {
                 continue;
             }
-            let mut obj = self.create(&def.obj_type, &def.base_name, owner.clone()).await?;
+            let mut obj = self
+                .create(&def.obj_type, &def.base_name, owner.clone())
+                .await?;
             obj.name = def.name.clone();
             if let Some(desc) = &def.description {
                 let desc_prop = Property {
@@ -307,9 +309,16 @@ impl<P: Persistence> ObjectFactory<P> {
         }
 
         let start_id = if let Some(start_base) = &starting_location {
-            name_to_id.get(start_base).cloned().unwrap_or_else(|| ObjectId::new(format!("room:{}-001", start_base)))
+            name_to_id
+                .get(start_base)
+                .cloned()
+                .unwrap_or_else(|| ObjectId::new(format!("room:{}-001", start_base)))
         } else {
-            name_to_id.values().next().cloned().unwrap_or_else(|| ObjectId::new("room:the-void-001"))
+            name_to_id
+                .values()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| ObjectId::new("room:the-void-001"))
         };
         Ok(start_id)
     }
