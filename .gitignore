@@ -28,3 +28,4 @@ target
 
 # Environment variables (use .env.example as a template)
 .env
+**/**.db

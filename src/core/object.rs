@@ -100,9 +100,14 @@ impl<P: Persistence> ObjectFactory<P> {
         base_name: &str,
         owner: ObjectId,
     ) -> anyhow::Result<Object> {
-        let counter = self.persistence.get_next_id_counter(type_name, base_name).await?;
+        let counter = self
+            .persistence
+            .get_next_id_counter(type_name, base_name)
+            .await?;
         let id = generate_object_id(type_name, base_name, counter);
-        self.persistence.increment_counter(type_name, base_name).await?;
+        self.persistence
+            .increment_counter(type_name, base_name)
+            .await?;
 
         let name = base_name.to_string();
         let object = Object {

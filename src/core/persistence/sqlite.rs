@@ -1,6 +1,6 @@
+use anyhow::Result;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
-use anyhow::Result;
 
 use std::path::Path;
 use std::str::FromStr;
@@ -41,8 +41,7 @@ impl SqlitePersistence {
             }
         }
 
-        let options = SqliteConnectOptions::from_str(&connect_url)?
-            .create_if_missing(true);
+        let options = SqliteConnectOptions::from_str(&connect_url)?.create_if_missing(true);
 
         let pool = SqlitePool::connect_with(options).await?;
 
@@ -71,24 +70,21 @@ impl Persistence for SqlitePersistence {
         let id = object.id.to_string();
         let data = serde_json::to_string(object)?;
 
-        sqlx::query(
-            "INSERT OR REPLACE INTO objects (id, data) VALUES (?, ?)",
-        )
-        .bind(id)
-        .bind(data)
-        .execute(&self.pool)
-        .await?;
+        sqlx::query("INSERT OR REPLACE INTO objects (id, data) VALUES (?, ?)")
+            .bind(id)
+            .bind(data)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
 
     async fn load_object(&self, id: &ObjectId) -> Result<Option<Object>> {
-        let data: Option<String> = sqlx::query_scalar::<_, String>(
-            "SELECT data FROM objects WHERE id = ?",
-        )
-        .bind(id.to_string())
-        .fetch_optional(&self.pool)
-        .await?;
+        let data: Option<String> =
+            sqlx::query_scalar::<_, String>("SELECT data FROM objects WHERE id = ?")
+                .bind(id.to_string())
+                .fetch_optional(&self.pool)
+                .await?;
 
         if let Some(data) = data {
             let object: Object = serde_json::from_str(&data)?;
@@ -100,12 +96,11 @@ impl Persistence for SqlitePersistence {
 
     async fn get_next_id_counter(&self, obj_type: &str, base_name: &str) -> Result<u32> {
         let key = format!("{}:{}", obj_type, base_name);
-        let counter: Option<i64> = sqlx::query_scalar::<_, i64>(
-            "SELECT counter FROM counters WHERE type_base = ?",
-        )
-        .bind(&key)
-        .fetch_optional(&self.pool)
-        .await?;
+        let counter: Option<i64> =
+            sqlx::query_scalar::<_, i64>("SELECT counter FROM counters WHERE type_base = ?")
+                .bind(&key)
+                .fetch_optional(&self.pool)
+                .await?;
 
         Ok(counter.map(|c| (c + 1) as u32).unwrap_or(1))
     }

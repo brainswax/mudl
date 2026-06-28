@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use rustyline::{DefaultEditor, error::ReadlineError};
+use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::core::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
 use mudl::core::persistence::{Persistence, SqlitePersistence};
@@ -22,7 +22,10 @@ fn print_object(obj: &Object) {
     println!("Permissions: {:?}", obj.permissions);
     println!("Properties:");
     for (name, prop) in &obj.properties {
-        println!("  {} = {:?} (perms: {:?})", name, prop.value, prop.permissions);
+        println!(
+            "  {} = {:?} (perms: {:?})",
+            name, prop.value, prop.permissions
+        );
     }
     println!("Verbs:");
     for (name, verb) in &obj.verbs {
@@ -93,7 +96,10 @@ async fn main() -> Result<()> {
                         }
                         let type_name = parts[1];
                         let base_name = parts[2];
-                        match factory.create(type_name, base_name, default_owner.clone()).await {
+                        match factory
+                            .create(type_name, base_name, default_owner.clone())
+                            .await
+                        {
                             Ok(obj) => {
                                 println!("Created: {} ({})", &obj.name, &obj.id);
                                 cache.insert(obj.id.clone(), obj);
