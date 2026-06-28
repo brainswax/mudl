@@ -2,6 +2,11 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 use anyhow::Result;
 
+use std::path::Path;
+use std::str::FromStr;
+
+use sqlx::sqlite::SqliteConnectOptions;
+
 use super::super::object::{Object, ObjectId};
 use super::r#trait::Persistence;
 
@@ -12,12 +17,34 @@ pub struct SqlitePersistence {
 
 impl SqlitePersistence {
     pub async fn new(database_url: &str) -> Result<Self> {
-        let url = if database_url.starts_with("sqlite:") || database_url == ":memory:" {
+        let is_memory = database_url == ":memory:" || database_url.ends_with(":memory:");
+
+        let connect_url = if is_memory {
+            ":memory:".to_string()
+        } else if database_url.starts_with("sqlite:") {
             database_url.to_string()
         } else {
             format!("sqlite:{}", database_url)
         };
-        let pool = SqlitePool::connect(&url).await?;
+
+        // Ensure parent directory exists for file-based databases
+        if !is_memory {
+            let path_str = if connect_url.starts_with("sqlite:") {
+                &connect_url[7..]
+            } else {
+                &connect_url
+            };
+            if let Some(parent) = Path::new(path_str).parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)?;
+                }
+            }
+        }
+
+        let options = SqliteConnectOptions::from_str(&connect_url)?
+            .create_if_missing(true);
+
+        let pool = SqlitePool::connect_with(options).await?;
 
         sqlx::query(
             r#"
