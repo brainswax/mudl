@@ -1,31 +1,32 @@
 //! Command-layer helpers shared by REPL and future frontends.
 
-use crate::mudl::{load_module, LoadedModule};
+use crate::mudl::{load_module, LoadedUniverse};
 use crate::object::{ObjectFactory, ObjectId};
 use crate::persistence::Persistence;
-use crate::world::{bootstrap_module, bundle_module, ModuleManifest};
+use crate::world::{bootstrap_world, bundle_module, ModuleManifest};
 
-/// Load the active MUDL module from `MUDL_MODULE` / `MUDL_UNIVERSE` env or default.
-pub fn load_active_module() -> anyhow::Result<LoadedModule> {
+/// Load the active MUDL universe from `MUDL_MODULE` / `MUDL_UNIVERSE` env or default.
+pub fn load_active_universe() -> anyhow::Result<LoadedUniverse> {
     crate::mudl::load_module(crate::mudl::default_module_dir())
 }
 
-/// Bootstrap the active module for a player.
-pub async fn bootstrap_active_module<P: Persistence>(
+/// Bootstrap the active universe's world for a player.
+pub async fn bootstrap_active_universe<P: Persistence>(
     factory: &ObjectFactory<P>,
     owner: ObjectId,
-) -> anyhow::Result<(LoadedModule, crate::object::ObjectId)> {
-    let module = load_active_module()?;
-    let start = bootstrap_module(factory, owner, &module).await?;
-    Ok((module, start))
+) -> anyhow::Result<(LoadedUniverse, crate::object::ObjectId)> {
+    let universe = load_active_universe()?;
+    let world = universe.active_world()?;
+    let start = bootstrap_world(factory, owner, world).await?;
+    Ok((universe, start))
 }
 
-/// Package a module directory for distribution.
+/// Package a universe module directory for distribution.
 pub fn package_module(module_dir: &str, output_dir: &str) -> anyhow::Result<ModuleManifest> {
     bundle_module(module_dir, output_dir)
 }
 
-/// Reload a module from disk (for hot-reload during development).
-pub fn reload_module(path: &str) -> anyhow::Result<LoadedModule> {
+/// Reload a universe module from disk (for hot-reload during development).
+pub fn reload_universe(path: &str) -> anyhow::Result<LoadedUniverse> {
     load_module(path)
 }

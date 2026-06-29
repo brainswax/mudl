@@ -1,29 +1,29 @@
 use std::collections::HashMap;
 
-use crate::mudl::LoadedModule;
+use crate::mudl::LoadedWorld;
 use crate::object::{ObjectFactory, ObjectId, PermissionFlags, Property, Value};
 use crate::persistence::Persistence;
 
-/// Bootstrap world objects from a loaded MUDL module into persistence.
-pub async fn bootstrap_module<P: Persistence>(
+/// Bootstrap world objects from a loaded MUDL world into persistence.
+pub async fn bootstrap_world<P: Persistence>(
     factory: &ObjectFactory<P>,
     owner: ObjectId,
-    module: &LoadedModule,
+    world: &LoadedWorld,
 ) -> anyhow::Result<ObjectId> {
-    if let Some(start_base) = &module.starting_location {
+    if let Some(start_base) = &world.starting_location {
         let start_id = ObjectId::new(format!("room:{start_base}-001"));
         if factory.load_object(&start_id).await?.is_some() {
             return Ok(start_id);
         }
     }
 
-    if module.world_defs.is_empty() {
-        anyhow::bail!("No world definitions in module {}", module.name);
+    if world.world_defs.is_empty() {
+        anyhow::bail!("No world definitions in world {}", world.name);
     }
 
     let mut name_to_id: HashMap<String, ObjectId> = HashMap::new();
 
-    for def in &module.world_defs {
+    for def in &world.world_defs {
         let mut obj = factory
             .create(&def.obj_type, &def.base_name, owner.clone())
             .await?;
@@ -40,7 +40,7 @@ pub async fn bootstrap_module<P: Persistence>(
         name_to_id.insert(def.base_name.clone(), obj.id.clone());
     }
 
-    for def in &module.world_defs {
+    for def in &world.world_defs {
         if let Some(id) = name_to_id.get(&def.base_name) {
             let mut obj = if let Some(o) = factory.load_object(id).await? {
                 o
@@ -63,10 +63,10 @@ pub async fn bootstrap_module<P: Persistence>(
 
     if factory.load_object(&owner).await?.is_none() {
         let mut player = factory
-            .create_player("admin", owner.clone(), &module.anatomy)
+            .create_player("admin", owner.clone(), &world.anatomy)
             .await?;
         player.name = "Admin".to_string();
-        if let Some(start_base) = &module.starting_location {
+        if let Some(start_base) = &world.starting_location {
             if let Some(start_id) = name_to_id.get(start_base) {
                 player.location = Some(start_id.clone());
             }
@@ -74,7 +74,7 @@ pub async fn bootstrap_module<P: Persistence>(
         factory.persistence().save_object(&player).await?;
     }
 
-    let start_id = if let Some(start_base) = &module.starting_location {
+    let start_id = if let Some(start_base) = &world.starting_location {
         name_to_id
             .get(start_base)
             .cloned()

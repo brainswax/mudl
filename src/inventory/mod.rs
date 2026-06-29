@@ -785,7 +785,12 @@ mod tests {
     use crate::persistence::SqlitePersistence;
 
     async fn test_anatomy() -> AnatomyRegistry {
-        load_module("modules/default").unwrap().anatomy
+        load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone()
     }
 
     async fn setup_world() -> (

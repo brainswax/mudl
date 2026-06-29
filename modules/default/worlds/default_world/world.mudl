@@ -1,0 +1,7 @@
+# Default world entrypoint — locations, anatomy, creatures, items, players.
+@world default_world
+  starting_location=the-void
+@end
+@include anatomy/human.mudl
+@include players/default.mudl
+@include locations/world_locations.mudl

@@ -47,18 +47,14 @@ Bootstrap complete. Starting at: room:the-void-001
 
 The REPL creates (or opens) a file called `repl.db` in the current directory for SQLite storage.
 
-By default it loads `modules/default/universe.mudl` (naked human, starter rooms). Override with:
+By default it loads `modules/default/universe.mudl` and bootstraps the `default_world` (naked human, starter rooms). Override with:
 
 ```bash
 MUDL_MODULE=modules/default cargo run --bin repl
 # or
 MUDL_UNIVERSE=path/to/universe.mudl cargo run --bin repl
-```
-
-By default it loads `modules/default/universe.mudl` (naked human anatomy + starter rooms). Override with:
-
-```bash
-MUDL_MODULE=modules/default cargo run --bin repl
+# select a world within the universe
+MUDL_WORLD=default_world cargo run --bin repl
 ```
 
 Type `help` at the prompt to see the list of commands at any time.
@@ -108,7 +104,7 @@ The REPL uses three display modes from the presentation layer:
 
 ### Anatomy and Inventory
 
-Players spawn as **naked humans** from `anatomy/human.mudl` — biological body slots only, no pockets or clothing by default.
+Players spawn as **naked humans** from the active world's `anatomy/human.mudl` — biological body slots only, no pockets or clothing by default.
 
 - **In hands** — `left_hand` / `right_hand` grasp slots; two-handed items (`hand_slot: both`) occupy both
 - **Worn** — items on `wear` slots (e.g. `torso` for a backpack via `wear_slot`)

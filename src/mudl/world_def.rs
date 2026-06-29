@@ -52,6 +52,9 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
         if trimmed.starts_with('#')
             || trimmed.starts_with("//")
             || trimmed.starts_with("@include")
+            || trimmed.starts_with("@include-world")
+            || trimmed.starts_with("@universe")
+            || trimmed.starts_with("@world")
             || trimmed.starts_with("@body-plan")
             || trimmed.starts_with("@player-template")
             || trimmed.starts_with("@slot")
@@ -107,10 +110,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_config_starting_location() {
-        let content = include_str!("../../modules/default/config.mudl");
+    fn parse_world_block_ignored_by_world_def_parser() {
+        let content = include_str!("../../modules/default/worlds/default_world/world.mudl");
         let (defs, start) = parse_world_file(content);
         assert!(defs.is_empty());
-        assert_eq!(start.as_deref(), Some("the-void"));
+        assert!(start.is_none());
     }
 }

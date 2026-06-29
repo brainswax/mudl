@@ -264,7 +264,12 @@ mod tests {
             behavior: None,
         });
 
-        let anatomy = load_module("modules/default").unwrap().anatomy;
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
         player.init_body(anatomy.player_template("default").unwrap());
 
         let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player).with_anatomy(anatomy);

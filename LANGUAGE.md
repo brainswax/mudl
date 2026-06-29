@@ -122,22 +122,40 @@ room "Cozy Kitchen" {
 * Permission checks enforced by the Gateway.
 * Resource limits (CPU, loops, memory).
 
-## Modules and Universe Entrypoints
+## Universes, Worlds, and Entrypoints
 
-Game content lives under `modules/<name>/`. Each module has a `universe.mudl` entrypoint that composes content via `@include`:
+Game content lives under `modules/<universe>/`. A universe holds one or more worlds:
 
 ```mudl
-@include config.mudl
-@include anatomy/human.mudl
-@include players/default.mudl
-@include rooms/locations.mudl
+# universe.mudl
+@universe default
+  default_world=default_world
+@end
+@include-world default_world
 ```
 
-Set `MUDL_MODULE=modules/default` (or point `MUDL_UNIVERSE` at a specific file) to load a module. Fork `modules/default/` to customize worlds — e.g. swap `body_plan=cat` in a custom player template for an all-feline campaign.
+Each world has a `world.mudl` entrypoint under `worlds/<name>/`:
+
+```mudl
+# worlds/default_world/world.mudl
+@world default_world
+  starting_location=the-void
+@end
+@include anatomy/human.mudl
+@include players/default.mudl
+@include locations/world_locations.mudl
+```
+
+- `@include` paths are relative to the **world** directory.
+- `@include-world <name>` loads `worlds/<name>/world.mudl` from the universe root.
+- Set `MUDL_MODULE=modules/default` (or `MUDL_UNIVERSE` to a specific file) to load a universe.
+- Set `MUDL_WORLD=<name>` to select which world to bootstrap (defaults to the universe's `default_world`).
+
+Fork `modules/default/` to add custom worlds — e.g. a feline campaign world with `body_plan=cat` in its player template.
 
 ## Body Plans and Anatomy
 
-Anatomy is defined in MUDL (e.g. `modules/default/anatomy/human.mudl`). Player templates live in `players/`:
+Anatomy is defined per world in MUDL (e.g. `modules/default/worlds/default_world/anatomy/human.mudl`). Player templates live in `players/`:
 
 ```mudl
 @body-plan human

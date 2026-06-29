@@ -1,5 +1,0 @@
-# Universe configuration
-type: config
-base_name: default
-name: Default Universe
-starting_location: the-void

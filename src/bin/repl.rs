@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
-use mudl::command::{bootstrap_active_module, package_module, reload_module};
+use mudl::command::{bootstrap_active_universe, package_module, reload_universe};
 use mudl::display::{resolve_target, Describable, DisplayContext, DisplayMode};
 use mudl::inventory::{
     describe_inventory, drop_item, put_item, remove_item, take_item, wear_item, wield_item,
     InventoryContext,
 };
-use mudl::mudl::{default_module_dir, LoadedModule};
+use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
 use mudl::persistence::{Persistence, SqlitePersistence};
 
@@ -97,26 +97,30 @@ async fn main() -> Result<()> {
     let module_dir = default_module_dir();
     println!("Loading module: {}", module_dir.display());
 
-    let mut loaded_module: LoadedModule = reload_module(
+    let mut loaded_universe: LoadedUniverse = reload_universe(
         module_dir
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("invalid module path"))?,
     )?;
-    if loaded_module.anatomy.body_plan("human").is_some() {
+    let active_world = loaded_universe.active_world()?;
+    let mut active_anatomy = active_world.anatomy.clone();
+    if active_anatomy.body_plan("human").is_some() {
         println!(
-            "Loaded module '{}' ({} sources, human body plan)",
-            loaded_module.name,
-            loaded_module.sources.len()
+            "Loaded universe '{}' / world '{}' ({} sources, human body plan)",
+            loaded_universe.name,
+            active_world.name,
+            active_world.sources.len()
         );
     } else {
-        println!("Warning: human body plan not found in module");
+        println!("Warning: human body plan not found in active world");
     }
 
-    println!("Bootstrapping universe if needed...");
+    println!("Bootstrapping world if needed...");
     let mut current_location: Option<ObjectId> = None;
-    match bootstrap_active_module(&factory, default_owner.clone()).await {
-        Ok((module, loc_id)) => {
-            loaded_module = module;
+    match bootstrap_active_universe(&factory, default_owner.clone()).await {
+        Ok((universe, loc_id)) => {
+            loaded_universe = universe;
+            active_anatomy = loaded_universe.active_world()?.anatomy.clone();
             println!("Bootstrap complete. Starting at: {}", loc_id);
             current_location = Some(loc_id);
         }
@@ -198,7 +202,7 @@ async fn main() -> Result<()> {
                                     .create_player(
                                         base_name,
                                         default_owner.clone(),
-                                        &loaded_module.anatomy,
+                                        &active_anatomy,
                                     )
                                     .await
                             }
@@ -248,7 +252,7 @@ async fn main() -> Result<()> {
                                 let ctx =
                                     DisplayContext::new(default_owner.clone(), DisplayMode::Player)
                                         .with_objects(objects)
-                                        .with_anatomy(loaded_module.anatomy.clone());
+                                        .with_anatomy(active_anatomy.clone());
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, false, false);
                                 } else {
@@ -281,7 +285,7 @@ async fn main() -> Result<()> {
                                     DisplayMode::Builder,
                                 )
                                 .with_objects(objects)
-                                .with_anatomy(loaded_module.anatomy.clone());
+                                .with_anatomy(active_anatomy.clone());
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, true, false);
                                 } else {
@@ -325,14 +329,14 @@ async fn main() -> Result<()> {
                         if let Some(player) = objects.get(&default_owner).cloned() {
                             println!(
                                 "{}",
-                                describe_inventory(&player, &objects, &loaded_module.anatomy)
+                                describe_inventory(&player, &objects, &active_anatomy)
                             );
                         } else if let Ok(Some(player)) =
                             persistence.load_object(&default_owner).await
                         {
                             println!(
                                 "{}",
-                                describe_inventory(&player, &objects, &loaded_module.anatomy)
+                                describe_inventory(&player, &objects, &active_anatomy)
                             );
                         } else {
                             println!("Player not found.");
@@ -349,7 +353,7 @@ async fn main() -> Result<()> {
                             player_id: &default_owner,
                             room_id: current_location.as_ref(),
                             objects: &mut objects,
-                            anatomy: &loaded_module.anatomy,
+                            anatomy: &active_anatomy,
                         };
                         match take_item(&mut ctx, &item_name) {
                             Ok(msg) => {
@@ -372,7 +376,7 @@ async fn main() -> Result<()> {
                             player_id: &default_owner,
                             room_id: current_location.as_ref(),
                             objects: &mut objects,
-                            anatomy: &loaded_module.anatomy,
+                            anatomy: &active_anatomy,
                         };
                         match drop_item(&mut ctx, &item_name) {
                             Ok(msg) => {
@@ -392,7 +396,7 @@ async fn main() -> Result<()> {
                                 player_id: &default_owner,
                                 room_id: current_location.as_ref(),
                                 objects: &mut objects,
-                                anatomy: &loaded_module.anatomy,
+                                anatomy: &active_anatomy,
                             };
                             match put_item(&mut ctx, item.trim(), container.trim()) {
                                 Ok(msg) => {
@@ -415,7 +419,7 @@ async fn main() -> Result<()> {
                                 player_id: &default_owner,
                                 room_id: current_location.as_ref(),
                                 objects: &mut objects,
-                                anatomy: &loaded_module.anatomy,
+                                anatomy: &active_anatomy,
                             };
                             match remove_item(&mut ctx, item.trim(), container.trim()) {
                                 Ok(msg) => {
@@ -441,7 +445,7 @@ async fn main() -> Result<()> {
                             player_id: &default_owner,
                             room_id: current_location.as_ref(),
                             objects: &mut objects,
-                            anatomy: &loaded_module.anatomy,
+                            anatomy: &active_anatomy,
                         };
                         match wield_item(&mut ctx, &item_name) {
                             Ok(msg) => {
@@ -461,13 +465,17 @@ async fn main() -> Result<()> {
                         match parts[1] {
                             "reload" => {
                                 let path = default_module_dir();
-                                match reload_module(path.to_str().unwrap_or("modules/default")) {
-                                    Ok(module) => {
-                                        loaded_module = module;
+                                match reload_universe(path.to_str().unwrap_or("modules/default")) {
+                                    Ok(universe) => {
+                                        loaded_universe = universe;
+                                        active_anatomy =
+                                            loaded_universe.active_world()?.anatomy.clone();
+                                        let world = loaded_universe.active_world()?;
                                         println!(
-                                            "Reloaded module '{}' ({} sources)",
-                                            loaded_module.name,
-                                            loaded_module.sources.len()
+                                            "Reloaded universe '{}' / world '{}' ({} sources)",
+                                            loaded_universe.name,
+                                            world.name,
+                                            world.sources.len()
                                         );
                                     }
                                     Err(e) => println!("Error: {}", e),
@@ -509,7 +517,7 @@ async fn main() -> Result<()> {
                             player_id: &default_owner,
                             room_id: current_location.as_ref(),
                             objects: &mut objects,
-                            anatomy: &loaded_module.anatomy,
+                            anatomy: &active_anatomy,
                         };
                         match wear_item(&mut ctx, &item_name) {
                             Ok(msg) => {
@@ -671,7 +679,7 @@ async fn main() -> Result<()> {
                                     DisplayMode::Builder,
                                 )
                                 .with_objects(objects)
-                                .with_anatomy(loaded_module.anatomy.clone());
+                                .with_anatomy(active_anatomy.clone());
                                 render_object(&obj, &ctx, true, false);
                             }
                             Ok(None) => println!("Not found: {}", id),
