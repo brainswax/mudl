@@ -223,7 +223,7 @@ You are holding Rusty Sword in your right hand.
 - `create <type> <name...>` — everything after the type is the display name (spaces allowed). Quoted names work: `create sword "Rusty Sword"`.
 - Object IDs use lowercase hyphenated slugs derived from the name (`Rusty Sword` → `sword:rusty-sword-001`). Display names keep original capitalization.
 - `create` places new objects at the player's current location when one is set.
-- `take` / `get` moves items from the current area/room into grasp slots from the player's `@creature` definition.
+- `take` / `get` moves items from the ground in your current location into grasp slots. Items you already carry are ignored when resolving the target, so `take sword` picks up a ground sword even if you're holding another.
 - Items may set `hand_slot` to `left`, `right`, or `both` (two-handed).
 
 ## Persistence

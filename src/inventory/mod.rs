@@ -240,12 +240,33 @@ fn name_matches(needle: &str, obj: &Object) -> bool {
         })
 }
 
+/// Where to search when resolving an inventory command target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolveScope {
+    /// Items carried by the player (drop, put, remove, etc.).
+    Carried,
+    /// Items on the ground in the current location only (take/get).
+    Ground,
+    /// Carried items or items in the current location (wear).
+    CarriedOrGround,
+}
+
+fn is_on_ground(
+    obj: &Object,
+    obj_id: &ObjectId,
+    room_id: &ObjectId,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> bool {
+    obj.location.as_ref() == Some(room_id) && !is_carried_by(player_id, obj_id, objects)
+}
+
 fn resolve_inventory_target(
     name: &str,
     room_id: Option<&ObjectId>,
     player_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
-    carried_only: bool,
+    scope: ResolveScope,
 ) -> Result<ObjectId, InventoryError> {
     let needle = name.to_lowercase();
 
@@ -258,8 +279,10 @@ fn resolve_inventory_target(
     }
 
     let id = ObjectId::new(name);
-    if objects.contains_key(&id) {
-        return Ok(id);
+    if let Some(obj) = objects.get(&id) {
+        if obj.is_active() && scope_matches(obj, &id, room_id, player_id, objects, scope) {
+            return Ok(id);
+        }
     }
 
     let mut matches = Vec::new();
@@ -267,19 +290,9 @@ fn resolve_inventory_target(
         if !obj.is_active() {
             continue;
         }
-        if name_matches(&needle, obj) {
-            if carried_only {
-                if is_carried_by(player_id, obj_id, objects) {
-                    matches.push(obj_id.clone());
-                }
-            } else if let Some(room) = room_id {
-                if obj.location.as_ref() == Some(room) || is_carried_by(player_id, obj_id, objects)
-                {
-                    matches.push(obj_id.clone());
-                }
-            } else if is_carried_by(player_id, obj_id, objects) {
-                matches.push(obj_id.clone());
-            }
+        if name_matches(&needle, obj) && scope_matches(obj, obj_id, room_id, player_id, objects, scope)
+        {
+            matches.push(obj_id.clone());
         }
     }
 
@@ -289,6 +302,25 @@ fn resolve_inventory_target(
         _ => Err(InventoryError::InvalidTarget(format!(
             "Which {name} do you mean?"
         ))),
+    }
+}
+
+fn scope_matches(
+    obj: &Object,
+    obj_id: &ObjectId,
+    room_id: Option<&ObjectId>,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+    scope: ResolveScope,
+) -> bool {
+    match scope {
+        ResolveScope::Carried => is_carried_by(player_id, obj_id, objects),
+        ResolveScope::Ground => room_id
+            .is_some_and(|room| is_on_ground(obj, obj_id, room, player_id, objects)),
+        ResolveScope::CarriedOrGround => {
+            is_carried_by(player_id, obj_id, objects)
+                || room_id.is_some_and(|room| obj.location.as_ref() == Some(room))
+        }
     }
 }
 
@@ -422,8 +454,13 @@ pub fn take_item(
     item_name: &str,
 ) -> Result<String, InventoryError> {
     let room_id = ctx.room_id.ok_or(InventoryError::NoRoom)?.clone();
-    let item_id =
-        resolve_inventory_target(item_name, Some(&room_id), ctx.player_id, ctx.objects, false)?;
+    let item_id = resolve_inventory_target(
+        item_name,
+        Some(&room_id),
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Ground,
+    )?;
 
     let item = ctx
         .objects
@@ -450,7 +487,13 @@ pub fn drop_item(
     item_name: &str,
 ) -> Result<String, InventoryError> {
     let room_id = ctx.room_id.ok_or(InventoryError::NoRoom)?.clone();
-    let item_id = resolve_inventory_target(item_name, None, ctx.player_id, ctx.objects, true)?;
+    let item_id = resolve_inventory_target(
+        item_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    )?;
 
     if !is_carried_by(ctx.player_id, &item_id, ctx.objects) {
         return Err(InventoryError::NotCarried);
@@ -484,9 +527,21 @@ pub fn put_item(
     item_name: &str,
     container_name: &str,
 ) -> Result<String, InventoryError> {
-    let item_id = resolve_inventory_target(item_name, None, ctx.player_id, ctx.objects, true)?;
+    let item_id = resolve_inventory_target(
+        item_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    )?;
     let container_id =
-        resolve_inventory_target(container_name, None, ctx.player_id, ctx.objects, true)?;
+        resolve_inventory_target(
+            container_name,
+            None,
+            ctx.player_id,
+            ctx.objects,
+            ResolveScope::Carried,
+        )?;
 
     if item_id == container_id {
         return Err(InventoryError::InvalidTarget(
@@ -542,7 +597,13 @@ pub fn remove_item(
     container_name: &str,
 ) -> Result<String, InventoryError> {
     let container_id =
-        resolve_inventory_target(container_name, None, ctx.player_id, ctx.objects, true)?;
+        resolve_inventory_target(
+            container_name,
+            None,
+            ctx.player_id,
+            ctx.objects,
+            ResolveScope::Carried,
+        )?;
 
     let container = ctx
         .objects
@@ -589,7 +650,13 @@ pub fn wield_item(
     ctx: &mut InventoryContext<'_>,
     item_name: &str,
 ) -> Result<String, InventoryError> {
-    let item_id = resolve_inventory_target(item_name, None, ctx.player_id, ctx.objects, true)?;
+    let item_id = resolve_inventory_target(
+        item_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    )?;
 
     if !is_carried_by(ctx.player_id, &item_id, ctx.objects) {
         return Err(InventoryError::NotCarried);
@@ -629,8 +696,13 @@ pub fn wear_item(
     item_name: &str,
 ) -> Result<String, InventoryError> {
     let room_id = ctx.room_id.ok_or(InventoryError::NoRoom)?.clone();
-    let item_id =
-        resolve_inventory_target(item_name, Some(&room_id), ctx.player_id, ctx.objects, false)?;
+    let item_id = resolve_inventory_target(
+        item_name,
+        Some(&room_id),
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::CarriedOrGround,
+    )?;
 
     let item = ctx
         .objects
@@ -991,6 +1063,148 @@ mod tests {
         let desc = describe_carried(player, &objects, &anatomy);
         assert!(desc.contains("Rusty Sword"));
         assert!(desc.contains("right hand"));
+    }
+
+    async fn minimal_take_world() -> (
+        ObjectFactory<SqlitePersistence>,
+        AnatomyRegistry,
+        ObjectId,
+        ObjectId,
+        HashMap<ObjectId, Object>,
+    ) {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence);
+        let anatomy = test_anatomy().await;
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("room:test-001");
+
+        let mut player = factory
+            .create_player("hero", player_id.clone(), &anatomy)
+            .await
+            .unwrap();
+        player.location = Some(room_id.clone());
+
+        let mut room = factory
+            .create("room", "test", player_id.clone())
+            .await
+            .unwrap();
+        room.name = "Test Room".to_string();
+
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player);
+        objects.insert(room_id.clone(), room);
+
+        (factory, anatomy, player_id, room_id, objects)
+    }
+
+    #[tokio::test]
+    async fn take_ignores_carried_items_when_one_on_ground() {
+        let (factory, anatomy, player_id, room_id, mut objects) = minimal_take_world().await;
+
+        let mut sword_held = factory
+            .create_named("sword", "sword", "Sword", player_id.clone())
+            .await
+            .unwrap();
+        sword_held.location = Some(player_id.clone());
+
+        let mut sword_ground = factory
+            .create_named("sword", "sword", "Sword", player_id.clone())
+            .await
+            .unwrap();
+        sword_ground.location = Some(room_id.clone());
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(sword_held.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(sword_held.id.clone(), sword_held);
+        objects.insert(sword_ground.id.clone(), sword_ground.clone());
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, "sword").unwrap();
+        let player = objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("left_hand").is_some());
+        assert!(player.body_slot_item("right_hand").is_some());
+        assert_eq!(
+            objects.get(&sword_ground.id).unwrap().location.as_ref(),
+            Some(&player_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn take_two_swords_sequentially_from_ground() {
+        let (factory, anatomy, player_id, room_id, mut objects) = minimal_take_world().await;
+
+        let mut sword1 = factory
+            .create_named("sword", "sword", "Sword", player_id.clone())
+            .await
+            .unwrap();
+        sword1.location = Some(room_id.clone());
+
+        let mut sword2 = factory
+            .create_named("sword", "sword", "Sword", player_id.clone())
+            .await
+            .unwrap();
+        sword2.location = Some(room_id.clone());
+
+        objects.insert(sword1.id.clone(), sword1.clone());
+        objects.insert(sword2.id.clone(), sword2);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, sword1.id.as_str()).unwrap();
+        take_item(&mut ctx, "sword").unwrap();
+
+        let player = objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("left_hand").is_some());
+        assert!(player.body_slot_item("right_hand").is_some());
+
+        let inv = describe_inventory(player, &objects, &anatomy);
+        assert!(inv.contains("[left hand]"));
+        assert!(inv.contains("[right hand]"));
+    }
+
+    #[tokio::test]
+    async fn take_disambiguates_multiple_on_ground() {
+        let (factory, anatomy, player_id, room_id, mut objects) = minimal_take_world().await;
+
+        let mut sword1 = factory
+            .create_named("sword", "sword", "Sword", player_id.clone())
+            .await
+            .unwrap();
+        sword1.location = Some(room_id.clone());
+
+        let mut sword2 = factory
+            .create_named("sword", "sword", "Sword", player_id.clone())
+            .await
+            .unwrap();
+        sword2.location = Some(room_id.clone());
+
+        objects.insert(sword1.id.clone(), sword1);
+        objects.insert(sword2.id.clone(), sword2);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let err = take_item(&mut ctx, "sword").unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::InvalidTarget("Which sword do you mean?".to_string())
+        );
     }
 
     #[tokio::test]

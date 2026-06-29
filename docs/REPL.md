@@ -71,7 +71,7 @@ Type `help` at the prompt to see the list of commands at any time.
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
 | `go <dir>`               | Move in a direction from the current room        | `go north`                           |
 | `inventory` (`i`)        | Show hands, pockets, worn containers, and contents | `i`                                |
-| `get` / `take <item>`    | Pick up a visible item from your location        | `take boots`                         |
+| `get` / `take <item>`    | Pick up an item from the ground (not held items) | `take sword`                         |
 | `drop <item>`            | Drop a carried item into the room                | `drop coin`                          |
 | `put <item> in <container>` | Stow a carried item in a container            | `put coin in wallet`                 |
 | `remove <item> from <container>` | Take an item out of a container          | `remove coin from wallet`            |
@@ -114,6 +114,8 @@ Players spawn as **naked humans** from the active world's `creatures.mudl` (`@cr
 - **On the ground** — items with `location` set to your current area/room appear in `look` as `You see: …`
 
 `create <type> <name...>` places the new object at your current location (area, room, or any navigable place). Multi-word names are supported; IDs are lowercase slugs (`Rusty Sword` → `sword:rusty-sword-001`). Quote names if needed: `create sword "Rusty Sword"`.
+
+`take` / `get` only search the ground in your current location — items already in your hands are ignored. One ground match takes silently; multiple ground matches prompt "Which X do you mean?".
 
 Example output:
 

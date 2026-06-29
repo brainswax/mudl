@@ -181,7 +181,7 @@ The object model's prototype/parent system (`prototype: Option<ObjectId>`) is th
 ## Player Commands (REPL / MVP)
 
 - **`create <type> <name>`** — Creates an object via `ObjectFactory`. When the player has a current location, the new object is placed there automatically (works for `area`, `room`, `location`, or any navigable place — not hardcoded to rooms).
-- **`take` / `get <item>`** — Picks up a visible item from the current location into grasp slots defined by the player's creature anatomy (`@creature human` → `left_hand` / `right_hand`). Supports one-handed preference and `hand_slot: both` for two-handed items. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
+- **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
 - **`look`** — Locations (`room`, `area`, …) list ground items via `You see: …`. **`look self`** and **`inventory`** reflect held items using creature slot state.
 
 Command helpers live in `src/command/`; inventory slot logic in `src/inventory/`; presentation in `src/display/` and `Object::is_location()`.
