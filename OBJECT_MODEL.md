@@ -205,6 +205,27 @@ Implementations:
 - **Player/Thing**: name + description, owner info in Builder mode
 - Default fallback to property-based rendering.
 
+## Anatomy and Inventory
+
+Body plans are defined in MUDL (`anatomy/*.mudl`) and loaded into an `AnatomyRegistry`. Players reference a plan via `body_plan` and track occupancy in `body_slots` (a map of slot name → item ID).
+
+| Property | On | Type | Purpose |
+|----------|-----|------|---------|
+| `body_plan` | player | String | Loaded plan name (e.g. `human`) |
+| `gender` | player | String | Description hint from player template |
+| `body_slots` | player | Map\<String, ObjectRef\> | Occupied anatomical slots |
+| `contents` | container | List\<ObjectRef\> | Items inside a container |
+| `capacity` | container | Int | Max items the container holds |
+| `carried_slot` | item | String | Body slot name when held/worn |
+| `is_wearable` | item | Bool | Can be worn on a `wear` slot |
+| `wear_slot` | item | String | Target slot (e.g. `torso`, `head`) |
+| `is_container` | item | Bool | Holds other items |
+| `hand_slot` | item | String | `left`, `right`, or `both` (grasp slots) |
+
+Default naked humans have **no pockets** — only biological `grasp`, `wear`, and `limb` slots from the human body plan. Pockets will come from clothing in a follow-up.
+
+Factory helpers: `create_player` (uses anatomy template), `create_item`, `create_container`. Anatomy loader: `src/core/anatomy.rs`. Inventory operations: `src/core/inventory.rs`.
+
 ## Persistence Notes
 - Use ObjectFactory for creation.
 - Serialize full objects for Debug; store key display fields for efficiency.

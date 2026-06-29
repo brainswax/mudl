@@ -1,0 +1,5 @@
+# Player spawn templates.
+@player-template default
+  creature=human
+  gender=neutral
+@end

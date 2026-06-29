@@ -1,0 +1,6 @@
+# Default universe — top-level container for one or more worlds.
+# Fork this module to customize worlds, anatomy, and player templates.
+@universe default
+  default_world=default_world
+@end
+@include-world default_world

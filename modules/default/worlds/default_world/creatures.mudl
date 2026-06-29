@@ -1,0 +1,13 @@
+# Creature definitions — anatomy and body slots.
+@creature human
+  @slot left_hand capacity=1 type=grasp hands=1
+  @slot right_hand capacity=1 type=grasp hands=1
+  @slot head capacity=1 type=wear
+  @slot torso capacity=1 type=wear
+  @slot left_arm capacity=1 type=limb
+  @slot right_arm capacity=1 type=limb
+  @slot left_leg capacity=1 type=limb
+  @slot right_leg capacity=1 type=limb
+  @slot left_foot capacity=1 type=wear
+  @slot right_foot capacity=1 type=wear
+@end

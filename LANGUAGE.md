@@ -122,6 +122,114 @@ room "Cozy Kitchen" {
 * Permission checks enforced by the Gateway.
 * Resource limits (CPU, loops, memory).
 
+## Universes, Worlds, and Entrypoints
+
+Game content lives under `modules/<universe>/`. A universe holds one or more worlds:
+
+```mudl
+# universe.mudl
+@universe default
+  default_world=default_world
+@end
+@include-world default_world
+```
+
+Each world uses a flat set of `.mudl` files under `worlds/<name>/`, composed from `world.mudl`:
+
+```mudl
+# worlds/default_world/world.mudl
+@world default_world
+  starting_location=the-void
+@end
+@include map.mudl
+@include creatures.mudl
+@include players.mudl
+@include items.mudl
+@include objects.mudl
+```
+
+- `@include` paths are relative to the **world** directory.
+- `@include-world <name>` loads `worlds/<name>/world.mudl` from the universe root.
+- Set `MUDL_MODULE=modules/default` (or `MUDL_UNIVERSE` to a specific file) to load a universe.
+- Set `MUDL_WORLD=<name>` to select which world to bootstrap (defaults to the universe's `default_world`).
+
+Fork `modules/default/` to add custom worlds — e.g. a feline campaign with `creature=cat` in `players.mudl`.
+
+## Creatures and Anatomy
+
+Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player templates in `players.mudl` reference a creature:
+
+```mudl
+@creature human
+  @slot left_hand capacity=1 type=grasp hands=1
+  @slot right_hand capacity=1 type=grasp hands=1
+  @slot head capacity=1 type=wear
+  @slot torso capacity=1 type=wear
+@end
+```
+
+```mudl
+@player-template default
+  creature=human
+  gender=neutral
+@end
+```
+
+**Slot types** (MVP):
+- `grasp` — hands; items with `hand_slot: left`, `right`, or `both` occupy these
+- `wear` — clothing/armor/containers worn on the body
+- `limb` — biological parts (descriptive; not used for inventory yet)
+- `pocket` / `container` — reserved for clothing-provided capacity (future)
+
+**Player properties** (set by engine from template):
+- `creature` — name of the loaded creature definition (e.g. `human`)
+- `gender` — for descriptions (`neutral`, `male`, `female`, etc.)
+- `body_slots` — map of slot name → held/worn item ID
+
+`@body-plan` and `body_plan=` are accepted as aliases during migration. Default players are **naked humans**: biological slots only, no pockets or clothing until equipped.
+
+## Map and Locations
+
+Locations are defined in `map.mudl`. Default locations use `type=area`:
+
+```mudl
+type: area
+base_name: the-void
+name: The Void
+description: You are in a featureless void.
+
+exits:
+  north: north-passage
+```
+
+## Items and Inventory (REPL)
+
+Items are objects with `location` set to a place or player. The REPL supports basic pickup:
+
+```
+> create sword Rusty Sword
+Created: Rusty Sword (sword:rusty-sword-001) at area:the-void-001
+> look
+The Void
+...
+You see: Rusty Sword
+> take rusty sword
+You take the Rusty Sword.
+> look self
+Admin
+You are holding Rusty Sword in your right hand.
+```
+
+- `create <type> <name...>` — everything after the type is the display name (spaces allowed). Quoted names work: `create sword "Rusty Sword"`.
+- Object IDs use lowercase hyphenated slugs derived from the name (`Rusty Sword` → `sword:rusty-sword-001`). Display names keep original capitalization.
+- `create` places new objects at the player's current location when one is set.
+- `take` / `get` moves items from the ground in your current location into grasp slots. Items you already carry are ignored when resolving the target, so `take sword` picks up a ground sword even if you're holding another.
+- Items may set `hand_slot` to `left`, `right`, or `both` (two-handed).
+
+## Persistence
+
+Every `Object` is stored as JSON in SQLite. State changes from `take`, `drop`, `go`, and `create` are saved immediately. Objects are never hard-deleted — wizard `@delete` sets `is_deleted` and `@undelete <id>` restores them.
+
 ## Future Extensions
 * LLM-friendly generation (clear grammar + examples in prompts).
 * Meta-programming (objects modifying the language/runtime).

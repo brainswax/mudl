@@ -105,6 +105,106 @@ The system emphasizes **separation of concerns**, extensibility, and safety (esp
 - **Persistence**: SQLite + serde.
 - **Async**: Tokio.
 
+## Repository Layout
+
+```
+mudl/
+├── src/                    # Rust engine only
+│   ├── object/             # Object model + ObjectFactory
+│   ├── mudl/               # MUDL parser, anatomy, @include loader
+│   ├── world/              # Module bootstrap + packaging
+│   ├── command/            # Shared command/bootstrap helpers
+│   ├── display/            # Player/builder/debug presentation
+│   ├── inventory/          # Body-slot inventory operations
+│   ├── persistence/        # SQLite abstraction
+│   └── bin/repl.rs         # Development REPL
+├── modules/                # MUDL game data (not Rust)
+│   └── default/            # Official baseline universe
+│       ├── universe.mudl   # Universe entrypoint (@universe, @include-world)
+│       └── worlds/
+│           └── default_world/   # Flat MUDL files (no subfolders for now)
+│               ├── world.mudl   # World entrypoint (@world, @include)
+│               ├── map.mudl     # Areas/locations (type=area)
+│               ├── creatures.mudl
+│               ├── players.mudl
+│               ├── items.mudl
+│               └── objects.mudl
+└── examples/               # Alternative universe packs
+```
+
+**MUDL-first**: All game content (creatures, map, templates) is defined in `.mudl` files. Rust provides loaders, runtime, and persistence — not hardcoded world data.
+
+## Universe and World Hierarchy
+
+A **Universe** is the top-level container. It holds one or more **Worlds**, each a self-contained game setting (locations, creatures, items, player templates).
+
+```
+Universe (modules/default/)
+  └── World (worlds/default_world/)
+        ├── world.mudl      entrypoint
+        ├── map.mudl        areas and exits
+        ├── creatures.mudl  @creature anatomy (slots)
+        ├── players.mudl    @player-template (creature=human)
+        ├── items.mudl      item prototypes
+        └── objects.mudl    shared prototypes
+```
+
+**Flat layout (temporary)**: Each world keeps related definitions in a handful of sibling `.mudl` files. `world.mudl` `@include`s them explicitly. Nested subfolders (e.g. `locations/rooms/`) can return when content volume warrants it.
+
+- `universe.mudl` declares the universe name, default world, and which worlds to load via `@include-world`.
+- Each world's `world.mudl` declares `starting_location` and composes content with `@include` (paths relative to the world directory).
+- `MUDL_WORLD` selects which world to bootstrap and play in; defaults to the universe's `default_world`.
+- Locations default to `type=area`; bootstrap creates IDs like `area:the-void-001`.
+- Players reference a creature via `creature=human` in `@player-template`; anatomy slots live in `@creature` blocks in `creatures.mudl`.
+
+Custom worlds can fork `worlds/default_world/` and override individual flat files.
+
+## Module Loading
+
+1. Engine resolves `MUDL_MODULE` (default: `modules/default`) or `MUDL_UNIVERSE`.
+2. `universe.mudl` is parsed; `@include-world` directives load each `worlds/<name>/world.mudl`.
+3. World entrypoints use `@include` to pull anatomy, locations, players, etc. (relative to the world directory).
+4. `bootstrap_world()` creates world objects and a naked human player from the active world's templates.
+5. `bundle_module()` packages the universe tree + `manifest.json` for distribution.
+
+## Customization and Prototype Inheritance
+
+Builders/DMs can fork `modules/default/` to create custom universe packs:
+
+- **Add worlds**: Create `worlds/my_campaign/world.mudl` plus flat `map.mudl`, `creatures.mudl`, etc., and add `@include-world my_campaign` to `universe.mudl`.
+- **Swap creatures**: Change `creature=human` to `creature=cat` in `players.mudl` after defining `@creature cat` in `creatures.mudl`.
+- **Override map**: Edit `map.mudl` or split into multiple files and `@include` them from `world.mudl`.
+- **Inherit and override**: A custom world can `@include` another world's `creatures.mudl`, then add local overrides in additional included files.
+
+The object model's prototype/parent system (`prototype: Option<ObjectId>`) is the runtime foundation for this — MUDL modules define the authoritative data; the engine resolves inheritance when spawning and displaying objects.
+
+## Player Commands (REPL / MVP)
+
+- **`create <type> <name>`** — Creates an object via `ObjectFactory`. When the player has a current location, the new object is placed there automatically (works for `area`, `room`, `location`, or any navigable place — not hardcoded to rooms).
+- **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
+- **`look`** — Locations (`room`, `area`, …) list ground items via `You see: …`. **`look self`** and **`inventory`** reflect held items using creature slot state.
+
+Command helpers live in `src/command/`; inventory slot logic in `src/inventory/`; presentation in `src/display/` and `Object::is_location()`.
+
+## Persistence Strategy
+
+All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID counter table.
+
+| When | What is saved |
+|------|----------------|
+| `ObjectFactory::create*` | New object immediately (`save_object`) |
+| `create` / `create_at_location` | Object + updated `location` |
+| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Full active object graph after mutation (`persist_all`) |
+| `go` | Player `location` |
+| `add_prop`, `add_verb`, `save` | Target object |
+| Bootstrap | World areas, exits, default player (idempotent) |
+
+**Startup**: `bootstrap_world()` ensures MUDL-defined content exists, then `restore_session()` hydrates all active objects from the DB and restores the player's `current_location` from their persisted `location` field.
+
+**Soft deletes**: Objects are never hard-deleted. `is_deleted` and `deleted_at` on `Object` mark removal; `list_objects(false)` hides them from normal play. Wizard commands `@delete <target>` and `@undelete <id>` toggle the flag. Deleted objects remain loadable by ID for recovery.
+
+**Schema**: `objects(id, data, is_deleted, deleted_at)` and `counters(type_base, counter)`. Older DB files are migrated with `ALTER TABLE` on connect.
+
 ## Future Directions
 - Full LLM content generation pipeline.
 - Advanced self-modification (world rewriting its own rules).

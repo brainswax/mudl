@@ -3,16 +3,26 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
-use mudl::core::display::{resolve_target, Describable, DisplayContext, DisplayMode};
-use mudl::core::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
-use mudl::core::persistence::{Persistence, SqlitePersistence};
+use mudl::command::{
+    bootstrap_active_universe, create_at_location, package_module, parse_create_args,
+    persist_inventory_changes, reload_universe, soft_delete_object, take_from_location,
+    undelete_object,
+};
+use mudl::world::restore_session;
+use mudl::display::{resolve_target, Describable, DisplayContext, DisplayMode};
+use mudl::inventory::{
+    describe_inventory, drop_item, put_item, remove_item, wear_item, wield_item, InventoryContext,
+};
+use mudl::mudl::{default_module_dir, LoadedUniverse};
+use mudl::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
+use mudl::persistence::{Persistence, SqlitePersistence};
 
 async fn load_all_objects(
     persistence: &SqlitePersistence,
     cache: &HashMap<ObjectId, Object>,
 ) -> Result<HashMap<ObjectId, Object>> {
     let mut objects: HashMap<ObjectId, Object> = HashMap::new();
-    for obj in persistence.list_objects().await? {
+    for obj in persistence.list_objects(false).await? {
         objects.insert(obj.id.clone(), obj);
     }
     for (id, obj) in cache {
@@ -24,13 +34,14 @@ async fn load_all_objects(
 async fn resolve_and_load(
     target: Option<&str>,
     current_location: &Option<ObjectId>,
+    observer: &ObjectId,
     persistence: &SqlitePersistence,
     cache: &mut HashMap<ObjectId, Object>,
 ) -> Result<Option<ObjectId>> {
     let objects = load_all_objects(persistence, cache).await?;
 
     let id = if let Some(name) = target {
-        resolve_target(name, current_location.as_ref(), &objects)
+        resolve_target(name, current_location.as_ref(), Some(observer), &objects)
     } else {
         current_location.clone()
     };
@@ -44,6 +55,13 @@ async fn resolve_and_load(
     }
 
     Ok(id)
+}
+
+async fn save_all_objects(
+    persistence: &SqlitePersistence,
+    objects: &HashMap<ObjectId, Object>,
+) -> Result<()> {
+    persist_inventory_changes(persistence, objects).await
 }
 
 fn render_object(obj: &Object, ctx: &DisplayContext, detailed: bool, debug: bool) {
@@ -74,15 +92,60 @@ async fn main() -> Result<()> {
     println!("Default owner: {}", default_owner);
     println!("Type 'help' for commands.");
 
-    println!("Bootstrapping default world if needed...");
+    let module_dir = default_module_dir();
+    println!("Loading module: {}", module_dir.display());
+
+    let mut loaded_universe: LoadedUniverse = reload_universe(
+        module_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid module path"))?,
+    )?;
+    let active_world = loaded_universe.active_world()?;
+    let mut active_anatomy = active_world.anatomy.clone();
+    if active_anatomy.creature("human").is_some() {
+        println!(
+            "Loaded universe '{}' / world '{}' ({} sources, human creature)",
+            loaded_universe.name,
+            active_world.name,
+            active_world.sources.len()
+        );
+    } else {
+        println!("Warning: human creature definition not found in active world");
+    }
+
+    println!("Bootstrapping world if needed...");
     let mut current_location: Option<ObjectId> = None;
-    match factory.bootstrap(default_owner.clone()).await {
-        Ok(loc_id) => {
-            println!("Bootstrap complete. Starting at: {}", loc_id);
+    match bootstrap_active_universe(&factory, default_owner.clone()).await {
+        Ok((universe, loc_id)) => {
+            loaded_universe = universe;
+            active_anatomy = loaded_universe.active_world()?.anatomy.clone();
             current_location = Some(loc_id);
         }
         Err(e) => {
             println!("Warning: Bootstrap failed: {}", e);
+        }
+    }
+
+    match restore_session(
+        &persistence,
+        default_owner.clone(),
+        current_location.clone(),
+    )
+    .await
+    {
+        Ok(session) => {
+            cache = session.objects;
+            current_location = session.current_location;
+            println!(
+                "Restored {} object(s) from database.",
+                cache.len()
+            );
+            if let Some(loc_id) = &current_location {
+                println!("Current location: {}", loc_id);
+            }
+        }
+        Err(e) => {
+            println!("Warning: Failed to restore session: {}", e);
         }
     }
 
@@ -115,7 +178,7 @@ async fn main() -> Result<()> {
                 match cmd {
                     "help" => {
                         println!("Commands:");
-                        println!("  create <type> <base_name>   - e.g. create room cozy-kitchen");
+                        println!("  create <type> <name...>     - e.g. create sword Rusty Sword");
                         println!("  list                        - list objects in session cache");
                         println!(
                             "  look [target]  (l)          - immersive view (current room if no target)"
@@ -124,26 +187,59 @@ async fn main() -> Result<()> {
                             "  examine [target]  (x)       - builder view with IDs, properties, verbs"
                         );
                         println!("  @dump [target]              - full JSON dump of an object");
+                        println!(
+                            "  inventory  (i)              - show hands, pockets, and containers"
+                        );
+                        println!("  get/take <item>             - pick up an item from the room");
+                        println!("  drop <item>                 - drop a carried item");
+                        println!("  put <item> in <container>   - stow an item in a container");
+                        println!(
+                            "  remove <item> from <container> - take an item out of a container"
+                        );
+                        println!("  wield <item>                - hold/wield an item in your hand");
+                        println!("  wear <item>                 - wear a container or garment");
                         println!("  go <dir>                    - move to another location (e.g. go north)");
                         println!("  add_prop <id> <name> <value> - add string property");
                         println!("  add_verb <id> <name> <code> - add verb with code");
                         println!("  load <id>                   - load object from persistence");
                         println!("  save <id>                   - save object from cache");
+                        println!("  module reload               - reload MUDL module from disk");
+                        println!(
+                            "  module bundle <outdir>      - package module to output directory"
+                        );
+                        println!("  @delete <target>            - wizard: soft-delete an object");
+                        println!("  @undelete <id>              - wizard: restore soft-deleted object");
                         println!("  exit                        - quit");
                     }
                     "create" => {
-                        if parts.len() < 3 {
-                            println!("Usage: create <type> <base_name>");
-                            continue;
-                        }
-                        let type_name = parts[1];
-                        let base_name = parts[2];
-                        match factory
-                            .create(type_name, base_name, default_owner.clone())
-                            .await
+                        let (type_name, display_name) = match parse_create_args(&parts, input) {
+                            Ok(parsed) => parsed,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
+                            }
+                        };
+                        match create_at_location(
+                            &factory,
+                            &type_name,
+                            &display_name,
+                            default_owner.clone(),
+                            current_location.as_ref(),
+                            &active_anatomy,
+                        )
+                        .await
                         {
                             Ok(obj) => {
-                                println!("Created: {} ({})", &obj.name, &obj.id);
+                                if current_location.is_some() {
+                                    println!(
+                                        "Created: {} ({}) at {}",
+                                        &obj.name,
+                                        &obj.id,
+                                        obj.location.as_ref().unwrap()
+                                    );
+                                } else {
+                                    println!("Created: {} ({})", &obj.name, &obj.id);
+                                }
                                 cache.insert(obj.id.clone(), obj);
                             }
                             Err(e) => println!("Error creating: {}", e),
@@ -161,14 +257,21 @@ async fn main() -> Result<()> {
                     }
                     "look" | "l" => {
                         let target = parts.get(1).copied();
-                        match resolve_and_load(target, &current_location, &persistence, &mut cache)
-                            .await
+                        match resolve_and_load(
+                            target,
+                            &current_location,
+                            &default_owner,
+                            &persistence,
+                            &mut cache,
+                        )
+                        .await
                         {
                             Ok(Some(id)) => {
                                 let objects = load_all_objects(&persistence, &cache).await?;
                                 let ctx =
                                     DisplayContext::new(default_owner.clone(), DisplayMode::Player)
-                                        .with_objects(objects);
+                                        .with_objects(objects)
+                                        .with_anatomy(active_anatomy.clone());
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, false, false);
                                 } else {
@@ -185,8 +288,14 @@ async fn main() -> Result<()> {
                     }
                     "examine" | "x" => {
                         let target = parts.get(1).copied();
-                        match resolve_and_load(target, &current_location, &persistence, &mut cache)
-                            .await
+                        match resolve_and_load(
+                            target,
+                            &current_location,
+                            &default_owner,
+                            &persistence,
+                            &mut cache,
+                        )
+                        .await
                         {
                             Ok(Some(id)) => {
                                 let objects = load_all_objects(&persistence, &cache).await?;
@@ -194,7 +303,8 @@ async fn main() -> Result<()> {
                                     default_owner.clone(),
                                     DisplayMode::Builder,
                                 )
-                                .with_objects(objects);
+                                .with_objects(objects)
+                                .with_anatomy(active_anatomy.clone());
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, true, false);
                                 } else {
@@ -211,8 +321,14 @@ async fn main() -> Result<()> {
                     }
                     "@dump" => {
                         let target = parts.get(1).copied();
-                        match resolve_and_load(target, &current_location, &persistence, &mut cache)
-                            .await
+                        match resolve_and_load(
+                            target,
+                            &current_location,
+                            &default_owner,
+                            &persistence,
+                            &mut cache,
+                        )
+                        .await
                         {
                             Ok(Some(id)) => {
                                 if let Some(obj) = cache.get(&id) {
@@ -225,6 +341,231 @@ async fn main() -> Result<()> {
                                 println!("No current location. Use '@dump <target>'.");
                             }
                             Err(e) => println!("Error: {}", e),
+                        }
+                    }
+                    "@delete" => {
+                        if parts.len() < 2 {
+                            println!("Usage: @delete <target>");
+                            continue;
+                        }
+                        let target = parts[1..].join(" ");
+                        let objects = load_all_objects(&persistence, &cache).await?;
+                        match resolve_target(
+                            &target,
+                            current_location.as_ref(),
+                            Some(&default_owner),
+                            &objects,
+                        ) {
+                            Some(id) => match soft_delete_object(&persistence, &id, &mut cache).await
+                            {
+                                Ok(msg) => println!("{msg}"),
+                                Err(e) => println!("Error: {e}"),
+                            },
+                            None => println!("No such object."),
+                        }
+                    }
+                    "@undelete" => {
+                        if parts.len() < 2 {
+                            println!("Usage: @undelete <id>");
+                            continue;
+                        }
+                        let id = ObjectId::new(parts[1]);
+                        match undelete_object(&persistence, &id, &mut cache).await {
+                            Ok(msg) => println!("{msg}"),
+                            Err(e) => println!("Error: {e}"),
+                        }
+                    }
+                    "inventory" | "i" => {
+                        let objects = load_all_objects(&persistence, &cache).await?;
+                        if let Some(player) = objects.get(&default_owner).cloned() {
+                            println!("{}", describe_inventory(&player, &objects, &active_anatomy));
+                        } else if let Ok(Some(player)) =
+                            persistence.load_object(&default_owner).await
+                        {
+                            println!("{}", describe_inventory(&player, &objects, &active_anatomy));
+                        } else {
+                            println!("Player not found.");
+                        }
+                    }
+                    "get" | "take" => {
+                        if parts.len() < 2 {
+                            println!("Usage: get <item>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let mut objects = load_all_objects(&persistence, &cache).await?;
+                        match take_from_location(
+                            &default_owner,
+                            current_location.as_ref(),
+                            &item_name,
+                            &mut objects,
+                            &active_anatomy,
+                        ) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                save_all_objects(&persistence, &objects).await?;
+                                cache.extend(objects);
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "drop" => {
+                        if parts.len() < 2 {
+                            println!("Usage: drop <item>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let mut objects = load_all_objects(&persistence, &cache).await?;
+                        let mut ctx = InventoryContext {
+                            player_id: &default_owner,
+                            room_id: current_location.as_ref(),
+                            objects: &mut objects,
+                            anatomy: &active_anatomy,
+                        };
+                        match drop_item(&mut ctx, &item_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                save_all_objects(&persistence, &objects).await?;
+                                cache.extend(objects);
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "put" => {
+                        let rest = parts[1..].join(" ");
+                        if let Some((item, container)) = rest.split_once(" in ") {
+                            let mut objects = load_all_objects(&persistence, &cache).await?;
+                            let mut ctx = InventoryContext {
+                                player_id: &default_owner,
+                                room_id: current_location.as_ref(),
+                                objects: &mut objects,
+                                anatomy: &active_anatomy,
+                            };
+                            match put_item(&mut ctx, item.trim(), container.trim()) {
+                                Ok(msg) => {
+                                    println!("{msg}");
+                                    save_all_objects(&persistence, &objects).await?;
+                                    cache.extend(objects);
+                                }
+                                Err(e) => println!("{e}"),
+                            }
+                        } else {
+                            println!("Usage: put <item> in <container>");
+                        }
+                    }
+                    "remove" => {
+                        let rest = parts[1..].join(" ");
+                        if let Some((item, container)) = rest.split_once(" from ") {
+                            let mut objects = load_all_objects(&persistence, &cache).await?;
+                            let mut ctx = InventoryContext {
+                                player_id: &default_owner,
+                                room_id: current_location.as_ref(),
+                                objects: &mut objects,
+                                anatomy: &active_anatomy,
+                            };
+                            match remove_item(&mut ctx, item.trim(), container.trim()) {
+                                Ok(msg) => {
+                                    println!("{msg}");
+                                    save_all_objects(&persistence, &objects).await?;
+                                    cache.extend(objects);
+                                }
+                                Err(e) => println!("{e}"),
+                            }
+                        } else {
+                            println!("Usage: remove <item> from <container>");
+                        }
+                    }
+                    "wield" => {
+                        if parts.len() < 2 {
+                            println!("Usage: wield <item>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let mut objects = load_all_objects(&persistence, &cache).await?;
+                        let mut ctx = InventoryContext {
+                            player_id: &default_owner,
+                            room_id: current_location.as_ref(),
+                            objects: &mut objects,
+                            anatomy: &active_anatomy,
+                        };
+                        match wield_item(&mut ctx, &item_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                save_all_objects(&persistence, &objects).await?;
+                                cache.extend(objects);
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "module" => {
+                        if parts.len() < 2 {
+                            println!("Usage: module reload | module bundle <outdir>");
+                            continue;
+                        }
+                        match parts[1] {
+                            "reload" => {
+                                let path = default_module_dir();
+                                match reload_universe(path.to_str().unwrap_or("modules/default")) {
+                                    Ok(universe) => {
+                                        loaded_universe = universe;
+                                        active_anatomy =
+                                            loaded_universe.active_world()?.anatomy.clone();
+                                        let world = loaded_universe.active_world()?;
+                                        println!(
+                                            "Reloaded universe '{}' / world '{}' ({} sources)",
+                                            loaded_universe.name,
+                                            world.name,
+                                            world.sources.len()
+                                        );
+                                    }
+                                    Err(e) => println!("Error: {}", e),
+                                }
+                            }
+                            "bundle" => {
+                                if parts.len() < 3 {
+                                    println!("Usage: module bundle <output_dir>");
+                                    continue;
+                                }
+                                let out = parts[2];
+                                let module_path = default_module_dir();
+                                match package_module(
+                                    module_path.to_str().unwrap_or("modules/default"),
+                                    out,
+                                ) {
+                                    Ok(manifest) => {
+                                        println!(
+                                            "Bundled module '{}' to {} ({} files)",
+                                            manifest.name,
+                                            out,
+                                            manifest.files.len()
+                                        );
+                                    }
+                                    Err(e) => println!("Error: {}", e),
+                                }
+                            }
+                            other => println!("Unknown module command: {other}"),
+                        }
+                    }
+                    "wear" => {
+                        if parts.len() < 2 {
+                            println!("Usage: wear <item>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let mut objects = load_all_objects(&persistence, &cache).await?;
+                        let mut ctx = InventoryContext {
+                            player_id: &default_owner,
+                            room_id: current_location.as_ref(),
+                            objects: &mut objects,
+                            anatomy: &active_anatomy,
+                        };
+                        match wear_item(&mut ctx, &item_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                save_all_objects(&persistence, &objects).await?;
+                                cache.extend(objects);
+                            }
+                            Err(e) => println!("{e}"),
                         }
                     }
                     "go" => {
@@ -376,7 +717,8 @@ async fn main() -> Result<()> {
                                     default_owner.clone(),
                                     DisplayMode::Builder,
                                 )
-                                .with_objects(objects);
+                                .with_objects(objects)
+                                .with_anatomy(active_anatomy.clone());
                                 render_object(&obj, &ctx, true, false);
                             }
                             Ok(None) => println!("Not found: {}", id),
