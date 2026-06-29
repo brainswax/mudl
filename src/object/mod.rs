@@ -90,8 +90,33 @@ pub struct Object {
     pub deleted_at: Option<String>,
 }
 
+/// Convert a display name into a lowercase hyphenated slug for object IDs.
+pub fn slugify_display_name(name: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_sep = true;
+
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_sep = false;
+        } else if !last_was_sep {
+            slug.push('-');
+            last_was_sep = true;
+        }
+    }
+
+    let slug = slug.trim_end_matches('-').to_string();
+    if slug.is_empty() {
+        "object".to_string()
+    } else {
+        slug
+    }
+}
+
 pub fn generate_object_id(obj_type: &str, base_name: &str, counter: u32) -> ObjectId {
-    ObjectId(format!("{}:{}-{:03x}", obj_type, base_name, counter))
+    let ty = obj_type.to_ascii_lowercase();
+    let base = base_name.to_ascii_lowercase();
+    ObjectId(format!("{ty}:{base}-{counter:03x}"))
 }
 
 pub struct ObjectFactory<P: Persistence> {
@@ -109,7 +134,7 @@ impl<P: Persistence> ObjectFactory<P> {
 
     pub async fn create_player(
         &self,
-        base_name: &str,
+        display_name: &str,
         owner: ObjectId,
         anatomy: &AnatomyRegistry,
     ) -> anyhow::Result<Object> {
@@ -121,15 +146,20 @@ impl<P: Persistence> ObjectFactory<P> {
                 creature: "human".to_string(),
                 gender: "neutral".to_string(),
             });
-        let mut player = self.create("player", base_name, owner).await?;
-        player.name = base_name.to_string();
+        let slug = slugify_display_name(display_name);
+        let mut player = self
+            .create_named("player", &slug, display_name, owner)
+            .await?;
         player.init_body(&template);
         self.persistence.save_object(&player).await?;
         Ok(player)
     }
 
-    pub async fn create_item(&self, base_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
-        let mut item = self.create("item", base_name, owner).await?;
+    pub async fn create_item(&self, display_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
+        let slug = slugify_display_name(display_name);
+        let mut item = self
+            .create_named("item", &slug, display_name, owner)
+            .await?;
         item.init_item_defaults(true);
         self.persistence.save_object(&item).await?;
         Ok(item)
@@ -137,36 +167,42 @@ impl<P: Persistence> ObjectFactory<P> {
 
     pub async fn create_container(
         &self,
-        base_name: &str,
+        display_name: &str,
         owner: ObjectId,
         capacity: u32,
         wearable: bool,
     ) -> anyhow::Result<Object> {
-        let mut container = self.create("item", base_name, owner).await?;
+        let slug = slugify_display_name(display_name);
+        let mut container = self
+            .create_named("item", &slug, display_name, owner)
+            .await?;
         container.init_container_defaults(capacity, wearable);
         self.persistence.save_object(&container).await?;
         Ok(container)
     }
 
-    pub async fn create(
+    /// Create an object using a slug for the ID and a separate display name.
+    pub async fn create_named(
         &self,
         type_name: &str,
-        base_name: &str,
+        slug: &str,
+        display_name: &str,
         owner: ObjectId,
     ) -> anyhow::Result<Object> {
+        let slug = slugify_display_name(slug);
+        let type_name = type_name.to_ascii_lowercase();
         let counter = self
             .persistence
-            .get_next_id_counter(type_name, base_name)
+            .get_next_id_counter(&type_name, &slug)
             .await?;
-        let id = generate_object_id(type_name, base_name, counter);
+        let id = generate_object_id(&type_name, &slug, counter);
         self.persistence
-            .increment_counter(type_name, base_name)
+            .increment_counter(&type_name, &slug)
             .await?;
 
-        let name = base_name.to_string();
         let object = Object {
             id,
-            name,
+            name: display_name.to_string(),
             aliases: Vec::new(),
             location: None,
             prototype: None,
@@ -181,6 +217,16 @@ impl<P: Persistence> ObjectFactory<P> {
 
         self.persistence.save_object(&object).await?;
         Ok(object)
+    }
+
+    /// Create an object where the slug and display name are the same (bootstrap/tests).
+    pub async fn create(
+        &self,
+        type_name: &str,
+        slug: &str,
+        owner: ObjectId,
+    ) -> anyhow::Result<Object> {
+        self.create_named(type_name, slug, slug, owner).await
     }
 
     pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
@@ -638,5 +684,22 @@ impl Describable for Object {
 
     fn dump(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_else(|_| format!("{self:?}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slugify_display_name_lowercase_hyphens() {
+        assert_eq!(slugify_display_name("Rusty Sword"), "rusty-sword");
+        assert_eq!(slugify_display_name("Big_Red Boots!"), "big-red-boots");
+    }
+
+    #[test]
+    fn generate_object_id_is_always_lowercase() {
+        let id = generate_object_id("Sword", "Rusty-Sword", 1);
+        assert_eq!(id.as_str(), "sword:rusty-sword-001");
     }
 }

@@ -4,8 +4,9 @@ use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
-    bootstrap_active_universe, create_at_location, package_module, persist_inventory_changes,
-    reload_universe, soft_delete_object, take_from_location, undelete_object,
+    bootstrap_active_universe, create_at_location, package_module, parse_create_args,
+    persist_inventory_changes, reload_universe, soft_delete_object, take_from_location,
+    undelete_object,
 };
 use mudl::world::restore_session;
 use mudl::display::{resolve_target, Describable, DisplayContext, DisplayMode};
@@ -177,7 +178,7 @@ async fn main() -> Result<()> {
                 match cmd {
                     "help" => {
                         println!("Commands:");
-                        println!("  create <type> <base_name>   - e.g. create room cozy-kitchen");
+                        println!("  create <type> <name...>     - e.g. create sword Rusty Sword");
                         println!("  list                        - list objects in session cache");
                         println!(
                             "  look [target]  (l)          - immersive view (current room if no target)"
@@ -211,16 +212,17 @@ async fn main() -> Result<()> {
                         println!("  exit                        - quit");
                     }
                     "create" => {
-                        if parts.len() < 3 {
-                            println!("Usage: create <type> <base_name>");
-                            continue;
-                        }
-                        let type_name = parts[1];
-                        let base_name = parts[2];
+                        let (type_name, display_name) = match parse_create_args(&parts, input) {
+                            Ok(parsed) => parsed,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
+                            }
+                        };
                         match create_at_location(
                             &factory,
-                            type_name,
-                            base_name,
+                            &type_name,
+                            &display_name,
                             default_owner.clone(),
                             current_location.as_ref(),
                             &active_anatomy,

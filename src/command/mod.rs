@@ -34,24 +34,72 @@ pub fn reload_universe(path: &str) -> anyhow::Result<LoadedUniverse> {
     load_module(path)
 }
 
+/// Parse `create <type> <name...>` supporting multi-word and quoted display names.
+pub fn parse_create_args(parts: &[&str], input: &str) -> anyhow::Result<(String, String)> {
+    if parts.len() < 3 {
+        anyhow::bail!("Usage: create <type> <name...>");
+    }
+    let type_name = parts[1].to_ascii_lowercase();
+    let rest = input
+        .trim()
+        .strip_prefix("create")
+        .ok_or_else(|| anyhow::anyhow!("Usage: create <type> <name...>"))?
+        .trim_start();
+    let name_part = if let Some(stripped) = rest.strip_prefix(parts[1]) {
+        stripped.trim_start().to_string()
+    } else {
+        parts[2..].join(" ")
+    };
+    let display_name = parse_display_name(&name_part)?;
+    if display_name.is_empty() {
+        anyhow::bail!("Usage: create <type> <name...>");
+    }
+    Ok((type_name, display_name))
+}
+
+fn parse_display_name(raw: &str) -> anyhow::Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.len() >= 2 {
+        if let Some(inner) = trimmed.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            return Ok(inner.to_string());
+        }
+        if let Some(inner) = trimmed
+            .strip_prefix('\'')
+            .and_then(|s| s.strip_suffix('\''))
+        {
+            return Ok(inner.to_string());
+        }
+    }
+    Ok(trimmed.to_string())
+}
+
 /// Create an object and place it at the player's current location when one is set.
 pub async fn create_at_location<P: Persistence>(
     factory: &ObjectFactory<P>,
     type_name: &str,
-    base_name: &str,
+    display_name: &str,
     owner: ObjectId,
     location: Option<&ObjectId>,
     anatomy: &AnatomyRegistry,
 ) -> anyhow::Result<Object> {
     let mut obj = match type_name {
-        "player" => factory.create_player(base_name, owner.clone(), anatomy).await?,
-        "item" => factory.create_item(base_name, owner.clone()).await?,
-        "container" => {
+        "player" => {
             factory
-                .create_container(base_name, owner.clone(), 10, true)
+                .create_player(display_name, owner.clone(), anatomy)
                 .await?
         }
-        _ => factory.create(type_name, base_name, owner).await?,
+        "item" => factory.create_item(display_name, owner.clone()).await?,
+        "container" => {
+            factory
+                .create_container(display_name, owner.clone(), 10, true)
+                .await?
+        }
+        other => {
+            let slug = crate::object::slugify_display_name(display_name);
+            factory
+                .create_named(other, &slug, display_name, owner)
+                .await?
+        }
     };
 
     if let Some(loc_id) = location {
@@ -127,6 +175,7 @@ pub async fn undelete_object<P: Persistence>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::object::slugify_display_name;
     use crate::display::{Describable, DisplayContext, DisplayMode};
     use crate::inventory::describe_carried;
     use crate::persistence::SqlitePersistence;
@@ -168,6 +217,53 @@ mod tests {
             behavior: None,
         });
         area
+    }
+
+    #[test]
+    fn parse_create_args_multi_word_name() {
+        let input = "create sword Rusty Sword";
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        let (ty, name) = parse_create_args(&parts, input).unwrap();
+        assert_eq!(ty, "sword");
+        assert_eq!(name, "Rusty Sword");
+    }
+
+    #[test]
+    fn parse_create_args_quoted_name() {
+        let input = r#"create sword "Rusty Sword""#;
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        let (ty, name) = parse_create_args(&parts, input).unwrap();
+        assert_eq!(ty, "sword");
+        assert_eq!(name, "Rusty Sword");
+    }
+
+    #[test]
+    fn slugify_produces_lowercase_hyphenated_id_base() {
+        assert_eq!(slugify_display_name("Rusty Sword"), "rusty-sword");
+        assert_eq!(slugify_display_name("  Big   Red  Boots  "), "big-red-boots");
+    }
+
+    #[tokio::test]
+    async fn create_multi_word_name_generates_lowercase_id() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+
+        let sword = create_at_location(
+            &factory,
+            "sword",
+            "Rusty Sword",
+            owner,
+            Some(&area_id),
+            &anatomy,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(sword.name, "Rusty Sword");
+        assert_eq!(sword.id.as_str(), "sword:rusty-sword-001");
+        assert_eq!(sword.location.as_ref(), Some(&area_id));
     }
 
     #[tokio::test]

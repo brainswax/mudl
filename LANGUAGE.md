@@ -207,19 +207,21 @@ exits:
 Items are objects with `location` set to a place or player. The REPL supports basic pickup:
 
 ```
-> create item boots
-Created: boots (item:boots-001) at area:the-void-001
+> create sword Rusty Sword
+Created: Rusty Sword (sword:rusty-sword-001) at area:the-void-001
 > look
 The Void
 ...
-You see: boots
-> take boots
-You take the boots.
+You see: Rusty Sword
+> take rusty sword
+You take the Rusty Sword.
 > look self
 Admin
-You are holding boots in your right hand.
+You are holding Rusty Sword in your right hand.
 ```
 
+- `create <type> <name...>` — everything after the type is the display name (spaces allowed). Quoted names work: `create sword "Rusty Sword"`.
+- Object IDs use lowercase hyphenated slugs derived from the name (`Rusty Sword` → `sword:rusty-sword-001`). Display names keep original capitalization.
 - `create` places new objects at the player's current location when one is set.
 - `take` / `get` moves items from the current area/room into grasp slots from the player's `@creature` definition.
 - Items may set `hand_slot` to `left`, `right`, or `both` (two-handed).

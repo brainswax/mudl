@@ -64,7 +64,7 @@ Type `help` at the prompt to see the list of commands at any time.
 | Command                  | Description                                      | Example                              |
 |--------------------------|--------------------------------------------------|--------------------------------------|
 | `help`                   | Show the list of available commands              | `help`                               |
-| `create <type> <base_name>` | Create a new object at your current location  | `create item boots`                  |
+| `create <type> <name...>` | Create a new object at your current location  | `create sword Rusty Sword`           |
 | `list`                   | Show all objects currently in the session cache  | `list`                               |
 | `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
 | `examine [target]` (`x`) | Builder view with IDs, properties, and verbs     | `examine room:central-hub-001`       |
@@ -113,22 +113,22 @@ Players spawn as **naked humans** from the active world's `creatures.mudl` (`@cr
 - **Inside containers** — nested via each container's `contents` list
 - **On the ground** — items with `location` set to your current area/room appear in `look` as `You see: …`
 
-`create item <name>` places the new item at your current location (area, room, or any navigable place). Then `take <name>` picks it up.
+`create <type> <name...>` places the new object at your current location (area, room, or any navigable place). Multi-word names are supported; IDs are lowercase slugs (`Rusty Sword` → `sword:rusty-sword-001`). Quote names if needed: `create sword "Rusty Sword"`.
 
 Example output:
 
 ```text
-> create item boots
-Created: boots (item:boots-001) at area:the-void-001
+> create sword Rusty Sword
+Created: Rusty Sword (sword:rusty-sword-001) at area:the-void-001
 > look
 The Void
 You are in a featureless void.
-You see: boots
-> take boots
-You take the boots.
+You see: Rusty Sword
+> take rusty sword
+You take the Rusty Sword.
 > look self
 Admin
-You are holding boots in your right hand.
+You are holding Rusty Sword in your right hand.
 ```
 
 Use `inventory` for a structured slot listing. Pockets will arrive later via clothing items.
