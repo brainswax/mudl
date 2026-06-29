@@ -1,45 +1,29 @@
 # Default Universe
 
-Official baseline universe for MUDL: one default world with naked human anatomy, starter rooms, and a default player template.
+Official baseline universe for MUDL: one default world with flat MUDL files (no subfolders under the world for now).
 
 ## Layout
 
 ```
 modules/default/
-  universe.mudl                    # Universe entrypoint — @include-world directives
+  universe.mudl
   worlds/
     default_world/
-      world.mudl                   # World entrypoint (starting_location, @include)
-      anatomy/human.mudl           # Body plan (grasp, wear, limb slots)
-      players/default.mudl         # Player spawn template
-      locations/
-        world_locations.mudl       # Room definitions
-        rooms/                     # Per-room files (future)
-        areas/                     # Area groupings (future)
-      creatures/                   # NPC/creature templates (future)
-      items/                       # Standard items (future)
-      objects/                     # Shared object prototypes (future)
+      world.mudl       # World entrypoint (@world, @include)
+      map.mudl         # Areas and locations (type=area)
+      creatures.mudl   # @creature definitions with anatomy slots
+      players.mudl     # @player-template definitions (creature=human)
+      items.mudl       # Item prototypes (future)
+      objects.mudl     # Shared object prototypes (future)
 ```
 
 ## Customization
 
-Copy this folder to `modules/my-universe/` (or under `examples/`) and edit:
-
-- Add a new world under `worlds/my_world/` with its own `world.mudl`
-- Reference it from `universe.mudl` with `@include-world my_world`
-- Override anatomy, locations, or player templates per world
-- Set `default_world=my_world` in the `@universe` block
-
-Point the engine at your fork:
+Copy this folder to `modules/my-universe/` and edit the flat `.mudl` files, or add another world under `worlds/`:
 
 ```bash
 MUDL_MODULE=modules/my-universe cargo run --bin repl
+MUDL_WORLD=default_world cargo run --bin repl
 ```
 
-Select a specific world within a universe:
-
-```bash
-MUDL_WORLD=my_world cargo run --bin repl
-```
-
-Custom worlds can inherit from the default by `@include`ing shared anatomy or location files from another world path, or by copying and overriding individual `.mudl` files.
+To add a new creature, define `@creature cat` in `creatures.mudl` and set `creature=cat` in a player template. Nested subfolders can be reintroduced later when content grows.

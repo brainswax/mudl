@@ -1,8 +1,19 @@
 use std::collections::HashMap;
 
-use crate::mudl::LoadedWorld;
+use crate::mudl::{LoadedWorld, WorldDef};
 use crate::object::{ObjectFactory, ObjectId, PermissionFlags, Property, Value};
 use crate::persistence::Persistence;
+
+fn location_id(def: &WorldDef) -> ObjectId {
+    ObjectId::new(format!("{}:{}-001", def.obj_type, def.base_name))
+}
+
+fn find_location_def<'a>(world: &'a LoadedWorld, base_name: &str) -> Option<&'a WorldDef> {
+    world
+        .world_defs
+        .iter()
+        .find(|def| def.base_name == base_name)
+}
 
 /// Bootstrap world objects from a loaded MUDL world into persistence.
 pub async fn bootstrap_world<P: Persistence>(
@@ -11,9 +22,11 @@ pub async fn bootstrap_world<P: Persistence>(
     world: &LoadedWorld,
 ) -> anyhow::Result<ObjectId> {
     if let Some(start_base) = &world.starting_location {
-        let start_id = ObjectId::new(format!("room:{start_base}-001"));
-        if factory.load_object(&start_id).await?.is_some() {
-            return Ok(start_id);
+        if let Some(def) = find_location_def(world, start_base) {
+            let start_id = location_id(def);
+            if factory.load_object(&start_id).await?.is_some() {
+                return Ok(start_id);
+            }
         }
     }
 
@@ -75,16 +88,24 @@ pub async fn bootstrap_world<P: Persistence>(
     }
 
     let start_id = if let Some(start_base) = &world.starting_location {
-        name_to_id
-            .get(start_base)
-            .cloned()
-            .unwrap_or_else(|| ObjectId::new(format!("room:{}-001", start_base)))
+        if let Some(def) = find_location_def(world, start_base) {
+            name_to_id
+                .get(start_base)
+                .cloned()
+                .unwrap_or_else(|| location_id(def))
+        } else {
+            name_to_id
+                .values()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| ObjectId::new("area:the-void-001"))
+        }
     } else {
         name_to_id
             .values()
             .next()
             .cloned()
-            .unwrap_or_else(|| ObjectId::new("room:the-void-001"))
+            .unwrap_or_else(|| ObjectId::new("area:the-void-001"))
     };
 
     Ok(start_id)

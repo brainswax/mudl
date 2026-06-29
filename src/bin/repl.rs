@@ -104,15 +104,15 @@ async fn main() -> Result<()> {
     )?;
     let active_world = loaded_universe.active_world()?;
     let mut active_anatomy = active_world.anatomy.clone();
-    if active_anatomy.body_plan("human").is_some() {
+    if active_anatomy.creature("human").is_some() {
         println!(
-            "Loaded universe '{}' / world '{}' ({} sources, human body plan)",
+            "Loaded universe '{}' / world '{}' ({} sources, human creature)",
             loaded_universe.name,
             active_world.name,
             active_world.sources.len()
         );
     } else {
-        println!("Warning: human body plan not found in active world");
+        println!("Warning: human creature definition not found in active world");
     }
 
     println!("Bootstrapping world if needed...");

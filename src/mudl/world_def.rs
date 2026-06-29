@@ -55,6 +55,7 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
             || trimmed.starts_with("@include-world")
             || trimmed.starts_with("@universe")
             || trimmed.starts_with("@world")
+            || trimmed.starts_with("@creature")
             || trimmed.starts_with("@body-plan")
             || trimmed.starts_with("@player-template")
             || trimmed.starts_with("@slot")

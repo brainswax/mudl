@@ -1,6 +1,6 @@
 # Example Universes
 
-Place alternative universe packs here (e.g. `examples/fantasy/`) using the same layout as `modules/default/`:
+Place alternative universe packs here using the same flat layout as `modules/default/`:
 
 ```
 examples/my-universe/
@@ -8,24 +8,14 @@ examples/my-universe/
   worlds/
     my_world/
       world.mudl
-      anatomy/
-      locations/
-      players/
-      creatures/
-      items/
-      objects/
+      map.mudl
+      creatures.mudl
+      players.mudl
+      items.mudl
+      objects.mudl
 ```
-
-Point the engine at your universe with:
 
 ```bash
 MUDL_MODULE=examples/my-universe cargo run --bin repl
-```
-
-Select a world within the universe:
-
-```bash
 MUDL_WORLD=my_world cargo run --bin repl
 ```
-
-Or set `MUDL_UNIVERSE` to a specific `universe.mudl` path.

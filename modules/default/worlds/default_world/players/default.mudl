@@ -1,5 +1,0 @@
-# Default player spawn template — naked human.
-@player-template default
-  body_plan=human
-  gender=neutral
-@end

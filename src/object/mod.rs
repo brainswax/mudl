@@ -112,7 +112,7 @@ impl<P: Persistence> ObjectFactory<P> {
             .cloned()
             .unwrap_or(PlayerTemplate {
                 name: "default".to_string(),
-                body_plan: "human".to_string(),
+                creature: "human".to_string(),
                 gender: "neutral".to_string(),
             });
         let mut player = self.create("player", base_name, owner).await?;
@@ -276,11 +276,11 @@ impl Object {
             .collect()
     }
 
-    /// Initialize a naked player from a MUDL player template and body plan.
+    /// Initialize a naked player from a MUDL player template and creature definition.
     pub fn init_body(&mut self, template: &PlayerTemplate) {
         self.add_property(Property {
-            name: "body_plan".to_string(),
-            value: Value::String(template.body_plan.clone()),
+            name: "creature".to_string(),
+            value: Value::String(template.creature.clone()),
             permissions: PermissionFlags::OWNER,
             behavior: None,
         });
@@ -293,14 +293,21 @@ impl Object {
         self.set_property_map("body_slots", HashMap::new());
     }
 
+    pub fn creature_name(&self) -> Option<String> {
+        self.get_property("creature")
+            .or_else(|| self.get_property("body_plan"))
+            .and_then(|p| {
+                if let Value::String(s) = &p.value {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Alias for [`creature_name`](Self::creature_name).
     pub fn body_plan_name(&self) -> Option<String> {
-        self.get_property("body_plan").and_then(|p| {
-            if let Value::String(s) = &p.value {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
+        self.creature_name()
     }
 
     pub fn gender(&self) -> Option<String> {

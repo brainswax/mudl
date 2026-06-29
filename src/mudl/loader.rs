@@ -294,10 +294,21 @@ mod tests {
 
         let world = universe.active_world().unwrap();
         assert_eq!(world.name, "default_world");
-        assert!(world.anatomy.body_plan("human").is_some());
-        assert!(world.anatomy.player_template("default").is_some());
+        assert!(world.anatomy.creature("human").is_some());
+        assert_eq!(
+            world
+                .anatomy
+                .player_template("default")
+                .map(|t| t.creature.as_str()),
+            Some("human")
+        );
         assert_eq!(world.starting_location.as_deref(), Some("the-void"));
-        assert!(world.world_defs.iter().any(|d| d.base_name == "the-void"));
-        assert!(world.sources.len() >= 4);
+        let void = world
+            .world_defs
+            .iter()
+            .find(|d| d.base_name == "the-void")
+            .unwrap();
+        assert_eq!(void.obj_type, "area");
+        assert!(world.sources.len() >= 5);
     }
 }

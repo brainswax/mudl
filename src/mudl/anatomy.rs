@@ -26,7 +26,7 @@ impl SlotType {
     }
 }
 
-/// Definition of a single anatomical slot from a body plan.
+/// Definition of a single anatomical slot from a creature definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BodySlotDef {
     pub name: String,
@@ -35,14 +35,14 @@ pub struct BodySlotDef {
     pub hands: u32,
 }
 
-/// A complete body plan (e.g. human, quadruped) defined in MUDL.
+/// Anatomy slots for a creature (e.g. human, cat).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BodyPlan {
+pub struct CreatureDef {
     pub name: String,
     pub slots: Vec<BodySlotDef>,
 }
 
-impl BodyPlan {
+impl CreatureDef {
     pub fn slot(&self, name: &str) -> Option<&BodySlotDef> {
         self.slots.iter().find(|s| s.name == name)
     }
@@ -63,24 +63,32 @@ impl BodyPlan {
     }
 }
 
-/// Player spawn template referencing a body plan.
+/// Backward-compatible alias for creature anatomy definitions.
+pub type BodyPlan = CreatureDef;
+
+/// Player spawn template referencing a creature definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlayerTemplate {
     pub name: String,
-    pub body_plan: String,
+    pub creature: String,
     pub gender: String,
 }
 
-/// Loaded anatomy definitions from MUDL files.
+/// Loaded creature and player definitions from MUDL files.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AnatomyRegistry {
-    pub body_plans: HashMap<String, BodyPlan>,
+    pub creatures: HashMap<String, CreatureDef>,
     pub player_templates: HashMap<String, PlayerTemplate>,
 }
 
 impl AnatomyRegistry {
-    pub fn body_plan(&self, name: &str) -> Option<&BodyPlan> {
-        self.body_plans.get(name)
+    pub fn creature(&self, name: &str) -> Option<&CreatureDef> {
+        self.creatures.get(name)
+    }
+
+    /// Alias for [`creature`](Self::creature) — legacy name for anatomy lookups.
+    pub fn body_plan(&self, name: &str) -> Option<&CreatureDef> {
+        self.creature(name)
     }
 
     pub fn player_template(&self, name: &str) -> Option<&PlayerTemplate> {
@@ -92,7 +100,7 @@ impl AnatomyRegistry {
     }
 
     pub fn merge(&mut self, other: AnatomyRegistry) {
-        self.body_plans.extend(other.body_plans);
+        self.creatures.extend(other.creatures);
         self.player_templates.extend(other.player_templates);
     }
 }
@@ -111,10 +119,23 @@ fn parse_key_value_pairs(s: &str) -> HashMap<String, String> {
     map
 }
 
-/// Parse anatomy definitions from MUDL source text.
+fn parse_creature_name(line: &str) -> Option<String> {
+    let name = line
+        .trim()
+        .trim_end_matches('{')
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Parse creature and player definitions from MUDL source text.
 pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
     let mut registry = AnatomyRegistry::default();
-    let mut current_plan: Option<BodyPlan> = None;
+    let mut current_creature: Option<CreatureDef> = None;
     let mut current_template: Option<PlayerTemplate> = None;
 
     for raw_line in content.lines() {
@@ -123,9 +144,9 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
             continue;
         }
 
-        if line == "@end" {
-            if let Some(plan) = current_plan.take() {
-                registry.body_plans.insert(plan.name.clone(), plan);
+        if line == "}" || line == "@end" {
+            if let Some(creature) = current_creature.take() {
+                registry.creatures.insert(creature.name.clone(), creature);
             }
             if let Some(template) = current_template.take() {
                 registry
@@ -135,9 +156,14 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
             continue;
         }
 
-        if let Some(name) = line.strip_prefix("@body-plan ") {
-            current_plan = Some(BodyPlan {
-                name: name.trim().to_string(),
+        if let Some(name) = line
+            .strip_prefix("@creature ")
+            .or_else(|| line.strip_prefix("@body-plan "))
+        {
+            current_creature = Some(CreatureDef {
+                name: parse_creature_name(name).ok_or_else(|| {
+                    anyhow::anyhow!("@creature missing name: {line}")
+                })?,
                 slots: Vec::new(),
             });
             current_template = None;
@@ -161,8 +187,8 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
                 .unwrap_or(SlotType::Grasp);
             let hands = attrs.get("hands").and_then(|v| v.parse().ok()).unwrap_or(1);
 
-            if let Some(plan) = &mut current_plan {
-                plan.slots.push(BodySlotDef {
+            if let Some(creature) = &mut current_creature {
+                creature.slots.push(BodySlotDef {
                     name: slot_name,
                     capacity,
                     slot_type,
@@ -174,18 +200,20 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
 
         if let Some(name) = line.strip_prefix("@player-template ") {
             current_template = Some(PlayerTemplate {
-                name: name.trim().to_string(),
-                body_plan: "human".to_string(),
+                name: name.trim().trim_end_matches('{').trim().to_string(),
+                creature: "human".to_string(),
                 gender: "neutral".to_string(),
             });
-            current_plan = None;
+            current_creature = None;
             continue;
         }
 
         if let Some((key, value)) = line.split_once('=') {
             if let Some(template) = &mut current_template {
                 match key.trim().to_lowercase().as_str() {
-                    "body_plan" => template.body_plan = value.trim().to_string(),
+                    "creature" | "body_plan" => {
+                        template.creature = value.trim().to_string();
+                    }
                     "gender" => template.gender = value.trim().to_string(),
                     _ => {}
                 }
@@ -199,4 +227,23 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
 /// Human-readable slot label (e.g. `left_hand` → "left hand").
 pub fn slot_display_name(slot: &str) -> String {
     slot.replace('_', " ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_creature_and_player_template() {
+        let content = include_str!("../../modules/default/worlds/default_world/creatures.mudl");
+        let registry = parse_anatomy_file(content).unwrap();
+        let human = registry.creature("human").unwrap();
+        assert_eq!(human.slots.len(), 10);
+        assert!(human.grasp_slots().len() >= 2);
+
+        let players = include_str!("../../modules/default/worlds/default_world/players.mudl");
+        let registry = parse_anatomy_file(players).unwrap();
+        let template = registry.player_template("default").unwrap();
+        assert_eq!(template.creature, "human");
+    }
 }

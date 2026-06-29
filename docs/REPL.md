@@ -104,7 +104,7 @@ The REPL uses three display modes from the presentation layer:
 
 ### Anatomy and Inventory
 
-Players spawn as **naked humans** from the active world's `anatomy/human.mudl` — biological body slots only, no pockets or clothing by default.
+Players spawn as **naked humans** from the active world's `creatures.mudl` (`@creature human`) — biological body slots only, no pockets or clothing by default.
 
 - **In hands** — `left_hand` / `right_hand` grasp slots; two-handed items (`hand_slot: both`) occupy both
 - **Worn** — items on `wear` slots (e.g. `torso` for a backpack via `wear_slot`)

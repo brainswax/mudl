@@ -1,5 +1,5 @@
-# Naked human body plan — biological slots only, no clothing or pockets.
-@body-plan human
+# Creature definitions — anatomy and body slots.
+@creature human
   @slot left_hand capacity=1 type=grasp hands=1
   @slot right_hand capacity=1 type=grasp hands=1
   @slot head capacity=1 type=wear

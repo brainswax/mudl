@@ -134,16 +134,18 @@ Game content lives under `modules/<universe>/`. A universe holds one or more wor
 @include-world default_world
 ```
 
-Each world has a `world.mudl` entrypoint under `worlds/<name>/`:
+Each world uses a flat set of `.mudl` files under `worlds/<name>/`, composed from `world.mudl`:
 
 ```mudl
 # worlds/default_world/world.mudl
 @world default_world
   starting_location=the-void
 @end
-@include anatomy/human.mudl
-@include players/default.mudl
-@include locations/world_locations.mudl
+@include map.mudl
+@include creatures.mudl
+@include players.mudl
+@include items.mudl
+@include objects.mudl
 ```
 
 - `@include` paths are relative to the **world** directory.
@@ -151,14 +153,14 @@ Each world has a `world.mudl` entrypoint under `worlds/<name>/`:
 - Set `MUDL_MODULE=modules/default` (or `MUDL_UNIVERSE` to a specific file) to load a universe.
 - Set `MUDL_WORLD=<name>` to select which world to bootstrap (defaults to the universe's `default_world`).
 
-Fork `modules/default/` to add custom worlds — e.g. a feline campaign world with `body_plan=cat` in its player template.
+Fork `modules/default/` to add custom worlds — e.g. a feline campaign with `creature=cat` in `players.mudl`.
 
-## Body Plans and Anatomy
+## Creatures and Anatomy
 
-Anatomy is defined per world in MUDL (e.g. `modules/default/worlds/default_world/anatomy/human.mudl`). Player templates live in `players/`:
+Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player templates in `players.mudl` reference a creature:
 
 ```mudl
-@body-plan human
+@creature human
   @slot left_hand capacity=1 type=grasp hands=1
   @slot right_hand capacity=1 type=grasp hands=1
   @slot head capacity=1 type=wear
@@ -166,11 +168,9 @@ Anatomy is defined per world in MUDL (e.g. `modules/default/worlds/default_world
 @end
 ```
 
-Player templates (e.g. `players/default.mudl`):
-
 ```mudl
 @player-template default
-  body_plan=human
+  creature=human
   gender=neutral
 @end
 ```
@@ -182,11 +182,25 @@ Player templates (e.g. `players/default.mudl`):
 - `pocket` / `container` — reserved for clothing-provided capacity (future)
 
 **Player properties** (set by engine from template):
-- `body_plan` — name of the loaded plan (e.g. `human`)
+- `creature` — name of the loaded creature definition (e.g. `human`)
 - `gender` — for descriptions (`neutral`, `male`, `female`, etc.)
 - `body_slots` — map of slot name → held/worn item ID
 
-Default players are **naked humans**: biological slots only, no pockets or clothing until equipped.
+`@body-plan` and `body_plan=` are accepted as aliases during migration. Default players are **naked humans**: biological slots only, no pockets or clothing until equipped.
+
+## Map and Locations
+
+Locations are defined in `map.mudl`. Default locations use `type=area`:
+
+```mudl
+type: area
+base_name: the-void
+name: The Void
+description: You are in a featureless void.
+
+exits:
+  north: north-passage
+```
 
 ## Future Extensions
 * LLM-friendly generation (clear grammar + examples in prompts).

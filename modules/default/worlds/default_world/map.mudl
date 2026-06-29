@@ -1,4 +1,4 @@
-type: room
+type: area
 base_name: the-void
 name: The Void
 description: You are in a featureless void. This is the starting point for new players.
@@ -6,7 +6,7 @@ description: You are in a featureless void. This is the starting point for new p
 exits:
   north: north-passage
 
-type: room
+type: area
 base_name: north-passage
 name: North Passage
 description: A narrow passage leading north from the void.
@@ -15,7 +15,7 @@ exits:
   south: the-void
   north: central-hub
 
-type: room
+type: area
 base_name: central-hub
 name: Central Hub
 description: The central hub of the world. Paths lead in all directions.
@@ -24,7 +24,7 @@ exits:
   south: north-passage
   west: the-void
 
-type: room
+type: area
 base_name: south-garden
 name: South Garden
 description: A peaceful garden full of flowers and plants to the south.

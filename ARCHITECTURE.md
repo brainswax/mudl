@@ -122,39 +122,42 @@ mudl/
 │   └── default/            # Official baseline universe
 │       ├── universe.mudl   # Universe entrypoint (@universe, @include-world)
 │       └── worlds/
-│           └── default_world/
-│               ├── world.mudl       # World entrypoint (@world, @include)
-│               ├── anatomy/         # Body plans (human, etc.)
-│               ├── players/         # Player spawn templates
-│               ├── locations/       # Rooms and areas
-│               ├── creatures/       # NPC/creature templates (future)
-│               ├── items/           # Item definitions (future)
-│               └── objects/         # Shared object prototypes (future)
+│           └── default_world/   # Flat MUDL files (no subfolders for now)
+│               ├── world.mudl   # World entrypoint (@world, @include)
+│               ├── map.mudl     # Areas/locations (type=area)
+│               ├── creatures.mudl
+│               ├── players.mudl
+│               ├── items.mudl
+│               └── objects.mudl
 └── examples/               # Alternative universe packs
 ```
 
-**MUDL-first**: All game content (anatomy, rooms, templates) is defined in `.mudl` files. Rust provides loaders, runtime, and persistence — not hardcoded world data.
+**MUDL-first**: All game content (creatures, map, templates) is defined in `.mudl` files. Rust provides loaders, runtime, and persistence — not hardcoded world data.
 
 ## Universe and World Hierarchy
 
-A **Universe** is the top-level container. It holds one or more **Worlds**, each a self-contained game setting (locations, creatures, items, anatomy, player templates).
+A **Universe** is the top-level container. It holds one or more **Worlds**, each a self-contained game setting (locations, creatures, items, player templates).
 
 ```
 Universe (modules/default/)
   └── World (worlds/default_world/)
-        ├── locations/   rooms, areas
-        ├── anatomy/     body plans
-        ├── players/     spawn templates
-        ├── creatures/   NPC definitions
-        ├── items/       item prototypes
-        └── objects/     shared prototypes
+        ├── world.mudl      entrypoint
+        ├── map.mudl        areas and exits
+        ├── creatures.mudl  @creature anatomy (slots)
+        ├── players.mudl    @player-template (creature=human)
+        ├── items.mudl      item prototypes
+        └── objects.mudl    shared prototypes
 ```
 
-- `universe.mudl` declares the universe name, default world, and which worlds to load via `@include-world`.
-- Each world's `world.mudl` declares `starting_location` and composes content with `@include` (paths relative to the world root).
-- `MUDL_WORLD` selects which world to bootstrap and play in; defaults to the universe's `default_world`.
+**Flat layout (temporary)**: Each world keeps related definitions in a handful of sibling `.mudl` files. `world.mudl` `@include`s them explicitly. Nested subfolders (e.g. `locations/rooms/`) can return when content volume warrants it.
 
-Custom worlds can override defaults by forking `worlds/default_world/` or defining a new world that `@include`s shared anatomy/locations and replaces specific files.
+- `universe.mudl` declares the universe name, default world, and which worlds to load via `@include-world`.
+- Each world's `world.mudl` declares `starting_location` and composes content with `@include` (paths relative to the world directory).
+- `MUDL_WORLD` selects which world to bootstrap and play in; defaults to the universe's `default_world`.
+- Locations default to `type=area`; bootstrap creates IDs like `area:the-void-001`.
+- Players reference a creature via `creature=human` in `@player-template`; anatomy slots live in `@creature` blocks in `creatures.mudl`.
+
+Custom worlds can fork `worlds/default_world/` and override individual flat files.
 
 ## Module Loading
 
@@ -168,10 +171,10 @@ Custom worlds can override defaults by forking `worlds/default_world/` or defini
 
 Builders/DMs can fork `modules/default/` to create custom universe packs:
 
-- **Add worlds**: Create `worlds/my_campaign/world.mudl` and add `@include-world my_campaign` to `universe.mudl`.
-- **Swap body plans**: Change `body_plan=human` to `body_plan=cat` in a player template after defining `@body-plan cat` in that world's `anatomy/`.
-- **Override locations**: Replace `locations/world_locations.mudl` or split rooms into `locations/rooms/` and `@include` them from `world.mudl`.
-- **Inherit and override**: A custom world can `@include` the default world's anatomy file, then add a local override file loaded afterward.
+- **Add worlds**: Create `worlds/my_campaign/world.mudl` plus flat `map.mudl`, `creatures.mudl`, etc., and add `@include-world my_campaign` to `universe.mudl`.
+- **Swap creatures**: Change `creature=human` to `creature=cat` in `players.mudl` after defining `@creature cat` in `creatures.mudl`.
+- **Override map**: Edit `map.mudl` or split into multiple files and `@include` them from `world.mudl`.
+- **Inherit and override**: A custom world can `@include` another world's `creatures.mudl`, then add local overrides in additional included files.
 
 The object model's prototype/parent system (`prototype: Option<ObjectId>`) is the runtime foundation for this — MUDL modules define the authoritative data; the engine resolves inheritance when spawning and displaying objects.
 
