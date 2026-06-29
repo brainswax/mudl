@@ -3,9 +3,10 @@ use std::collections::HashMap;
 
 use bitflags::bitflags;
 
-use super::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
-use super::inventory::describe_carried;
-use super::persistence::Persistence;
+use crate::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
+use crate::inventory::describe_carried;
+use crate::mudl::{AnatomyRegistry, PlayerTemplate};
+use crate::persistence::Persistence;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -87,87 +88,6 @@ pub fn generate_object_id(obj_type: &str, base_name: &str, counter: u32) -> Obje
     ObjectId(format!("{}:{}-{:03x}", obj_type, base_name, counter))
 }
 
-struct WorldDef {
-    obj_type: String,
-    base_name: String,
-    name: String,
-    description: Option<String>,
-    exits: HashMap<String, String>,
-    location: Option<String>,
-    starting_location: Option<String>,
-}
-
-fn parse_mudl_file(path: &std::path::Path) -> anyhow::Result<Vec<WorldDef>> {
-    let content = std::fs::read_to_string(path)?;
-    let mut defs: Vec<WorldDef> = Vec::new();
-    let mut current = WorldDef {
-        obj_type: "room".to_string(),
-        base_name: "unknown".to_string(),
-        name: "Unknown".to_string(),
-        description: None,
-        exits: HashMap::new(),
-        location: None,
-        starting_location: None,
-    };
-    let mut in_exits = false;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            if current.base_name != "unknown" {
-                defs.push(current);
-                current = WorldDef {
-                    obj_type: "room".to_string(),
-                    base_name: "unknown".to_string(),
-                    name: "Unknown".to_string(),
-                    description: None,
-                    exits: HashMap::new(),
-                    location: None,
-                    starting_location: None,
-                };
-                in_exits = false;
-            }
-            continue;
-        }
-        if trimmed.starts_with('#') || trimmed.starts_with("//") {
-            continue;
-        }
-        if trimmed == "exits:" {
-            in_exits = true;
-            continue;
-        }
-        if in_exits && trimmed.contains(':') {
-            let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
-            if parts.len() == 2 {
-                let dir = parts[0].trim().to_string();
-                let target = parts[1].trim().to_string();
-                current.exits.insert(dir, target);
-            }
-            continue;
-        }
-        if trimmed.contains(':') {
-            in_exits = false;
-            let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
-            if parts.len() == 2 {
-                let key = parts[0].trim().to_lowercase();
-                let value = parts[1].trim().to_string();
-                match key.as_str() {
-                    "type" => current.obj_type = value,
-                    "base_name" => current.base_name = value,
-                    "name" => current.name = value,
-                    "description" => current.description = Some(value),
-                    "location" => current.location = Some(value),
-                    "starting_location" => current.starting_location = Some(value),
-                    _ => {}
-                }
-            }
-        }
-    }
-    if current.base_name != "unknown" {
-        defs.push(current);
-    }
-    Ok(defs)
-}
-
 pub struct ObjectFactory<P: Persistence> {
     persistence: P,
 }
@@ -177,10 +97,27 @@ impl<P: Persistence> ObjectFactory<P> {
         Self { persistence }
     }
 
-    pub async fn create_player(&self, base_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
+    pub fn persistence(&self) -> &P {
+        &self.persistence
+    }
+
+    pub async fn create_player(
+        &self,
+        base_name: &str,
+        owner: ObjectId,
+        anatomy: &AnatomyRegistry,
+    ) -> anyhow::Result<Object> {
+        let template = anatomy
+            .default_template()
+            .cloned()
+            .unwrap_or(PlayerTemplate {
+                name: "default".to_string(),
+                body_plan: "human".to_string(),
+                gender: "neutral".to_string(),
+            });
         let mut player = self.create("player", base_name, owner).await?;
         player.name = base_name.to_string();
-        player.init_inventory();
+        player.init_body(&template);
         self.persistence.save_object(&player).await?;
         Ok(player)
     }
@@ -240,121 +177,6 @@ impl<P: Persistence> ObjectFactory<P> {
 
     pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
         self.persistence.load_object(id).await
-    }
-
-    pub async fn load_world(&self, dir: &str, owner: ObjectId) -> anyhow::Result<ObjectId> {
-        let world_id = ObjectId::new("world:default-001");
-        let is_loaded = self.load_object(&world_id).await?.is_some();
-
-        let mut world_defs: Vec<WorldDef> = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|s| s.to_str()) == Some("mudl") {
-                    if let Ok(defs) = parse_mudl_file(&path) {
-                        world_defs.extend(defs);
-                    }
-                }
-            }
-        }
-
-        if world_defs.is_empty() {
-            return Err(anyhow::anyhow!("No .mudl files found in {}", dir));
-        }
-
-        let mut starting_location: Option<String> = None;
-        for def in &world_defs {
-            if def.obj_type == "config" {
-                starting_location = def.starting_location.clone();
-                continue;
-            }
-        }
-
-        if is_loaded {
-            if let Some(start_base) = &starting_location {
-                let start_id = ObjectId::new(format!("room:{}-001", start_base));
-                return Ok(start_id);
-            }
-            return Err(anyhow::anyhow!(
-                "No starting location specified in init.mudl"
-            ));
-        }
-
-        let mut name_to_id: HashMap<String, ObjectId> = HashMap::new();
-
-        for def in &world_defs {
-            if def.obj_type == "config" {
-                continue;
-            }
-            let mut obj = self
-                .create(&def.obj_type, &def.base_name, owner.clone())
-                .await?;
-            obj.name = def.name.clone();
-            if let Some(desc) = &def.description {
-                let desc_prop = Property {
-                    name: "description".to_string(),
-                    value: Value::String(desc.clone()),
-                    permissions: PermissionFlags::EVERYONE,
-                    behavior: None,
-                };
-                obj.add_property(desc_prop);
-            }
-            self.persistence.save_object(&obj).await?;
-            name_to_id.insert(def.base_name.clone(), obj.id.clone());
-        }
-
-        for def in &world_defs {
-            if def.obj_type == "config" {
-                continue;
-            }
-            if let Some(id) = name_to_id.get(&def.base_name) {
-                let mut obj = if let Some(o) = self.load_object(id).await? {
-                    o
-                } else {
-                    continue;
-                };
-                if let Some(loc_base) = &def.location {
-                    if let Some(loc_id) = name_to_id.get(loc_base) {
-                        obj.location = Some(loc_id.clone());
-                    }
-                }
-                for (dir, target_base) in &def.exits {
-                    if let Some(target_id) = name_to_id.get(target_base) {
-                        obj.add_exit(dir, target_id.clone());
-                    }
-                }
-                self.persistence.save_object(&obj).await?;
-            }
-        }
-
-        if self.load_object(&owner).await?.is_none() {
-            let mut player = self.create_player("admin", owner.clone()).await?;
-            player.name = "Admin".to_string();
-            if let Some(start_base) = &starting_location {
-                if let Some(start_id) = name_to_id.get(start_base) {
-                    player.location = Some(start_id.clone());
-                }
-            }
-            self.persistence.save_object(&player).await?;
-        }
-
-        let start_id = if let Some(start_base) = &starting_location {
-            name_to_id
-                .get(start_base)
-                .cloned()
-                .unwrap_or_else(|| ObjectId::new(format!("room:{}-001", start_base)))
-        } else {
-            name_to_id
-                .values()
-                .next()
-                .cloned()
-                .unwrap_or_else(|| ObjectId::new("room:the-void-001"))
-        };
-        Ok(start_id)
-    }
-
-    pub async fn bootstrap(&self, owner: ObjectId) -> anyhow::Result<ObjectId> {
-        self.load_world("worlds/default", owner).await
     }
 }
 
@@ -452,6 +274,115 @@ impl Object {
             .values()
             .filter(|obj| obj.location.as_ref() == Some(&self.id))
             .collect()
+    }
+
+    /// Initialize a naked player from a MUDL player template and body plan.
+    pub fn init_body(&mut self, template: &PlayerTemplate) {
+        self.add_property(Property {
+            name: "body_plan".to_string(),
+            value: Value::String(template.body_plan.clone()),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+        self.add_property(Property {
+            name: "gender".to_string(),
+            value: Value::String(template.gender.clone()),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+        self.set_property_map("body_slots", HashMap::new());
+    }
+
+    pub fn body_plan_name(&self) -> Option<String> {
+        self.get_property("body_plan").and_then(|p| {
+            if let Value::String(s) = &p.value {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn gender(&self) -> Option<String> {
+        self.get_property("gender").and_then(|p| {
+            if let Value::String(s) = &p.value {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn body_slots(&self) -> HashMap<String, ObjectId> {
+        self.get_object_map_property("body_slots")
+    }
+
+    pub fn body_slot_item(&self, slot: &str) -> Option<ObjectId> {
+        self.body_slots().get(slot).cloned()
+    }
+
+    pub fn set_body_slot(&mut self, slot: &str, item: Option<ObjectId>) {
+        let mut slots = self.body_slots();
+        if let Some(id) = item {
+            slots.insert(slot.to_string(), id);
+        } else {
+            slots.remove(slot);
+        }
+        self.set_property_map("body_slots", slots);
+    }
+
+    pub fn clear_item_from_body_slots(&mut self, item_id: &ObjectId) {
+        let slots: HashMap<String, ObjectId> = self
+            .body_slots()
+            .into_iter()
+            .filter(|(_, id)| id != item_id)
+            .collect();
+        self.set_property_map("body_slots", slots);
+    }
+
+    pub fn set_property_map(&mut self, name: &str, map: HashMap<String, ObjectId>) {
+        let value_map: HashMap<String, Value> = map
+            .into_iter()
+            .map(|(k, v)| (k, Value::ObjectRef(v)))
+            .collect();
+        self.add_property(Property {
+            name: name.to_string(),
+            value: Value::Map(value_map),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+    }
+
+    pub fn get_object_map_property(&self, name: &str) -> HashMap<String, ObjectId> {
+        self.get_property(name)
+            .and_then(|p| {
+                if let Value::Map(map) = &p.value {
+                    Some(
+                        map.iter()
+                            .filter_map(|(k, v)| {
+                                if let Value::ObjectRef(id) = v {
+                                    Some((k.clone(), id.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn carried_body_items(&self) -> Vec<ObjectId> {
+        let mut seen = Vec::new();
+        for id in self.body_slots().values() {
+            if !seen.contains(id) {
+                seen.push(id.clone());
+            }
+        }
+        seen
     }
 }
 
@@ -573,7 +504,7 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
         lines.push(desc);
     }
     if obj.object_type() == "player" && obj.id == ctx.observer {
-        lines.push(describe_carried(obj, &ctx.objects));
+        lines.push(describe_carried(obj, &ctx.objects, &ctx.anatomy));
     }
     lines.join("\n")
 }

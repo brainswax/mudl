@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use super::super::object::{Object, ObjectId};
+use crate::object::{Object, ObjectId};
 
 #[async_trait]
 pub trait Persistence: Send + Sync {

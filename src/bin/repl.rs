@@ -3,13 +3,15 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
-use mudl::core::display::{resolve_target, Describable, DisplayContext, DisplayMode};
-use mudl::core::inventory::{
+use mudl::command::{bootstrap_active_module, package_module, reload_module};
+use mudl::display::{resolve_target, Describable, DisplayContext, DisplayMode};
+use mudl::inventory::{
     describe_inventory, drop_item, put_item, remove_item, take_item, wear_item, wield_item,
     InventoryContext,
 };
-use mudl::core::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
-use mudl::core::persistence::{Persistence, SqlitePersistence};
+use mudl::mudl::{default_module_dir, LoadedModule};
+use mudl::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
+use mudl::persistence::{Persistence, SqlitePersistence};
 
 async fn load_all_objects(
     persistence: &SqlitePersistence,
@@ -92,10 +94,29 @@ async fn main() -> Result<()> {
     println!("Default owner: {}", default_owner);
     println!("Type 'help' for commands.");
 
-    println!("Bootstrapping default world if needed...");
+    let module_dir = default_module_dir();
+    println!("Loading module: {}", module_dir.display());
+
+    let mut loaded_module: LoadedModule = reload_module(
+        module_dir
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("invalid module path"))?,
+    )?;
+    if loaded_module.anatomy.body_plan("human").is_some() {
+        println!(
+            "Loaded module '{}' ({} sources, human body plan)",
+            loaded_module.name,
+            loaded_module.sources.len()
+        );
+    } else {
+        println!("Warning: human body plan not found in module");
+    }
+
+    println!("Bootstrapping universe if needed...");
     let mut current_location: Option<ObjectId> = None;
-    match factory.bootstrap(default_owner.clone()).await {
-        Ok(loc_id) => {
+    match bootstrap_active_module(&factory, default_owner.clone()).await {
+        Ok((module, loc_id)) => {
+            loaded_module = module;
             println!("Bootstrap complete. Starting at: {}", loc_id);
             current_location = Some(loc_id);
         }
@@ -158,6 +179,10 @@ async fn main() -> Result<()> {
                         println!("  add_verb <id> <name> <code> - add verb with code");
                         println!("  load <id>                   - load object from persistence");
                         println!("  save <id>                   - save object from cache");
+                        println!("  module reload               - reload MUDL module from disk");
+                        println!(
+                            "  module bundle <outdir>      - package module to output directory"
+                        );
                         println!("  exit                        - quit");
                     }
                     "create" => {
@@ -170,7 +195,11 @@ async fn main() -> Result<()> {
                         let result = match type_name {
                             "player" => {
                                 factory
-                                    .create_player(base_name, default_owner.clone())
+                                    .create_player(
+                                        base_name,
+                                        default_owner.clone(),
+                                        &loaded_module.anatomy,
+                                    )
                                     .await
                             }
                             "item" => factory.create_item(base_name, default_owner.clone()).await,
@@ -218,7 +247,8 @@ async fn main() -> Result<()> {
                                 let objects = load_all_objects(&persistence, &cache).await?;
                                 let ctx =
                                     DisplayContext::new(default_owner.clone(), DisplayMode::Player)
-                                        .with_objects(objects);
+                                        .with_objects(objects)
+                                        .with_anatomy(loaded_module.anatomy.clone());
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, false, false);
                                 } else {
@@ -250,7 +280,8 @@ async fn main() -> Result<()> {
                                     default_owner.clone(),
                                     DisplayMode::Builder,
                                 )
-                                .with_objects(objects);
+                                .with_objects(objects)
+                                .with_anatomy(loaded_module.anatomy.clone());
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, true, false);
                                 } else {
@@ -292,11 +323,17 @@ async fn main() -> Result<()> {
                     "inventory" | "i" => {
                         let objects = load_all_objects(&persistence, &cache).await?;
                         if let Some(player) = objects.get(&default_owner).cloned() {
-                            println!("{}", describe_inventory(&player, &objects));
+                            println!(
+                                "{}",
+                                describe_inventory(&player, &objects, &loaded_module.anatomy)
+                            );
                         } else if let Ok(Some(player)) =
                             persistence.load_object(&default_owner).await
                         {
-                            println!("{}", describe_inventory(&player, &objects));
+                            println!(
+                                "{}",
+                                describe_inventory(&player, &objects, &loaded_module.anatomy)
+                            );
                         } else {
                             println!("Player not found.");
                         }
@@ -312,6 +349,7 @@ async fn main() -> Result<()> {
                             player_id: &default_owner,
                             room_id: current_location.as_ref(),
                             objects: &mut objects,
+                            anatomy: &loaded_module.anatomy,
                         };
                         match take_item(&mut ctx, &item_name) {
                             Ok(msg) => {
@@ -334,6 +372,7 @@ async fn main() -> Result<()> {
                             player_id: &default_owner,
                             room_id: current_location.as_ref(),
                             objects: &mut objects,
+                            anatomy: &loaded_module.anatomy,
                         };
                         match drop_item(&mut ctx, &item_name) {
                             Ok(msg) => {
@@ -353,6 +392,7 @@ async fn main() -> Result<()> {
                                 player_id: &default_owner,
                                 room_id: current_location.as_ref(),
                                 objects: &mut objects,
+                                anatomy: &loaded_module.anatomy,
                             };
                             match put_item(&mut ctx, item.trim(), container.trim()) {
                                 Ok(msg) => {
@@ -375,6 +415,7 @@ async fn main() -> Result<()> {
                                 player_id: &default_owner,
                                 room_id: current_location.as_ref(),
                                 objects: &mut objects,
+                                anatomy: &loaded_module.anatomy,
                             };
                             match remove_item(&mut ctx, item.trim(), container.trim()) {
                                 Ok(msg) => {
@@ -400,6 +441,7 @@ async fn main() -> Result<()> {
                             player_id: &default_owner,
                             room_id: current_location.as_ref(),
                             objects: &mut objects,
+                            anatomy: &loaded_module.anatomy,
                         };
                         match wield_item(&mut ctx, &item_name) {
                             Ok(msg) => {
@@ -409,6 +451,51 @@ async fn main() -> Result<()> {
                                 cache.extend(objects);
                             }
                             Err(e) => println!("{e}"),
+                        }
+                    }
+                    "module" => {
+                        if parts.len() < 2 {
+                            println!("Usage: module reload | module bundle <outdir>");
+                            continue;
+                        }
+                        match parts[1] {
+                            "reload" => {
+                                let path = default_module_dir();
+                                match reload_module(path.to_str().unwrap_or("modules/default")) {
+                                    Ok(module) => {
+                                        loaded_module = module;
+                                        println!(
+                                            "Reloaded module '{}' ({} sources)",
+                                            loaded_module.name,
+                                            loaded_module.sources.len()
+                                        );
+                                    }
+                                    Err(e) => println!("Error: {}", e),
+                                }
+                            }
+                            "bundle" => {
+                                if parts.len() < 3 {
+                                    println!("Usage: module bundle <output_dir>");
+                                    continue;
+                                }
+                                let out = parts[2];
+                                let module_path = default_module_dir();
+                                match package_module(
+                                    module_path.to_str().unwrap_or("modules/default"),
+                                    out,
+                                ) {
+                                    Ok(manifest) => {
+                                        println!(
+                                            "Bundled module '{}' to {} ({} files)",
+                                            manifest.name,
+                                            out,
+                                            manifest.files.len()
+                                        );
+                                    }
+                                    Err(e) => println!("Error: {}", e),
+                                }
+                            }
+                            other => println!("Unknown module command: {other}"),
                         }
                     }
                     "wear" => {
@@ -422,6 +509,7 @@ async fn main() -> Result<()> {
                             player_id: &default_owner,
                             room_id: current_location.as_ref(),
                             objects: &mut objects,
+                            anatomy: &loaded_module.anatomy,
                         };
                         match wear_item(&mut ctx, &item_name) {
                             Ok(msg) => {
@@ -582,7 +670,8 @@ async fn main() -> Result<()> {
                                     default_owner.clone(),
                                     DisplayMode::Builder,
                                 )
-                                .with_objects(objects);
+                                .with_objects(objects)
+                                .with_anatomy(loaded_module.anatomy.clone());
                                 render_object(&obj, &ctx, true, false);
                             }
                             Ok(None) => println!("Not found: {}", id),

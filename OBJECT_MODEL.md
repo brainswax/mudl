@@ -205,25 +205,26 @@ Implementations:
 - **Player/Thing**: name + description, owner info in Builder mode
 - Default fallback to property-based rendering.
 
-## Inventory
+## Anatomy and Inventory
 
-Players and containers track carried items via properties (serialized with Serde):
+Body plans are defined in MUDL (`anatomy/*.mudl`) and loaded into an `AnatomyRegistry`. Players reference a plan via `body_plan` and track occupancy in `body_slots` (a map of slot name → item ID).
 
 | Property | On | Type | Purpose |
 |----------|-----|------|---------|
-| `pockets` | player | List\<ObjectRef\> | Pocketable items |
-| `pocket_capacity` | player | Int | Max pocket slots (default 5) |
-| `left_hand` / `right_hand` | player | ObjectRef | Items held or wielded |
-| `worn` | player | List\<ObjectRef\> | Worn containers (backpack, etc.) |
+| `body_plan` | player | String | Loaded plan name (e.g. `human`) |
+| `gender` | player | String | Description hint from player template |
+| `body_slots` | player | Map\<String, ObjectRef\> | Occupied anatomical slots |
 | `contents` | container | List\<ObjectRef\> | Items inside a container |
 | `capacity` | container | Int | Max items the container holds |
-| `carried_slot` | item | String | `pocket`, `left_hand`, `right_hand`, `worn` |
-| `is_pocketable` | item | Bool | Fits in pockets |
-| `is_wearable` | item | Bool | Can be worn |
+| `carried_slot` | item | String | Body slot name when held/worn |
+| `is_wearable` | item | Bool | Can be worn on a `wear` slot |
+| `wear_slot` | item | String | Target slot (e.g. `torso`, `head`) |
 | `is_container` | item | Bool | Holds other items |
-| `hand_slot` | item | String | `left`, `right`, or `both` |
+| `hand_slot` | item | String | `left`, `right`, or `both` (grasp slots) |
 
-Factory helpers: `create_player`, `create_item`, `create_container`. Inventory operations live in `src/core/inventory.rs`.
+Default naked humans have **no pockets** — only biological `grasp`, `wear`, and `limb` slots from the human body plan. Pockets will come from clothing in a follow-up.
+
+Factory helpers: `create_player` (uses anatomy template), `create_item`, `create_container`. Anatomy loader: `src/core/anatomy.rs`. Inventory operations: `src/core/inventory.rs`.
 
 ## Persistence Notes
 - Use ObjectFactory for creation.

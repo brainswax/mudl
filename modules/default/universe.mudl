@@ -1,0 +1,6 @@
+# Default universe — official baseline module entrypoint.
+# Fork this module to customize body plans, rooms, items, and player templates.
+@include config.mudl
+@include anatomy/human.mudl
+@include players/default.mudl
+@include rooms/locations.mudl

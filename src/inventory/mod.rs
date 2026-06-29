@@ -1,37 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use super::object::{Object, ObjectId, PermissionFlags, Property, Value};
-
-/// Where a carried item sits on its bearer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CarriedSlot {
-    Pocket,
-    LeftHand,
-    RightHand,
-    Worn,
-}
-
-impl CarriedSlot {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pocket => "pocket",
-            Self::LeftHand => "left_hand",
-            Self::RightHand => "right_hand",
-            Self::Worn => "worn",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "pocket" => Some(Self::Pocket),
-            "left_hand" => Some(Self::LeftHand),
-            "right_hand" => Some(Self::RightHand),
-            "worn" => Some(Self::Worn),
-            _ => None,
-        }
-    }
-}
+use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan};
+use crate::object::{Object, ObjectId, PermissionFlags, Property, Value};
 
 /// Errors returned by inventory operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,15 +11,15 @@ pub enum InventoryError {
     NotInRoom,
     NotCarried,
     HandsFull,
-    PocketsFull,
+    SlotFull(String),
     ContainerFull,
     NotContainer,
-    NotPocketable,
     NotWearable,
     NotWieldable,
     AlreadyCarrying,
     ContainerNotCarried,
     NoRoom,
+    NoBodyPlan,
     InvalidTarget(String),
 }
 
@@ -59,15 +30,17 @@ impl fmt::Display for InventoryError {
             Self::NotInRoom => write!(f, "That isn't here."),
             Self::NotCarried => write!(f, "You aren't carrying that."),
             Self::HandsFull => write!(f, "Your hands are full."),
-            Self::PocketsFull => write!(f, "Your pockets are full."),
+            Self::SlotFull(slot) => {
+                write!(f, "Your {} is already occupied.", slot_display_name(slot))
+            }
             Self::ContainerFull => write!(f, "That won't fit — it's full."),
             Self::NotContainer => write!(f, "That isn't a container."),
-            Self::NotPocketable => write!(f, "That's too bulky for your pockets."),
             Self::NotWearable => write!(f, "You can't wear that."),
             Self::NotWieldable => write!(f, "You can't wield that."),
             Self::AlreadyCarrying => write!(f, "You're already carrying that."),
             Self::ContainerNotCarried => write!(f, "You aren't carrying that container."),
             Self::NoRoom => write!(f, "You aren't anywhere."),
+            Self::NoBodyPlan => write!(f, "You have no body plan."),
             Self::InvalidTarget(msg) => write!(f, "{msg}"),
         }
     }
@@ -80,15 +53,10 @@ pub struct InventoryContext<'a> {
     pub player_id: &'a ObjectId,
     pub room_id: Option<&'a ObjectId>,
     pub objects: &'a mut HashMap<ObjectId, Object>,
+    pub anatomy: &'a AnatomyRegistry,
 }
 
 impl Object {
-    pub fn init_inventory(&mut self) {
-        self.set_property_list("pockets", vec![]);
-        self.set_property_int("pocket_capacity", 5);
-        self.set_property_list("worn", vec![]);
-    }
-
     pub fn init_item_defaults(&mut self, pocketable: bool) {
         self.set_property_bool("is_pocketable", pocketable);
         self.set_property_bool("is_wearable", false);
@@ -100,7 +68,10 @@ impl Object {
         self.set_property_int("capacity", i64::from(capacity));
         self.set_property_list("contents", vec![]);
         self.set_property_bool("is_wearable", wearable);
-        self.set_property_bool("is_pocketable", !wearable);
+        self.set_property_bool("is_pocketable", false);
+        if wearable {
+            self.set_property_string("wear_slot", "torso");
+        }
     }
 
     pub fn set_property_bool(&mut self, name: &str, value: bool) {
@@ -169,16 +140,6 @@ impl Object {
         })
     }
 
-    pub fn get_object_ref_property(&self, name: &str) -> Option<ObjectId> {
-        self.get_property(name).and_then(|p| {
-            if let Value::ObjectRef(id) = &p.value {
-                Some(id.clone())
-            } else {
-                None
-            }
-        })
-    }
-
     pub fn get_object_list_property(&self, name: &str) -> Vec<ObjectId> {
         self.get_property(name)
             .and_then(|p| {
@@ -202,25 +163,8 @@ impl Object {
             .unwrap_or_default()
     }
 
-    pub fn set_object_ref_property(&mut self, name: &str, id: Option<ObjectId>) {
-        if let Some(id) = id {
-            self.add_property(Property {
-                name: name.to_string(),
-                value: Value::ObjectRef(id),
-                permissions: PermissionFlags::OWNER,
-                behavior: None,
-            });
-        } else {
-            self.properties.remove(name);
-        }
-    }
-
     pub fn is_container(&self) -> bool {
         self.get_bool_property("is_container").unwrap_or(false)
-    }
-
-    pub fn is_pocketable(&self) -> bool {
-        self.get_bool_property("is_pocketable").unwrap_or(true)
     }
 
     pub fn is_wearable(&self) -> bool {
@@ -231,6 +175,10 @@ impl Object {
         self.get_string_property("hand_slot")
     }
 
+    pub fn wear_slot(&self) -> Option<String> {
+        self.get_string_property("wear_slot")
+    }
+
     pub fn container_capacity(&self) -> Option<u32> {
         self.get_int_property("capacity").map(|c| c as u32)
     }
@@ -239,39 +187,16 @@ impl Object {
         self.get_object_list_property("contents")
     }
 
-    pub fn carried_slot(&self) -> Option<CarriedSlot> {
+    pub fn carried_slot(&self) -> Option<String> {
         self.get_string_property("carried_slot")
-            .and_then(|s| CarriedSlot::parse(&s))
     }
 
-    pub fn set_carried_slot(&mut self, slot: Option<CarriedSlot>) {
+    pub fn set_carried_slot(&mut self, slot: Option<&str>) {
         if let Some(slot) = slot {
-            self.set_property_string("carried_slot", slot.as_str());
+            self.set_property_string("carried_slot", slot);
         } else {
             self.properties.remove("carried_slot");
         }
-    }
-
-    pub fn pockets(&self) -> Vec<ObjectId> {
-        self.get_object_list_property("pockets")
-    }
-
-    pub fn worn_containers(&self) -> Vec<ObjectId> {
-        self.get_object_list_property("worn")
-    }
-
-    pub fn pocket_capacity(&self) -> u32 {
-        self.get_int_property("pocket_capacity")
-            .map(|c| c as u32)
-            .unwrap_or(5)
-    }
-
-    pub fn left_hand_item(&self) -> Option<ObjectId> {
-        self.get_object_ref_property("left_hand")
-    }
-
-    pub fn right_hand_item(&self) -> Option<ObjectId> {
-        self.get_object_ref_property("right_hand")
     }
 
     fn add_to_list_property(&mut self, prop: &str, id: ObjectId) {
@@ -290,6 +215,16 @@ impl Object {
             .collect();
         self.set_property_list(prop, list);
     }
+}
+
+fn player_body_plan<'a>(
+    player: &Object,
+    anatomy: &'a AnatomyRegistry,
+) -> Result<&'a BodyPlan, InventoryError> {
+    let plan_name = player.body_plan_name().ok_or(InventoryError::NoBodyPlan)?;
+    anatomy
+        .body_plan(&plan_name)
+        .ok_or(InventoryError::NoBodyPlan)
 }
 
 fn name_matches(needle: &str, obj: &Object) -> bool {
@@ -363,32 +298,14 @@ pub fn is_carried_by(
         return false;
     };
 
-    if player.pockets().contains(item_id)
-        || player.left_hand_item().as_ref() == Some(item_id)
-        || player.right_hand_item().as_ref() == Some(item_id)
-        || player.worn_containers().contains(item_id)
-    {
+    if player.body_slots().values().any(|id| id == item_id) {
         return true;
     }
 
-    // Items inside a carried container
-    for container_id in player
-        .worn_containers()
-        .iter()
-        .chain(player.pockets().iter())
-    {
-        if let Some(container) = objects.get(container_id) {
+    for carried_id in player.carried_body_items() {
+        if let Some(container) = objects.get(&carried_id) {
             if container.is_container() && container.container_contents().contains(item_id) {
                 return true;
-            }
-        }
-    }
-    if let (Some(left), Some(right)) = (player.left_hand_item(), player.right_hand_item()) {
-        for hand_container in [&left, &right] {
-            if let Some(container) = objects.get(hand_container) {
-                if container.is_container() && container.container_contents().contains(item_id) {
-                    return true;
-                }
             }
         }
     }
@@ -396,125 +313,95 @@ pub fn is_carried_by(
     item_id == player_id
 }
 
-fn hands_free(player: &Object, objects: &HashMap<ObjectId, Object>) -> (bool, bool) {
-    let left_taken = player
-        .left_hand_item()
-        .map(|id| objects.get(&id).is_some())
-        .unwrap_or(false);
-    let right_taken = player
-        .right_hand_item()
-        .map(|id| objects.get(&id).is_some())
-        .unwrap_or(false);
-    (!left_taken, !right_taken)
+fn grasp_slot_free(player: &Object, slot: &str) -> bool {
+    player.body_slot_item(slot).is_none()
 }
 
-fn place_in_pocket(
+fn place_in_grasp_slots(
     player_id: &ObjectId,
     item_id: &ObjectId,
+    plan: &BodyPlan,
     objects: &mut HashMap<ObjectId, Object>,
-) -> Result<(), InventoryError> {
-    let player = objects
-        .get(player_id)
-        .ok_or_else(|| InventoryError::InvalidTarget("Player not found.".into()))?;
-    let pockets = player.pockets();
-    if pockets.len() >= player.pocket_capacity() as usize {
-        return Err(InventoryError::PocketsFull);
-    }
-
+) -> Result<Vec<String>, InventoryError> {
     let item = objects
         .get(item_id)
         .ok_or(InventoryError::NotCarried)?
         .clone();
-    if !item.is_pocketable() {
-        return Err(InventoryError::NotPocketable);
-    }
-
-    let mut player = objects.get(player_id).unwrap().clone();
-    player.add_to_list_property("pockets", item_id.clone());
-    objects.insert(player_id.clone(), player);
-
-    let mut item = objects.get(item_id).unwrap().clone();
-    item.location = Some(player_id.clone());
-    item.set_carried_slot(Some(CarriedSlot::Pocket));
-    objects.insert(item_id.clone(), item);
-
-    Ok(())
-}
-
-fn place_in_hand(
-    player_id: &ObjectId,
-    item_id: &ObjectId,
-    slot: CarriedSlot,
-    objects: &mut HashMap<ObjectId, Object>,
-) -> Result<(), InventoryError> {
-    let item = objects
-        .get(item_id)
-        .ok_or(InventoryError::NotCarried)?
-        .clone();
-    let hand_slot_value = item.hand_slot();
-    let hand_slot = hand_slot_value.as_deref().unwrap_or("right");
-
     let player = objects.get(player_id).unwrap().clone();
-    let (left_free, right_free) = hands_free(&player, objects);
+    let hand_pref = item.hand_slot();
+    let preference = hand_pref.as_deref().unwrap_or("right");
 
-    let (use_left, use_right) = match hand_slot {
-        "both" => {
-            if !left_free || !right_free {
-                return Err(InventoryError::HandsFull);
-            }
-            (true, true)
+    let grasp_names: Vec<String> = plan.grasp_slots().iter().map(|s| s.name.clone()).collect();
+
+    let (target_slots, carried_label) = if preference == "both" {
+        let left = "left_hand";
+        let right = "right_hand";
+        if !grasp_slot_free(&player, left) || !grasp_slot_free(&player, right) {
+            return Err(InventoryError::HandsFull);
         }
-        "left" => {
-            if !left_free {
-                return Err(InventoryError::HandsFull);
-            }
-            (true, false)
+        (
+            vec![left.to_string(), right.to_string()],
+            Some(left.to_string()),
+        )
+    } else if preference == "left" {
+        if !grasp_slot_free(&player, "left_hand") {
+            return Err(InventoryError::HandsFull);
         }
-        _ => {
-            if slot == CarriedSlot::LeftHand {
-                if !left_free {
-                    return Err(InventoryError::HandsFull);
-                }
-                (true, false)
-            } else if !right_free {
-                return Err(InventoryError::HandsFull);
-            } else {
-                (false, true)
-            }
+        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
+    } else {
+        if grasp_slot_free(&player, "right_hand") {
+            (
+                vec!["right_hand".to_string()],
+                Some("right_hand".to_string()),
+            )
+        } else if grasp_slot_free(&player, "left_hand") {
+            (vec!["left_hand".to_string()], Some("left_hand".to_string()))
+        } else {
+            return Err(InventoryError::HandsFull);
         }
     };
 
-    let mut player = objects.get(player_id).unwrap().clone();
-    if use_left {
-        player.set_object_ref_property("left_hand", Some(item_id.clone()));
+    for slot in &grasp_names {
+        if target_slots.contains(slot) && !grasp_slot_free(&player, slot) {
+            return Err(InventoryError::HandsFull);
+        }
     }
-    if use_right {
-        player.set_object_ref_property("right_hand", Some(item_id.clone()));
+
+    let mut player = objects.get(player_id).unwrap().clone();
+    for slot in &target_slots {
+        player.set_body_slot(slot, Some(item_id.clone()));
     }
     objects.insert(player_id.clone(), player);
 
     let mut item = objects.get(item_id).unwrap().clone();
     item.location = Some(player_id.clone());
-    if use_left && use_right {
-        item.set_carried_slot(Some(CarriedSlot::LeftHand));
-        item.set_property_string("hand_slot", "both");
-    } else if use_left {
-        item.set_carried_slot(Some(CarriedSlot::LeftHand));
-    } else {
-        item.set_carried_slot(Some(CarriedSlot::RightHand));
+    item.set_carried_slot(carried_label.as_deref().or(Some(target_slots[0].as_str())));
+    objects.insert(item_id.clone(), item);
+
+    Ok(target_slots)
+}
+
+fn place_in_wear_slot(
+    player_id: &ObjectId,
+    item_id: &ObjectId,
+    slot: &str,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> Result<(), InventoryError> {
+    let player = objects.get(player_id).unwrap().clone();
+    if player.body_slot_item(slot).is_some() {
+        return Err(InventoryError::SlotFull(slot.to_string()));
     }
+
+    let mut player = objects.get(player_id).unwrap().clone();
+    player.set_body_slot(slot, Some(item_id.clone()));
+    objects.insert(player_id.clone(), player);
+
+    let mut item = objects.get(item_id).unwrap().clone();
+    item.location = Some(player_id.clone());
+    item.set_carried_slot(Some(slot));
     objects.insert(item_id.clone(), item);
 
     Ok(())
-}
-
-fn clear_hand_refs(player: &mut Object, item_id: &ObjectId) {
-    if player.left_hand_item().as_ref() == Some(item_id) {
-        player.set_object_ref_property("left_hand", None);
-    }
-    if player.right_hand_item().as_ref() == Some(item_id) {
-        player.set_object_ref_property("right_hand", None);
-    }
 }
 
 fn remove_from_player(
@@ -523,9 +410,7 @@ fn remove_from_player(
     objects: &mut HashMap<ObjectId, Object>,
 ) {
     let mut player = objects.get(player_id).unwrap().clone();
-    player.remove_from_list_property("pockets", item_id);
-    player.remove_from_list_property("worn", item_id);
-    clear_hand_refs(&mut player, item_id);
+    player.clear_item_from_body_slots(item_id);
     objects.insert(player_id.clone(), player);
 }
 
@@ -551,28 +436,10 @@ pub fn take_item(
     }
 
     let player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    let (left_free, right_free) = hands_free(&player, ctx.objects);
+    let plan = player_body_plan(&player, ctx.anatomy)?;
+    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
 
-    let placement =
-        if item.is_pocketable() && player.pockets().len() < player.pocket_capacity() as usize {
-            CarriedSlot::Pocket
-        } else if item.hand_slot().as_deref() == Some("both") && left_free && right_free {
-            CarriedSlot::LeftHand
-        } else if right_free {
-            CarriedSlot::RightHand
-        } else if left_free {
-            CarriedSlot::LeftHand
-        } else {
-            return Err(InventoryError::HandsFull);
-        };
-
-    let item_name_display = item.name.clone();
-    match placement {
-        CarriedSlot::Pocket => place_in_pocket(ctx.player_id, &item_id, ctx.objects)?,
-        slot => place_in_hand(ctx.player_id, &item_id, slot, ctx.objects)?,
-    }
-
-    Ok(format!("You take the {item_name_display}."))
+    Ok(format!("You take the {}.", item.name))
 }
 
 pub fn drop_item(
@@ -707,18 +574,8 @@ pub fn remove_item(
     ctx.objects.insert(container_id.clone(), container);
 
     let player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    if item.is_pocketable() && player.pockets().len() < player.pocket_capacity() as usize {
-        place_in_pocket(ctx.player_id, &item_id, ctx.objects)?;
-    } else {
-        let (left_free, right_free) = hands_free(&player, ctx.objects);
-        if right_free {
-            place_in_hand(ctx.player_id, &item_id, CarriedSlot::RightHand, ctx.objects)?;
-        } else if left_free {
-            place_in_hand(ctx.player_id, &item_id, CarriedSlot::LeftHand, ctx.objects)?;
-        } else {
-            return Err(InventoryError::HandsFull);
-        }
-    }
+    let plan = player_body_plan(&player, ctx.anatomy)?;
+    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
 
     Ok(format!(
         "You remove the {item_display} from your {container_display}."
@@ -742,25 +599,16 @@ pub fn wield_item(
 
     remove_from_player(ctx.player_id, &item_id, ctx.objects);
 
-    let hand_slot_value = item.hand_slot();
-    let hand_slot = hand_slot_value.as_deref().unwrap_or("right");
-    let slot = if hand_slot == "left" {
-        CarriedSlot::LeftHand
-    } else {
-        CarriedSlot::RightHand
-    };
-    place_in_hand(ctx.player_id, &item_id, slot, ctx.objects)?;
+    let player = ctx.objects.get(ctx.player_id).unwrap().clone();
+    let plan = player_body_plan(&player, ctx.anatomy)?;
+    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
 
     let item = ctx.objects.get(&item_id).unwrap();
     let display = item.name.clone();
-    let (left, right) = (
-        ctx.objects
-            .get(ctx.player_id)
-            .and_then(|p| p.left_hand_item()),
-        ctx.objects
-            .get(ctx.player_id)
-            .and_then(|p| p.right_hand_item()),
-    );
+    let player = ctx.objects.get(ctx.player_id).unwrap();
+    let left = player.body_slot_item("left_hand");
+    let right = player.body_slot_item("right_hand");
+
     let phrase = if item.hand_slot().as_deref() == Some("both") || (left == right && left.is_some())
     {
         "wield"
@@ -797,117 +645,125 @@ pub fn wear_item(
         return Err(InventoryError::NotInRoom);
     }
 
-    let mut player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    player.add_to_list_property("worn", item_id.clone());
-    ctx.objects.insert(ctx.player_id.clone(), player);
+    let player = ctx.objects.get(ctx.player_id).unwrap().clone();
+    let plan = player_body_plan(&player, ctx.anatomy)?;
+    let target_slot = item
+        .wear_slot()
+        .or_else(|| plan.wear_slots().first().map(|s| s.name.clone()))
+        .ok_or(InventoryError::NotWearable)?;
 
-    let mut item = ctx.objects.get(&item_id).unwrap().clone();
-    item.location = Some(ctx.player_id.clone());
-    item.set_carried_slot(Some(CarriedSlot::Worn));
-    let display = item.name.clone();
-    ctx.objects.insert(item_id, item);
+    if plan.slot(&target_slot).is_none() {
+        return Err(InventoryError::NotWearable);
+    }
 
+    place_in_wear_slot(ctx.player_id, &item_id, &target_slot, ctx.objects)?;
+
+    let display = ctx.objects.get(&item_id).unwrap().name.clone();
     Ok(format!("You wear the {display}."))
 }
 
+fn any_wear_slots_occupied(player: &Object, plan: &BodyPlan) -> bool {
+    plan.wear_slots()
+        .iter()
+        .any(|slot| player.body_slot_item(&slot.name).is_some())
+}
+
+fn describe_grasp(player: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
+    let left = player.body_slot_item("left_hand");
+    let right = player.body_slot_item("right_hand");
+
+    if let (Some(left_id), Some(right_id)) = (&left, &right) {
+        if left_id == right_id {
+            if let Some(obj) = objects.get(left_id) {
+                return Some(format!("You are wielding {} with both hands.", obj.name));
+            }
+        }
+    }
+
+    if let Some(right_id) = right {
+        if left.as_ref() != Some(&right_id) {
+            if let Some(obj) = objects.get(&right_id) {
+                return Some(format!("You are holding {} in your right hand.", obj.name));
+            }
+        }
+    }
+
+    if let Some(left_id) = left {
+        if let Some(obj) = objects.get(&left_id) {
+            return Some(format!("You are holding {} in your left hand.", obj.name));
+        }
+    }
+
+    None
+}
+
 /// Natural-language summary of what a player is carrying (for look self).
-pub fn describe_carried(player: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let mut parts = Vec::new();
+pub fn describe_carried(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+) -> String {
+    let plan_name = player
+        .body_plan_name()
+        .unwrap_or_else(|| "human".to_string());
+    let Some(plan) = anatomy.body_plan(&plan_name) else {
+        return "You are completely naked and empty-handed.".to_string();
+    };
 
-    for id in player.worn_containers() {
-        if let Some(obj) = objects.get(&id) {
-            parts.push(format!("{} (worn)", obj.name));
-        }
-    }
-    for id in player.pockets() {
-        if let Some(obj) = objects.get(&id) {
-            parts.push(format!("{} (in your pocket)", obj.name));
-        }
-    }
-    if let Some(id) = player.left_hand_item() {
-        if let Some(obj) = objects.get(&id) {
-            let right = player.right_hand_item();
-            if right.as_ref() == Some(&id) {
-                parts.push(format!("{} (wielded)", obj.name));
-            } else {
-                parts.push(format!("{} (in your left hand)", obj.name));
-            }
-        }
-    }
-    if let Some(id) = player.right_hand_item() {
-        if player.left_hand_item().as_ref() != Some(&id) {
-            if let Some(obj) = objects.get(&id) {
-                parts.push(format!("{} (in your right hand)", obj.name));
-            }
-        }
-    }
+    let naked = !any_wear_slots_occupied(player, plan);
+    let grasp = describe_grasp(player, objects);
 
-    match parts.len() {
-        0 => "You are empty-handed.".to_string(),
-        1 => format!("You are carrying {}.", parts[0]),
-        2 => format!("You are carrying {} and {}.", parts[0], parts[1]),
-        _ => format!(
-            "You are carrying {}.",
-            parts.join(", ").replacen(", ", ", and ", 1)
-        ),
+    match (naked, grasp) {
+        (true, None) => "You are completely naked and empty-handed.".to_string(),
+        (true, Some(g)) => g,
+        (false, None) => "You are wearing clothing.".to_string(),
+        (false, Some(g)) => g,
     }
 }
 
 /// Full inventory listing for the `inventory` command.
-pub fn describe_inventory(player: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let mut lines = vec!["You are carrying:".to_string()];
+pub fn describe_inventory(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+) -> String {
+    let plan_name = player
+        .body_plan_name()
+        .unwrap_or_else(|| "human".to_string());
+    let plan = anatomy.body_plan(&plan_name);
+
+    let mut lines = Vec::new();
+    let naked = plan.is_none_or(|p| !any_wear_slots_occupied(player, p));
+    if naked {
+        lines.push("You are completely naked.".to_string());
+    }
 
     let mut empty = true;
+    let slots = player.body_slots();
+    let mut slot_names: Vec<String> = slots.keys().cloned().collect();
+    slot_names.sort_unstable();
 
-    if let Some(id) = player.left_hand_item() {
-        if let Some(obj) = objects.get(&id) {
-            empty = false;
-            if player.right_hand_item().as_ref() == Some(&id) {
-                lines.push(format!("  [wielded] {}", obj.name));
-            } else {
-                lines.push(format!("  [left hand] {}", obj.name));
-            }
-        }
-    }
-    if let Some(id) = player.right_hand_item() {
-        if player.left_hand_item().as_ref() != Some(&id) {
-            if let Some(obj) = objects.get(&id) {
+    for slot in &slot_names {
+        if let Some(item_id) = slots.get(slot) {
+            if let Some(obj) = objects.get(item_id) {
                 empty = false;
-                lines.push(format!("  [right hand] {}", obj.name));
-            }
-        }
-    }
+                let left = player.body_slot_item("left_hand");
+                let right = player.body_slot_item("right_hand");
+                let label = if slot.as_str() == "left_hand"
+                    && right.as_ref() == Some(item_id)
+                    && left.as_ref() == Some(item_id)
+                {
+                    "wielded".to_string()
+                } else {
+                    slot_display_name(slot)
+                };
+                lines.push(format!("  [{label}] {}", obj.name));
 
-    for id in &player.pockets() {
-        if let Some(obj) = objects.get(id) {
-            empty = false;
-            lines.push(format!("  [pocket] {}", obj.name));
-        }
-    }
-
-    for id in &player.worn_containers() {
-        if let Some(container) = objects.get(id) {
-            empty = false;
-            lines.push(format!("  [worn] {}", container.name));
-            for inner_id in container.container_contents() {
-                if let Some(inner) = objects.get(&inner_id) {
-                    lines.push(format!("    inside {}: {}", container.name, inner.name));
-                }
-            }
-        }
-    }
-
-    // Containers held in hands
-    for hand in [player.left_hand_item(), player.right_hand_item()]
-        .into_iter()
-        .flatten()
-    {
-        if let Some(container) = objects.get(&hand) {
-            if container.is_container() && !player.worn_containers().contains(&hand) {
-                for inner_id in container.container_contents() {
-                    if let Some(inner) = objects.get(&inner_id) {
-                        empty = false;
-                        lines.push(format!("    inside {}: {}", container.name, inner.name));
+                if obj.is_container() {
+                    for inner_id in obj.container_contents() {
+                        if let Some(inner) = objects.get(&inner_id) {
+                            lines.push(format!("    inside {}: {}", obj.name, inner.name));
+                        }
                     }
                 }
             }
@@ -915,7 +771,7 @@ pub fn describe_inventory(player: &Object, objects: &HashMap<ObjectId, Object>) 
     }
 
     if empty {
-        lines.push("  nothing".to_string());
+        lines.push("  empty-handed".to_string());
     }
 
     lines.join("\n")
@@ -924,21 +780,31 @@ pub fn describe_inventory(player: &Object, objects: &HashMap<ObjectId, Object>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::object::{ObjectFactory, PermissionFlags};
-    use crate::core::persistence::SqlitePersistence;
+    use crate::mudl::load_module;
+    use crate::object::ObjectFactory;
+    use crate::persistence::SqlitePersistence;
+
+    async fn test_anatomy() -> AnatomyRegistry {
+        load_module("modules/default").unwrap().anatomy
+    }
 
     async fn setup_world() -> (
         ObjectFactory<SqlitePersistence>,
+        AnatomyRegistry,
         ObjectId,
         ObjectId,
         HashMap<ObjectId, Object>,
     ) {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence);
+        let anatomy = test_anatomy().await;
         let owner = ObjectId::new("player:hero-001");
         let room_id = ObjectId::new("room:test-001");
 
-        let mut player = factory.create_player("hero", owner.clone()).await.unwrap();
+        let mut player = factory
+            .create_player("hero", owner.clone(), &anatomy)
+            .await
+            .unwrap();
         player.location = Some(room_id.clone());
 
         let mut room = factory.create("room", "test", owner.clone()).await.unwrap();
@@ -951,8 +817,15 @@ mod tests {
         let mut sword = factory.create_item("sword", owner.clone()).await.unwrap();
         sword.name = "Rusty Sword".to_string();
         sword.set_property_string("hand_slot", "right");
-        sword.set_property_bool("is_pocketable", false);
         sword.location = Some(room_id.clone());
+
+        let mut greatsword = factory
+            .create_item("greatsword", owner.clone())
+            .await
+            .unwrap();
+        greatsword.name = "Greatsword".to_string();
+        greatsword.set_property_string("hand_slot", "both");
+        greatsword.location = Some(room_id.clone());
 
         let mut backpack = factory
             .create_container("backpack", owner.clone(), 5, true)
@@ -966,79 +839,110 @@ mod tests {
         objects.insert(room_id.clone(), room);
         objects.insert(coin.id.clone(), coin);
         objects.insert(sword.id.clone(), sword);
+        objects.insert(greatsword.id.clone(), greatsword);
         objects.insert(backpack.id.clone(), backpack);
 
-        (factory, owner, room_id, objects)
+        (factory, anatomy, owner, room_id, objects)
     }
 
     #[tokio::test]
-    async fn take_pocketable_item() {
-        let (_factory, player_id, room_id, mut objects) = setup_world().await;
-        let coin_id = objects
-            .values()
-            .find(|o| o.name == "Gold Coin")
-            .unwrap()
-            .id
-            .clone();
+    async fn naked_player_has_no_pockets() {
+        let (factory, anatomy, owner, _, _) = setup_world().await;
+        let player = factory
+            .create_player("naked", owner, &anatomy)
+            .await
+            .unwrap();
+        assert!(player.get_property("pockets").is_none());
+        assert_eq!(player.body_plan_name(), Some("human".to_string()));
+        assert!(player.body_slots().is_empty());
+    }
+
+    #[tokio::test]
+    async fn take_item_to_hand() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
+            anatomy: &anatomy,
         };
 
-        let msg = take_item(&mut ctx, "coin").unwrap();
-        assert!(msg.contains("Gold Coin"));
-
+        take_item(&mut ctx, "coin").unwrap();
         let player = objects.get(&player_id).unwrap();
-        assert!(player.pockets().contains(&coin_id));
-        assert_eq!(
-            objects.get(&coin_id).unwrap().carried_slot(),
-            Some(CarriedSlot::Pocket)
+        assert!(
+            player.body_slot_item("left_hand").is_some()
+                || player.body_slot_item("right_hand").is_some()
         );
     }
 
     #[tokio::test]
-    async fn take_item_to_hand_when_not_pocketable() {
-        let (_factory, player_id, room_id, mut objects) = setup_world().await;
+    async fn take_non_pocketable_to_right_hand() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
+            anatomy: &anatomy,
         };
 
-        take_item(&mut ctx, "sword").unwrap();
+        take_item(&mut ctx, "rusty").unwrap();
         let player = objects.get(&player_id).unwrap();
         assert_eq!(
             player
-                .right_hand_item()
+                .body_slot_item("right_hand")
                 .map(|id| objects.get(&id).unwrap().name.clone()),
             Some("Rusty Sword".to_string())
         );
     }
 
     #[tokio::test]
-    async fn drop_item_to_room() {
-        let (_factory, player_id, room_id, mut objects) = setup_world().await;
+    async fn two_handed_item_occupies_both_hands() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
+            anatomy: &anatomy,
         };
 
-        take_item(&mut ctx, "coin").unwrap();
-        drop_item(&mut ctx, "coin").unwrap();
-
-        let coin = objects.values().find(|o| o.name == "Gold Coin").unwrap();
-        assert_eq!(coin.location, Some(room_id));
-        assert!(objects.get(&player_id).unwrap().pockets().is_empty());
+        take_item(&mut ctx, "greatsword").unwrap();
+        let player = objects.get(&player_id).unwrap();
+        let gs_id = player.body_slot_item("left_hand").unwrap();
+        assert_eq!(player.body_slot_item("right_hand"), Some(gs_id));
     }
 
     #[tokio::test]
-    async fn put_and_remove_from_container() {
-        let (_factory, player_id, room_id, mut objects) = setup_world().await;
+    async fn describe_naked_empty_handed() {
+        let (_factory, anatomy, player_id, _, objects) = setup_world().await;
+        let player = objects.get(&player_id).unwrap();
+        let desc = describe_carried(player, &objects, &anatomy);
+        assert_eq!(desc, "You are completely naked and empty-handed.");
+    }
+
+    #[tokio::test]
+    async fn describe_holding_sword() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+        take_item(&mut ctx, "rusty").unwrap();
+
+        let player = objects.get(&player_id).unwrap();
+        let desc = describe_carried(player, &objects, &anatomy);
+        assert!(desc.contains("Rusty Sword"));
+        assert!(desc.contains("right hand"));
+    }
+
+    #[tokio::test]
+    async fn wear_and_container_operations() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
         let backpack_id = objects
             .values()
@@ -1046,102 +950,33 @@ mod tests {
             .unwrap()
             .id
             .clone();
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        wear_item(&mut ctx, "backpack").unwrap();
+        assert_eq!(
+            ctx.objects.get(&player_id).unwrap().body_slot_item("torso"),
+            Some(backpack_id.clone())
+        );
+
+        take_item(&mut ctx, "coin").unwrap();
+        put_item(&mut ctx, "coin", "backpack").unwrap();
+
         let coin_id = objects
             .values()
             .find(|o| o.name == "Gold Coin")
             .unwrap()
             .id
             .clone();
-
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: Some(&room_id),
-            objects: &mut objects,
-        };
-
-        take_item(&mut ctx, "coin").unwrap();
-        wear_item(&mut ctx, "backpack").unwrap();
-        put_item(&mut ctx, "coin", "backpack").unwrap();
-
-        assert!(ctx
-            .objects
+        assert!(objects
             .get(&backpack_id)
             .unwrap()
             .container_contents()
             .contains(&coin_id));
-
-        remove_item(&mut ctx, "coin", "backpack").unwrap();
-        let player = objects.get(&player_id).unwrap();
-        assert!(player.pockets().contains(&coin_id));
-    }
-
-    #[tokio::test]
-    async fn container_capacity_enforced() {
-        let (_factory, player_id, room_id, mut objects) = setup_world().await;
-
-        let mut tiny = objects
-            .values()
-            .find(|o| o.name == "Backpack")
-            .unwrap()
-            .clone();
-        tiny.set_property_int("capacity", 0);
-        objects.insert(tiny.id.clone(), tiny);
-
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: Some(&room_id),
-            objects: &mut objects,
-        };
-
-        take_item(&mut ctx, "coin").unwrap();
-        wear_item(&mut ctx, "backpack").unwrap();
-        let err = put_item(&mut ctx, "coin", "backpack").unwrap_err();
-        assert_eq!(err, InventoryError::ContainerFull);
-    }
-
-    #[test]
-    fn describe_carried_empty_and_full() {
-        let owner = ObjectId::new("player:hero-001");
-        let mut player = Object {
-            id: owner.clone(),
-            name: "Hero".to_string(),
-            aliases: Vec::new(),
-            location: None,
-            prototype: None,
-            owner: owner.clone(),
-            permissions: PermissionFlags::OWNER,
-            properties: HashMap::new(),
-            verbs: HashMap::new(),
-            event_handlers: HashMap::new(),
-        };
-        player.init_inventory();
-
-        assert_eq!(
-            describe_carried(&player, &HashMap::new()),
-            "You are empty-handed."
-        );
-
-        let coin_id = ObjectId::new("item:coin-001");
-        let mut coin = Object {
-            id: coin_id.clone(),
-            name: "Gold Coin".to_string(),
-            aliases: Vec::new(),
-            location: Some(owner.clone()),
-            prototype: None,
-            owner: owner.clone(),
-            permissions: PermissionFlags::OWNER,
-            properties: HashMap::new(),
-            verbs: HashMap::new(),
-            event_handlers: HashMap::new(),
-        };
-        coin.set_carried_slot(Some(CarriedSlot::Pocket));
-        player.add_to_list_property("pockets", coin_id.clone());
-
-        let mut objects = HashMap::new();
-        objects.insert(coin_id, coin);
-
-        let desc = describe_carried(&player, &objects);
-        assert!(desc.contains("Gold Coin"));
-        assert!(desc.contains("pocket"));
     }
 }

@@ -105,6 +105,49 @@ The system emphasizes **separation of concerns**, extensibility, and safety (esp
 - **Persistence**: SQLite + serde.
 - **Async**: Tokio.
 
+## Repository Layout
+
+```
+mudl/
+├── src/                    # Rust engine only
+│   ├── object/             # Object model + ObjectFactory
+│   ├── mudl/               # MUDL parser, anatomy, @include loader
+│   ├── world/              # Module bootstrap + packaging
+│   ├── command/            # Shared command/bootstrap helpers
+│   ├── display/            # Player/builder/debug presentation
+│   ├── inventory/          # Body-slot inventory operations
+│   ├── persistence/        # SQLite abstraction
+│   └── bin/repl.rs         # Development REPL
+├── modules/                # MUDL game data (not Rust)
+│   └── default/            # Official baseline universe
+│       ├── universe.mudl   # Entrypoint (@include composition)
+│       ├── anatomy/        # Body plans (human, etc.)
+│       ├── players/        # Player spawn templates
+│       ├── rooms/          # Room definitions
+│       ├── items/          # Item definitions (future)
+│       └── objects/        # Shared object prototypes (future)
+└── examples/               # Alternative universe packs
+```
+
+**MUDL-first**: All game content (anatomy, rooms, templates) is defined in `.mudl` files. Rust provides loaders, runtime, and persistence — not hardcoded world data.
+
+## Module Loading
+
+1. Engine resolves `MUDL_MODULE` (default: `modules/default`) or `MUDL_UNIVERSE`.
+2. `universe.mudl` is parsed; `@include` directives pull in anatomy, rooms, config, etc.
+3. `bootstrap_module()` creates world objects and a naked human player from the loaded templates.
+4. `bundle_module()` packages a module folder + `manifest.json` for distribution.
+
+## Customization and Prototype Inheritance
+
+Builders/DMs can fork `modules/default/` to create custom universe packs:
+
+- **Swap body plans**: Change `body_plan=human` to `body_plan=cat` in a player template after defining `@body-plan cat`.
+- **Override rooms**: Replace `rooms/locations.mudl` or add new room files and `@include` them from `universe.mudl`.
+- **Compose modules**: Future support for loading multiple modules with prototype inheritance (child module overrides parent definitions).
+
+The object model's prototype/parent system (`prototype: Option<ObjectId>`) is the runtime foundation for this — MUDL modules define the authoritative data; the engine resolves inheritance when spawning and displaying objects.
+
 ## Future Directions
 - Full LLM content generation pipeline.
 - Advanced self-modification (world rewriting its own rules).

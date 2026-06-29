@@ -1,7 +1,8 @@
 use bitflags::bitflags;
 use std::collections::HashMap;
 
-use super::object::{Object, ObjectId};
+use crate::mudl::AnatomyRegistry;
+use crate::object::{Object, ObjectId};
 
 /// How an object should be rendered for a given command/audience.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +36,8 @@ pub struct DisplayContext {
     pub flags: DisplayFlags,
     /// Known objects for resolving contents, exits, and name lookups.
     pub objects: HashMap<ObjectId, Object>,
+    /// Loaded anatomy definitions for body-slot descriptions.
+    pub anatomy: AnatomyRegistry,
 }
 
 impl DisplayContext {
@@ -45,11 +48,17 @@ impl DisplayContext {
             depth: 0,
             flags: DisplayFlags::empty(),
             objects: HashMap::new(),
+            anatomy: AnatomyRegistry::default(),
         }
     }
 
     pub fn with_objects(mut self, objects: HashMap<ObjectId, Object>) -> Self {
         self.objects = objects;
+        self
+    }
+
+    pub fn with_anatomy(mut self, anatomy: AnatomyRegistry) -> Self {
+        self.anatomy = anatomy;
         self
     }
 
@@ -111,10 +120,11 @@ pub fn resolve_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::object::{
+    use crate::mudl::load_module;
+    use crate::object::{
         generate_object_id, ObjectFactory, PermissionFlags, Property, Value, Verb,
     };
-    use crate::core::persistence::SqlitePersistence;
+    use crate::persistence::SqlitePersistence;
 
     async fn test_factory() -> ObjectFactory<SqlitePersistence> {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
@@ -254,11 +264,15 @@ mod tests {
             behavior: None,
         });
 
-        let ctx = DisplayContext::new(owner, DisplayMode::Player);
+        let anatomy = load_module("modules/default").unwrap().anatomy;
+        player.init_body(anatomy.player_template("default").unwrap());
+
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player).with_anatomy(anatomy);
         let output = player.describe(&ctx);
 
         assert!(output.contains("Admin"));
         assert!(output.contains("weary adventurer"));
+        assert!(output.contains("completely naked and empty-handed"));
         assert!(!output.contains("player:admin-001"));
     }
 

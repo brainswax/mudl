@@ -47,6 +47,20 @@ Bootstrap complete. Starting at: room:the-void-001
 
 The REPL creates (or opens) a file called `repl.db` in the current directory for SQLite storage.
 
+By default it loads `modules/default/universe.mudl` (naked human, starter rooms). Override with:
+
+```bash
+MUDL_MODULE=modules/default cargo run --bin repl
+# or
+MUDL_UNIVERSE=path/to/universe.mudl cargo run --bin repl
+```
+
+By default it loads `modules/default/universe.mudl` (naked human anatomy + starter rooms). Override with:
+
+```bash
+MUDL_MODULE=modules/default cargo run --bin repl
+```
+
 Type `help` at the prompt to see the list of commands at any time.
 
 ## Available Commands
@@ -71,6 +85,8 @@ Type `help` at the prompt to see the list of commands at any time.
 | `add_verb <id> <name> <code>` | Add a verb (with code) to an object            | `add_verb room:cozy-kitchen-001 bake "say('You bake some bread!')"` |
 | `load <id>`              | Load an object from the database into the cache  | `load room:cozy-kitchen-001`         |
 | `save <id>`              | Save an object from the cache to the database    | `save room:cozy-kitchen-001`         |
+| `module reload`          | Reload MUDL module from disk                     | `module reload`                      |
+| `module bundle <dir>`    | Package module to output directory               | `module bundle dist/default`         |
 | `exit` or `quit`         | Exit the REPL                                    | `exit`                               |
 
 **Notes on commands:**
@@ -90,25 +106,29 @@ The REPL uses three display modes from the presentation layer:
 
 **Target resolution:** Commands accept an optional target. Omit the target to use your current location. Use `here` explicitly, `self` / `me` for your player, a friendly name (e.g. `Daisy`), an alias, or a full object ID.
 
-### Inventory
+### Anatomy and Inventory
 
-Players start with empty pockets (capacity 5). Items can be:
+Players spawn as **naked humans** from `anatomy/human.mudl` — biological body slots only, no pockets or clothing by default.
 
-- **In pockets** — small, pocketable items (`is_pocketable: true`)
-- **In hands** — left hand, right hand, or wielded two-handed (`hand_slot: left`, `right`, or `both`)
-- **Worn** — wearable containers like backpacks (`is_wearable: true`, `is_container: true`)
+- **In hands** — `left_hand` / `right_hand` grasp slots; two-handed items (`hand_slot: both`) occupy both
+- **Worn** — items on `wear` slots (e.g. `torso` for a backpack via `wear_slot`)
 - **Inside containers** — nested via each container's `contents` list
 
-Use `look self` to see a natural-language summary of what you're carrying. Use `inventory` for a structured listing.
-
-Factory helpers for testing:
+Example output:
 
 ```text
-create item coin          # pocketable item (default)
-create item sword         # then: add_prop ... hand_slot right, is_pocketable false
+> look self
+Admin
+You are completely naked and empty-handed.
+
+> take sword
+You take the Rusty Sword.
+> look self
+Admin
+You are holding Rusty Sword in your right hand.
 ```
 
-Containers are created via the factory's `create_container` API in code; in the REPL you can mark items with `is_container`, `capacity`, and `is_wearable` properties.
+Use `inventory` for a structured slot listing. Pockets will arrive later via clothing items.
 
 ## Usage Examples
 
@@ -167,27 +187,26 @@ Verbs:
 ```
 > look self
 Admin
-You are empty-handed.
+You are completely naked and empty-handed.
 > inventory
-You are carrying:
-  nothing
+You are completely naked.
+  empty-handed
 ```
 
-### 6. Pick up, wear, and stow items
+### 6. Pick up and wield items
 
 ```
-> create item coin
-Created: coin (item:coin-001)
-> add_prop item:coin-001 description "A shiny gold coin."
+> create item sword
+Created: sword (item:sword-001)
+> add_prop item:sword-001 description "A rusty old blade."
 Property added.
-> take coin
-You take the coin.
+> add_prop item:sword-001 hand_slot right
+Property added.
+> take sword
+You take the sword.
 > look self
 Admin
-You are carrying a coin (in your pocket).
-> inventory
-You are carrying:
-  [pocket] coin
+You are holding sword in your right hand.
 ```
 
 ### 7. Create and inspect an item

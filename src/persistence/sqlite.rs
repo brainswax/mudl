@@ -7,8 +7,8 @@ use std::str::FromStr;
 
 use sqlx::sqlite::SqliteConnectOptions;
 
-use super::super::object::{Object, ObjectId};
 use super::r#trait::Persistence;
+use crate::object::{Object, ObjectId};
 
 #[derive(Clone)]
 pub struct SqlitePersistence {

@@ -122,6 +122,54 @@ room "Cozy Kitchen" {
 * Permission checks enforced by the Gateway.
 * Resource limits (CPU, loops, memory).
 
+## Modules and Universe Entrypoints
+
+Game content lives under `modules/<name>/`. Each module has a `universe.mudl` entrypoint that composes content via `@include`:
+
+```mudl
+@include config.mudl
+@include anatomy/human.mudl
+@include players/default.mudl
+@include rooms/locations.mudl
+```
+
+Set `MUDL_MODULE=modules/default` (or point `MUDL_UNIVERSE` at a specific file) to load a module. Fork `modules/default/` to customize worlds — e.g. swap `body_plan=cat` in a custom player template for an all-feline campaign.
+
+## Body Plans and Anatomy
+
+Anatomy is defined in MUDL (e.g. `modules/default/anatomy/human.mudl`). Player templates live in `players/`:
+
+```mudl
+@body-plan human
+  @slot left_hand capacity=1 type=grasp hands=1
+  @slot right_hand capacity=1 type=grasp hands=1
+  @slot head capacity=1 type=wear
+  @slot torso capacity=1 type=wear
+@end
+```
+
+Player templates (e.g. `players/default.mudl`):
+
+```mudl
+@player-template default
+  body_plan=human
+  gender=neutral
+@end
+```
+
+**Slot types** (MVP):
+- `grasp` — hands; items with `hand_slot: left`, `right`, or `both` occupy these
+- `wear` — clothing/armor/containers worn on the body
+- `limb` — biological parts (descriptive; not used for inventory yet)
+- `pocket` / `container` — reserved for clothing-provided capacity (future)
+
+**Player properties** (set by engine from template):
+- `body_plan` — name of the loaded plan (e.g. `human`)
+- `gender` — for descriptions (`neutral`, `male`, `female`, etc.)
+- `body_slots` — map of slot name → held/worn item ID
+
+Default players are **naked humans**: biological slots only, no pockets or clothing until equipped.
+
 ## Future Extensions
 * LLM-friendly generation (clear grammar + examples in prompts).
 * Meta-programming (objects modifying the language/runtime).
