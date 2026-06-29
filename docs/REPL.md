@@ -40,6 +40,8 @@ MUDL REPL starting...
 Using database: repl.db
 Default owner: player:admin-001
 Type 'help' for commands.
+Bootstrapping default world if needed...
+Bootstrap complete. Starting at: room:the-void-001
 >
 ```
 
@@ -54,7 +56,10 @@ Type `help` at the prompt to see the list of commands at any time.
 | `help`                   | Show the list of available commands              | `help`                               |
 | `create <type> <base_name>` | Create a new object using the ObjectFactory   | `create room cozy-kitchen`           |
 | `list`                   | Show all objects currently in the session cache  | `list`                               |
-| `look <id>`              | Display full details of an object                | `look room:cozy-kitchen-001`         |
+| `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
+| `examine [target]` (`x`) | Builder view with IDs, properties, and verbs     | `examine room:central-hub-001`       |
+| `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
+| `go <dir>`               | Move in a direction from the current room        | `go north`                           |
 | `add_prop <id> <name> <value>` | Add (or overwrite) a string property on an object | `add_prop room:cozy-kitchen-001 description "A warm and inviting kitchen."` |
 | `add_verb <id> <name> <code>` | Add a verb (with code) to an object            | `add_verb room:cozy-kitchen-001 bake "say('You bake some bread!')"` |
 | `load <id>`              | Load an object from the database into the cache  | `load room:cozy-kitchen-001`         |
@@ -66,71 +71,93 @@ Type `help` at the prompt to see the list of commands at any time.
 - Most commands that modify objects will automatically save changes to the database.
 - The REPL keeps a small in-memory cache of objects you've recently created or loaded.
 
+### Display Modes
+
+The REPL uses three display modes from the presentation layer:
+
+| Command | Mode | What you see |
+|---------|------|--------------|
+| `look` / `l` | Player | Name, description, obvious exits, visible contents — no internal IDs |
+| `examine` / `x` | Builder | Owner, location, properties, verbs, exit targets, contents with IDs |
+| `@dump` | Debug | Full JSON serialization of the object |
+
+**Target resolution:** Commands accept an optional target. Omit the target to use your current location. Use `here` explicitly, a friendly name (e.g. `Daisy`), an alias, or a full object ID.
+
 ## Usage Examples
 
-### 1. Create a new room
+### 1. Look around (player view)
+
+After bootstrap, your player starts in The Void:
 
 ```
-> create room cozy-kitchen
-Created: cozy-kitchen (room:cozy-kitchen-001)
+> look
+The Void
+You are in a featureless void. This is the starting point for new players.
+
+Obvious exits: north
 ```
 
-### 2. Look at the new object
+### 2. Move and look again
 
 ```
-> look room:cozy-kitchen-001
-=== room:cozy-kitchen-001 ===
-Name: cozy-kitchen
+> go north
+You go north.
+> l
+North Passage
+A narrow passage leading north from the void.
+
+Obvious exits: north, south
+```
+
+### 3. Examine with builder details
+
+```
+> examine
+North Passage [room:north-passage-001]
 Owner: player:admin-001
-Permissions: OWNER
+Description: A narrow passage leading north from the void.
+Exits: north -> room:central-hub-001, south -> room:the-void-001
 Properties:
+  description = A narrow passage leading north from the void.
+  exits = {north: room:central-hub-001, south: room:the-void-001}
 Verbs:
+  (none)
 ```
 
-### 3. Add a property
+### 4. Debug dump
 
 ```
-> add_prop room:cozy-kitchen-001 description "A warm and inviting kitchen with the smell of fresh bread."
+> @dump room:the-void-001
+{
+  "id": "room:the-void-001",
+  "name": "The Void",
+  ...
+}
+```
+
+### 5. Create and inspect an item
+
+```
+> create item daisy
+Created: daisy (item:daisy-001)
+> examine daisy
+daisy [item:daisy-001]
+Owner: player:admin-001
+Properties:
+  (none)
+Verbs:
+  (none)
+```
+
+### 6. Add a property and look at it
+
+```
+> add_prop item:daisy-001 description "A cheerful yellow flower."
 Property added.
+> look daisy
+daisy
+A cheerful yellow flower.
 ```
-
-### 4. Add a verb
-
-```
-> add_verb room:cozy-kitchen-001 bake "say('You bake a fresh loaf of bread!')"
-Verb added.
-```
-
-### 5. Inspect the updated object
-
-```
-> look room:cozy-kitchen-001
-=== room:cozy-kitchen-001 ===
-Name: cozy-kitchen
-Owner: player:admin-001
-Permissions: OWNER
-Properties:
-  description = String("A warm and inviting kitchen with the smell of fresh bread.") (perms: OWNER)
-Verbs:
-  bake: say('You bake a fresh loaf of bread!') (perms: OWNER)
-```
-
-### 6. List cached objects
-
-```
-> list
-Cached objects:
-  room:cozy-kitchen-001 - cozy-kitchen
-```
-
-### 7. Exit the REPL
-
-```
-> exit
-Goodbye!
-```
-
-You can restart the REPL later and use `load room:cozy-kitchen-001` to bring the object back into memory.
 
 ## How the REPL Uses the Core Components
 
@@ -140,6 +167,8 @@ You can restart the REPL later and use `load room:cozy-kitchen-001` to bring the
   - Increments the counter in the database.
   - Builds a fresh `Object` with default values.
   - Saves the new object immediately.
+
+- **Display Layer**: `look`, `examine`, and `@dump` route through the `Describable` trait with `DisplayMode::Player`, `DisplayMode::Builder`, and debug dump respectively. The REPL loads all known objects to resolve room contents and name-based targets.
 
 - **Persistence Layer**: The REPL uses `SqlitePersistence` (an implementation of the `Persistence` trait). This handles:
   - Saving and loading full `Object` structs as JSON in SQLite.
@@ -153,7 +182,7 @@ This design keeps the REPL thin while demonstrating how the real system will use
 ## Tips for Experimentation
 
 - You can create different types: `create item silver-sword`, `create npc old-mage`, etc.
-- Use full IDs when referring to objects (copy them from `create` or `list` output).
+- Use friendly names with `look` and `examine`; use full IDs or `@dump` when you need precision.
 - Changes are saved automatically in most cases, but you can explicitly use `save` if needed.
 - The database file `repl.db` can be deleted to start fresh.
 

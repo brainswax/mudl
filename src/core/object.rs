@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use bitflags::bitflags;
 
+use super::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
 use super::persistence::Persistence;
 
 bitflags! {
@@ -409,5 +410,221 @@ impl Object {
             behavior: None,
         };
         self.properties.insert("exits".to_string(), prop);
+    }
+
+    /// Object category derived from the ID prefix (e.g. `room`, `player`, `item`).
+    pub fn object_type(&self) -> &str {
+        self.id.as_str().split(':').next().unwrap_or("unknown")
+    }
+
+    /// Objects located inside this object (by `location` field).
+    pub fn contents<'a>(&self, objects: &'a HashMap<ObjectId, Object>) -> Vec<&'a Object> {
+        objects
+            .values()
+            .filter(|obj| obj.location.as_ref() == Some(&self.id))
+            .collect()
+    }
+}
+
+fn format_value(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Int(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::ObjectRef(id) => id.to_string(),
+        Value::List(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(format_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Value::Map(map) => {
+            let pairs: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, format_value(v)))
+                .collect();
+            format!("{{{}}}", pairs.join(", "))
+        }
+    }
+}
+
+fn format_exits_player(exits: &HashMap<String, ObjectId>) -> String {
+    if exits.is_empty() {
+        return String::new();
+    }
+    let mut dirs: Vec<&str> = exits.keys().map(String::as_str).collect();
+    dirs.sort_unstable();
+    format!("Obvious exits: {}", dirs.join(", "))
+}
+
+fn format_contents_player(obj: &Object, ctx: &DisplayContext) -> String {
+    let contents: Vec<String> = obj
+        .contents(&ctx.objects)
+        .into_iter()
+        .filter(|item| item.id != ctx.observer)
+        .map(|item| match item.object_type() {
+            "player" => item.name.clone(),
+            "item" | "thing" => {
+                if let Some(desc) = item.get_description() {
+                    format!("{} — {}", item.name, desc)
+                } else {
+                    item.name.clone()
+                }
+            }
+            _ => item.name.clone(),
+        })
+        .collect();
+
+    if contents.is_empty() {
+        String::new()
+    } else {
+        format!("You see: {}", contents.join("; "))
+    }
+}
+
+fn format_properties_builder(obj: &Object) -> String {
+    if obj.properties.is_empty() {
+        return "  (none)".to_string();
+    }
+    let mut names: Vec<&str> = obj.properties.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    names
+        .into_iter()
+        .map(|name| {
+            let prop = &obj.properties[name];
+            format!("  {} = {}", name, format_value(&prop.value))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_verbs_builder(obj: &Object) -> String {
+    if obj.verbs.is_empty() {
+        return "  (none)".to_string();
+    }
+    let mut names: Vec<&str> = obj.verbs.keys().map(String::as_str).collect();
+    names.sort_unstable();
+    names
+        .into_iter()
+        .map(|name| {
+            let verb = &obj.verbs[name];
+            format!("  {}: {}", name, verb.code)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn describe_room_player(obj: &Object, ctx: &DisplayContext) -> String {
+    let mut lines = vec![obj.name.clone()];
+
+    if ctx.flags.contains(DisplayFlags::DARK) {
+        lines.push("It is pitch black.".to_string());
+    } else if let Some(desc) = obj.get_description() {
+        lines.push(desc);
+    }
+
+    let exits = format_exits_player(&obj.get_exits());
+    if !exits.is_empty() {
+        lines.push(exits);
+    }
+
+    let contents = format_contents_player(obj, ctx);
+    if !contents.is_empty() {
+        lines.push(contents);
+    }
+
+    lines.join("\n")
+}
+
+fn describe_entity_player(obj: &Object) -> String {
+    let mut lines = vec![obj.name.clone()];
+    if let Some(desc) = obj.get_description() {
+        lines.push(desc);
+    }
+    lines.join("\n")
+}
+
+fn describe_room_builder(obj: &Object, ctx: &DisplayContext) -> String {
+    let mut lines = vec![
+        format!("{} [{}]", obj.name, obj.id),
+        format!("Owner: {}", obj.owner),
+    ];
+
+    if let Some(desc) = obj.get_description() {
+        lines.push(format!("Description: {}", desc));
+    }
+
+    let exits = obj.get_exits();
+    if !exits.is_empty() {
+        let mut dirs: Vec<&str> = exits.keys().map(String::as_str).collect();
+        dirs.sort_unstable();
+        let exit_list: Vec<String> = dirs
+            .into_iter()
+            .map(|dir| format!("{} -> {}", dir, exits[dir]))
+            .collect();
+        lines.push(format!("Exits: {}", exit_list.join(", ")));
+    }
+
+    let contents: Vec<String> = obj
+        .contents(&ctx.objects)
+        .into_iter()
+        .map(|item| format!("{} [{}]", item.name, item.id))
+        .collect();
+    if !contents.is_empty() {
+        lines.push(format!("Contents: {}", contents.join(", ")));
+    }
+
+    lines.push("Properties:".to_string());
+    lines.push(format_properties_builder(obj));
+    lines.push("Verbs:".to_string());
+    lines.push(format_verbs_builder(obj));
+
+    lines.join("\n")
+}
+
+fn describe_entity_builder(obj: &Object) -> String {
+    let mut lines = vec![
+        format!("{} [{}]", obj.name, obj.id),
+        format!("Owner: {}", obj.owner),
+    ];
+
+    if let Some(loc) = &obj.location {
+        lines.push(format!("Location: {}", loc));
+    }
+    if let Some(desc) = obj.get_description() {
+        lines.push(format!("Description: {}", desc));
+    }
+
+    lines.push("Properties:".to_string());
+    lines.push(format_properties_builder(obj));
+    lines.push("Verbs:".to_string());
+    lines.push(format_verbs_builder(obj));
+
+    lines.join("\n")
+}
+
+impl Describable for Object {
+    fn describe(&self, ctx: &DisplayContext) -> String {
+        match ctx.mode {
+            DisplayMode::Debug => self.dump(),
+            DisplayMode::Builder => self.describe_detailed(ctx),
+            DisplayMode::Player => match self.object_type() {
+                "room" => describe_room_player(self, ctx),
+                _ => describe_entity_player(self),
+            },
+        }
+    }
+
+    fn describe_detailed(&self, ctx: &DisplayContext) -> String {
+        match self.object_type() {
+            "room" => describe_room_builder(self, ctx),
+            _ => describe_entity_builder(self),
+        }
+    }
+
+    fn dump(&self) -> String {
+        serde_json::to_string_pretty(self).unwrap_or_else(|_| format!("{self:?}"))
     }
 }

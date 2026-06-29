@@ -3,37 +3,58 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
+use mudl::core::display::{resolve_target, Describable, DisplayContext, DisplayMode};
 use mudl::core::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
 use mudl::core::persistence::{Persistence, SqlitePersistence};
 
-fn print_object(obj: &Object) {
-    println!("=== {} ===", obj.id);
-    println!("Name: {}", obj.name);
-    if !obj.aliases.is_empty() {
-        println!("Aliases: {}", obj.aliases.join(", "));
+async fn load_all_objects(
+    persistence: &SqlitePersistence,
+    cache: &HashMap<ObjectId, Object>,
+) -> Result<HashMap<ObjectId, Object>> {
+    let mut objects: HashMap<ObjectId, Object> = HashMap::new();
+    for obj in persistence.list_objects().await? {
+        objects.insert(obj.id.clone(), obj);
     }
-    println!("Owner: {}", obj.owner);
-    if let Some(loc) = &obj.location {
-        println!("Location: {}", loc);
+    for (id, obj) in cache {
+        objects.insert(id.clone(), obj.clone());
     }
-    if let Some(proto) = &obj.prototype {
-        println!("Prototype: {}", proto);
+    Ok(objects)
+}
+
+async fn resolve_and_load(
+    target: Option<&str>,
+    current_location: &Option<ObjectId>,
+    persistence: &SqlitePersistence,
+    cache: &mut HashMap<ObjectId, Object>,
+) -> Result<Option<ObjectId>> {
+    let objects = load_all_objects(persistence, cache).await?;
+
+    let id = if let Some(name) = target {
+        resolve_target(name, current_location.as_ref(), &objects)
+    } else {
+        current_location.clone()
+    };
+
+    if let Some(ref id) = id {
+        if !cache.contains_key(id) {
+            if let Some(obj) = persistence.load_object(id).await? {
+                cache.insert(id.clone(), obj);
+            }
+        }
     }
-    println!("Permissions: {:?}", obj.permissions);
-    println!("Properties:");
-    for (name, prop) in &obj.properties {
-        println!(
-            "  {} = {:?} (perms: {:?})",
-            name, prop.value, prop.permissions
-        );
-    }
-    println!("Verbs:");
-    for (name, verb) in &obj.verbs {
-        println!("  {}: {} (perms: {:?})", name, verb.code, verb.permissions);
-    }
-    if !obj.event_handlers.is_empty() {
-        println!("Event handlers: {}", obj.event_handlers.len());
-    }
+
+    Ok(id)
+}
+
+fn render_object(obj: &Object, ctx: &DisplayContext, detailed: bool, debug: bool) {
+    let output = if debug {
+        obj.dump()
+    } else if detailed {
+        obj.describe_detailed(ctx)
+    } else {
+        obj.describe(ctx)
+    };
+    println!("{output}");
 }
 
 #[tokio::main]
@@ -96,7 +117,13 @@ async fn main() -> Result<()> {
                         println!("Commands:");
                         println!("  create <type> <base_name>   - e.g. create room cozy-kitchen");
                         println!("  list                        - list objects in session cache");
-                        println!("  look [id]                   - show object details (or current location if no id)");
+                        println!(
+                            "  look [target]  (l)          - immersive view (current room if no target)"
+                        );
+                        println!(
+                            "  examine [target]  (x)       - builder view with IDs, properties, verbs"
+                        );
+                        println!("  @dump [target]              - full JSON dump of an object");
                         println!("  go <dir>                    - move to another location (e.g. go north)");
                         println!("  add_prop <id> <name> <value> - add string property");
                         println!("  add_verb <id> <name> <code> - add verb with code");
@@ -132,36 +159,73 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
-                    "look" => {
-                        let id = if parts.len() < 2 {
-                            if let Some(loc) = &current_location {
-                                loc.clone()
-                            } else {
-                                println!("No current location. Use 'look <id>'.");
-                                continue;
-                            }
-                        } else {
-                            ObjectId::new(parts[1])
-                        };
-                        let obj = if let Some(o) = cache.get(&id) {
-                            o.clone()
-                        } else {
-                            match persistence.load_object(&id).await {
-                                Ok(Some(o)) => {
-                                    cache.insert(id.clone(), o.clone());
-                                    o
-                                }
-                                Ok(None) => {
+                    "look" | "l" => {
+                        let target = parts.get(1).copied();
+                        match resolve_and_load(target, &current_location, &persistence, &mut cache)
+                            .await
+                        {
+                            Ok(Some(id)) => {
+                                let objects = load_all_objects(&persistence, &cache).await?;
+                                let ctx =
+                                    DisplayContext::new(default_owner.clone(), DisplayMode::Player)
+                                        .with_objects(objects);
+                                if let Some(obj) = cache.get(&id) {
+                                    render_object(obj, &ctx, false, false);
+                                } else {
                                     println!("Object not found: {}", id);
-                                    continue;
-                                }
-                                Err(e) => {
-                                    println!("Error loading: {}", e);
-                                    continue;
                                 }
                             }
-                        };
-                        print_object(&obj);
+                            Ok(None) => {
+                                println!(
+                                    "No current location. Use 'look <target>' or 'look here'."
+                                );
+                            }
+                            Err(e) => println!("Error: {}", e),
+                        }
+                    }
+                    "examine" | "x" => {
+                        let target = parts.get(1).copied();
+                        match resolve_and_load(target, &current_location, &persistence, &mut cache)
+                            .await
+                        {
+                            Ok(Some(id)) => {
+                                let objects = load_all_objects(&persistence, &cache).await?;
+                                let ctx = DisplayContext::new(
+                                    default_owner.clone(),
+                                    DisplayMode::Builder,
+                                )
+                                .with_objects(objects);
+                                if let Some(obj) = cache.get(&id) {
+                                    render_object(obj, &ctx, true, false);
+                                } else {
+                                    println!("Object not found: {}", id);
+                                }
+                            }
+                            Ok(None) => {
+                                println!(
+                                    "No current location. Use 'examine <target>' or 'examine here'."
+                                );
+                            }
+                            Err(e) => println!("Error: {}", e),
+                        }
+                    }
+                    "@dump" => {
+                        let target = parts.get(1).copied();
+                        match resolve_and_load(target, &current_location, &persistence, &mut cache)
+                            .await
+                        {
+                            Ok(Some(id)) => {
+                                if let Some(obj) = cache.get(&id) {
+                                    println!("{}", obj.dump());
+                                } else {
+                                    println!("Object not found: {}", id);
+                                }
+                            }
+                            Ok(None) => {
+                                println!("No current location. Use '@dump <target>'.");
+                            }
+                            Err(e) => println!("Error: {}", e),
+                        }
                     }
                     "go" => {
                         if parts.len() < 2 {
@@ -307,7 +371,13 @@ async fn main() -> Result<()> {
                             Ok(Some(obj)) => {
                                 cache.insert(id.clone(), obj.clone());
                                 println!("Loaded.");
-                                print_object(&obj);
+                                let objects = load_all_objects(&persistence, &cache).await?;
+                                let ctx = DisplayContext::new(
+                                    default_owner.clone(),
+                                    DisplayMode::Builder,
+                                )
+                                .with_objects(objects);
+                                render_object(&obj, &ctx, true, false);
                             }
                             Ok(None) => println!("Not found: {}", id),
                             Err(e) => println!("Error: {}", e),

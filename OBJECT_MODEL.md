@@ -146,6 +146,71 @@ Every object has a unique, immutable internal identifier.
 - `exit:north-042`
 - `player:brains-007`
 
+## Display and Presentation
+
+To support both developer introspection and player-friendly interfaces:
+
+### DisplayMode
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// Clean, immersive output for normal play
+    Player,
+    /// Builder/wizard mode: shows ownership, properties, etc.
+    Builder,
+    /// Full internal dump (for debugging/coding)
+    Debug,
+}
+```
+
+### DisplayContext
+```rust
+#[derive(Debug, Clone)]
+pub struct DisplayContext {
+    /// Rendering mode
+    pub mode: DisplayMode,
+    /// Who is observing (for permission checks, personalization)
+    pub observer: ObjectId,
+    /// Recursion/detail level
+    pub depth: u8,
+    /// Additional flags (dark room, etc.)
+    pub flags: DisplayFlags,
+}
+
+bitflags! {
+    pub struct DisplayFlags: u32 {
+        const DARK = 1 << 0;
+        const BRIEF = 1 << 1;
+        // etc.
+    }
+}
+```
+
+### Describable Trait
+```rust
+pub trait Describable {
+    /// Basic description suitable for "look"
+    fn describe(&self, ctx: &DisplayContext) -> String;
+
+    /// Detailed view (exits, contents, properties)
+    fn describe_detailed(&self, ctx: &DisplayContext) -> String;
+
+    /// Full internal representation (Debug mode)
+    fn dump(&self) -> String;
+}
+```
+
+Implementations:
+- **Room**: name + short_desc + obvious exits + visible contents
+- **Player/Thing**: name + description, owner info in Builder mode
+- Default fallback to property-based rendering.
+
+## Persistence Notes
+- Use ObjectFactory for creation.
+- Serialize full objects for Debug; store key display fields for efficiency.
+
+This design allows `look` to be player-friendly while `@examine`/`@dump` expose internals.
+
 #### Why This Scheme?
 - Human-readable for debugging and logging.
 - Guarantees uniqueness even when many objects share the same name.
