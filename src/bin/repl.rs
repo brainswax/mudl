@@ -327,17 +327,11 @@ async fn main() -> Result<()> {
                     "inventory" | "i" => {
                         let objects = load_all_objects(&persistence, &cache).await?;
                         if let Some(player) = objects.get(&default_owner).cloned() {
-                            println!(
-                                "{}",
-                                describe_inventory(&player, &objects, &active_anatomy)
-                            );
+                            println!("{}", describe_inventory(&player, &objects, &active_anatomy));
                         } else if let Ok(Some(player)) =
                             persistence.load_object(&default_owner).await
                         {
-                            println!(
-                                "{}",
-                                describe_inventory(&player, &objects, &active_anatomy)
-                            );
+                            println!("{}", describe_inventory(&player, &objects, &active_anatomy));
                         } else {
                             println!("Player not found.");
                         }

@@ -120,11 +120,7 @@ fn parse_key_value_pairs(s: &str) -> HashMap<String, String> {
 }
 
 fn parse_creature_name(line: &str) -> Option<String> {
-    let name = line
-        .trim()
-        .trim_end_matches('{')
-        .trim()
-        .to_string();
+    let name = line.trim().trim_end_matches('{').trim().to_string();
     if name.is_empty() {
         None
     } else {
@@ -161,9 +157,8 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
             .or_else(|| line.strip_prefix("@body-plan "))
         {
             current_creature = Some(CreatureDef {
-                name: parse_creature_name(name).ok_or_else(|| {
-                    anyhow::anyhow!("@creature missing name: {line}")
-                })?,
+                name: parse_creature_name(name)
+                    .ok_or_else(|| anyhow::anyhow!("@creature missing name: {line}"))?,
                 slots: Vec::new(),
             });
             current_template = None;

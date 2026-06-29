@@ -201,9 +201,7 @@ fn parse_block_meta(
     field_keys: &[&str],
 ) -> (Option<String>, Option<String>) {
     let (name, fields) = parse_block_meta_fields(content, block_tag, field_keys);
-    let field = field_keys
-        .first()
-        .and_then(|key| fields.get(*key).cloned());
+    let field = field_keys.first().and_then(|key| fields.get(*key).cloned());
     (name, field)
 }
 
