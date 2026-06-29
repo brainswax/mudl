@@ -6,7 +6,7 @@ use crate::inventory::{take_item, InventoryContext, InventoryError};
 use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse};
 use crate::object::{Object, ObjectFactory, ObjectId};
 use crate::persistence::Persistence;
-use crate::world::{bootstrap_world, bundle_module, ModuleManifest};
+use crate::world::{bootstrap_world, bundle_module, persist_all, ModuleManifest};
 
 /// Load the active MUDL universe from `MUDL_MODULE` / `MUDL_UNIVERSE` env or default.
 pub fn load_active_universe() -> anyhow::Result<LoadedUniverse> {
@@ -79,12 +79,58 @@ pub fn take_from_location(
     take_item(&mut ctx, item_name)
 }
 
+/// Persist inventory-related changes (player + all touched objects).
+pub async fn persist_inventory_changes<P: Persistence>(
+    persistence: &P,
+    objects: &HashMap<ObjectId, Object>,
+) -> anyhow::Result<()> {
+    persist_all(persistence, objects).await
+}
+
+/// Soft-delete an object by ID (wizard). Object remains in the database.
+pub async fn soft_delete_object<P: Persistence>(
+    persistence: &P,
+    id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> anyhow::Result<String> {
+    let mut obj = persistence
+        .load_object(id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Object not found: {id}"))?;
+    let name = obj.name.clone();
+    obj.soft_delete();
+    persistence.save_object(&obj).await?;
+    objects.insert(id.clone(), obj);
+    Ok(format!("Soft-deleted {name} ({id})."))
+}
+
+/// Restore a soft-deleted object by ID (wizard).
+pub async fn undelete_object<P: Persistence>(
+    persistence: &P,
+    id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> anyhow::Result<String> {
+    let mut obj = persistence
+        .load_object(id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("Object not found: {id}"))?;
+    if !obj.is_deleted {
+        anyhow::bail!("{id} is not deleted.");
+    }
+    let name = obj.name.clone();
+    obj.undelete();
+    persistence.save_object(&obj).await?;
+    objects.insert(id.clone(), obj);
+    Ok(format!("Restored {name} ({id})."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::display::{Describable, DisplayContext, DisplayMode};
     use crate::inventory::describe_carried;
     use crate::persistence::SqlitePersistence;
+    use crate::world::hydrate_world;
 
     async fn test_factory() -> ObjectFactory<SqlitePersistence> {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
@@ -112,6 +158,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
         };
         area.add_property(crate::object::Property {
             name: "description".to_string(),
@@ -223,6 +271,89 @@ mod tests {
         let err = take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy)
             .unwrap_err();
         assert_eq!(err, InventoryError::NotFound("boots".to_string()));
+    }
+
+    #[tokio::test]
+    async fn create_and_take_persist_through_hydrate() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+
+        let mut player = factory
+            .create_player("hero", owner.clone(), &anatomy)
+            .await
+            .unwrap();
+        player.location = Some(area_id.clone());
+        factory.persistence().save_object(&player).await.unwrap();
+
+        let boots = create_at_location(
+            &factory,
+            "item",
+            "boots",
+            owner.clone(),
+            Some(&area_id),
+            &anatomy,
+        )
+        .await
+        .unwrap();
+
+        let mut objects = hydrate_world(&persistence).await.unwrap();
+        take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy).unwrap();
+        persist_all(&persistence, &objects).await.unwrap();
+
+        let restored = hydrate_world(&persistence).await.unwrap();
+        let player = restored.get(&owner).unwrap();
+        assert!(
+            player.body_slot_item("left_hand").is_some()
+                || player.body_slot_item("right_hand").is_some()
+        );
+        let held_id = player
+            .body_slot_item("right_hand")
+            .or_else(|| player.body_slot_item("left_hand"))
+            .unwrap();
+        let held = restored.get(&held_id).unwrap();
+        assert_eq!(held.name, boots.name);
+        assert_eq!(held.location.as_ref(), Some(&owner));
+    }
+
+    #[tokio::test]
+    async fn soft_delete_hides_object_until_undelete() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+
+        let boots = create_at_location(
+            &factory,
+            "item",
+            "boots",
+            owner.clone(),
+            Some(&area_id),
+            &anatomy,
+        )
+        .await
+        .unwrap();
+
+        let mut cache = hydrate_world(&persistence).await.unwrap();
+        soft_delete_object(&persistence, &boots.id, &mut cache)
+            .await
+            .unwrap();
+
+        let visible = hydrate_world(&persistence).await.unwrap();
+        assert!(!visible.contains_key(&boots.id));
+
+        let loaded = persistence.load_object(&boots.id).await.unwrap().unwrap();
+        assert!(loaded.is_deleted);
+
+        undelete_object(&persistence, &boots.id, &mut cache)
+            .await
+            .unwrap();
+        let restored = hydrate_world(&persistence).await.unwrap();
+        assert!(restored.contains_key(&boots.id));
+        assert!(restored.get(&boots.id).unwrap().is_active());
     }
 
     #[tokio::test]

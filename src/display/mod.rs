@@ -104,6 +104,9 @@ pub fn resolve_target(
     }
 
     for (obj_id, obj) in objects {
+        if !obj.is_active() {
+            continue;
+        }
         if obj.name.to_lowercase() == needle {
             return Some(obj_id.clone());
         }
@@ -143,6 +146,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
         };
         room.add_property(Property {
             name: "description".to_string(),
@@ -289,6 +294,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
         };
         player.add_property(Property {
             name: "description".to_string(),
@@ -328,6 +335,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
         };
         player.add_verb(Verb {
             name: "wave".to_string(),

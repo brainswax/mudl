@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::mudl::{LoadedWorld, WorldDef};
 use crate::object::{ObjectFactory, ObjectId, PermissionFlags, Property, Value};
 use crate::persistence::Persistence;
+use crate::world::session::resolve_bootstrap_location;
 
 fn location_id(def: &WorldDef) -> ObjectId {
     ObjectId::new(format!("{}:{}-001", def.obj_type, def.base_name))
@@ -25,7 +26,7 @@ pub async fn bootstrap_world<P: Persistence>(
         if let Some(def) = find_location_def(world, start_base) {
             let start_id = location_id(def);
             if factory.load_object(&start_id).await?.is_some() {
-                return Ok(start_id);
+                return resolve_bootstrap_location(factory, &owner, start_id).await;
             }
         }
     }
@@ -108,5 +109,5 @@ pub async fn bootstrap_world<P: Persistence>(
             .unwrap_or_else(|| ObjectId::new("area:the-void-001"))
     };
 
-    Ok(start_id)
+    resolve_bootstrap_location(factory, &owner, start_id).await
 }

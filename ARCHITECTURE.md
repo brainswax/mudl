@@ -186,6 +186,25 @@ The object model's prototype/parent system (`prototype: Option<ObjectId>`) is th
 
 Command helpers live in `src/command/`; inventory slot logic in `src/inventory/`; presentation in `src/display/` and `Object::is_location()`.
 
+## Persistence Strategy
+
+All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID counter table.
+
+| When | What is saved |
+|------|----------------|
+| `ObjectFactory::create*` | New object immediately (`save_object`) |
+| `create` / `create_at_location` | Object + updated `location` |
+| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Full active object graph after mutation (`persist_all`) |
+| `go` | Player `location` |
+| `add_prop`, `add_verb`, `save` | Target object |
+| Bootstrap | World areas, exits, default player (idempotent) |
+
+**Startup**: `bootstrap_world()` ensures MUDL-defined content exists, then `restore_session()` hydrates all active objects from the DB and restores the player's `current_location` from their persisted `location` field.
+
+**Soft deletes**: Objects are never hard-deleted. `is_deleted` and `deleted_at` on `Object` mark removal; `list_objects(false)` hides them from normal play. Wizard commands `@delete <target>` and `@undelete <id>` toggle the flag. Deleted objects remain loadable by ID for recovery.
+
+**Schema**: `objects(id, data, is_deleted, deleted_at)` and `counters(type_base, counter)`. Older DB files are migrated with `ALTER TABLE` on connect.
+
 ## Future Directions
 - Full LLM content generation pipeline.
 - Advanced self-modification (world rewriting its own rules).

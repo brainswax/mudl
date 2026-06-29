@@ -264,6 +264,9 @@ fn resolve_inventory_target(
 
     let mut matches = Vec::new();
     for (obj_id, obj) in objects {
+        if !obj.is_active() {
+            continue;
+        }
         if name_matches(&needle, obj) {
             if carried_only {
                 if is_carried_by(player_id, obj_id, objects) {
@@ -675,7 +678,9 @@ fn describe_grasp(player: &Object, objects: &HashMap<ObjectId, Object>) -> Optio
     if let (Some(left_id), Some(right_id)) = (&left, &right) {
         if left_id == right_id {
             if let Some(obj) = objects.get(left_id) {
-                return Some(format!("You are wielding {} with both hands.", obj.name));
+                if obj.is_active() {
+                    return Some(format!("You are wielding {} with both hands.", obj.name));
+                }
             }
         }
     }
@@ -683,14 +688,18 @@ fn describe_grasp(player: &Object, objects: &HashMap<ObjectId, Object>) -> Optio
     if let Some(right_id) = right {
         if left.as_ref() != Some(&right_id) {
             if let Some(obj) = objects.get(&right_id) {
-                return Some(format!("You are holding {} in your right hand.", obj.name));
+                if obj.is_active() {
+                    return Some(format!("You are holding {} in your right hand.", obj.name));
+                }
             }
         }
     }
 
     if let Some(left_id) = left {
         if let Some(obj) = objects.get(&left_id) {
-            return Some(format!("You are holding {} in your left hand.", obj.name));
+            if obj.is_active() {
+                return Some(format!("You are holding {} in your left hand.", obj.name));
+            }
         }
     }
 
@@ -746,6 +755,9 @@ pub fn describe_inventory(
     for slot in &slot_names {
         if let Some(item_id) = slots.get(slot) {
             if let Some(obj) = objects.get(item_id) {
+                if !obj.is_active() {
+                    continue;
+                }
                 empty = false;
                 let left = player.body_slot_item("left_hand");
                 let right = player.body_slot_item("right_hand");

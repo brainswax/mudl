@@ -82,6 +82,12 @@ pub struct Object {
     pub properties: HashMap<String, Property>,
     pub verbs: HashMap<String, Verb>,
     pub event_handlers: HashMap<String, Vec<Behavior>>,
+    /// Soft-delete flag — object remains in the database but is hidden from normal play.
+    #[serde(default)]
+    pub is_deleted: bool,
+    /// UTC epoch seconds when the object was soft-deleted, if applicable.
+    #[serde(default)]
+    pub deleted_at: Option<String>,
 }
 
 pub fn generate_object_id(obj_type: &str, base_name: &str, counter: u32) -> ObjectId {
@@ -169,6 +175,8 @@ impl<P: Persistence> ObjectFactory<P> {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
         };
 
         self.persistence.save_object(&object).await?;
@@ -276,11 +284,33 @@ impl Object {
         )
     }
 
-    /// Objects located inside this object (by `location` field).
+    /// Whether this object is visible in normal play (not soft-deleted).
+    pub fn is_active(&self) -> bool {
+        !self.is_deleted
+    }
+
+    /// Mark this object as soft-deleted (retained in persistence).
+    pub fn soft_delete(&mut self) {
+        self.is_deleted = true;
+        self.deleted_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs().to_string())
+                .unwrap_or_else(|_| "0".to_string()),
+        );
+    }
+
+    /// Restore a soft-deleted object.
+    pub fn undelete(&mut self) {
+        self.is_deleted = false;
+        self.deleted_at = None;
+    }
+
+    /// Objects located inside this object (by `location` field), excluding soft-deleted.
     pub fn contents<'a>(&self, objects: &'a HashMap<ObjectId, Object>) -> Vec<&'a Object> {
         objects
             .values()
-            .filter(|obj| obj.location.as_ref() == Some(&self.id))
+            .filter(|obj| obj.is_active() && obj.location.as_ref() == Some(&self.id))
             .collect()
     }
 

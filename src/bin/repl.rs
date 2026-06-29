@@ -4,9 +4,10 @@ use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
-    bootstrap_active_universe, create_at_location, package_module, reload_universe,
-    take_from_location,
+    bootstrap_active_universe, create_at_location, package_module, persist_inventory_changes,
+    reload_universe, soft_delete_object, take_from_location, undelete_object,
 };
+use mudl::world::restore_session;
 use mudl::display::{resolve_target, Describable, DisplayContext, DisplayMode};
 use mudl::inventory::{
     describe_inventory, drop_item, put_item, remove_item, wear_item, wield_item, InventoryContext,
@@ -20,7 +21,7 @@ async fn load_all_objects(
     cache: &HashMap<ObjectId, Object>,
 ) -> Result<HashMap<ObjectId, Object>> {
     let mut objects: HashMap<ObjectId, Object> = HashMap::new();
-    for obj in persistence.list_objects().await? {
+    for obj in persistence.list_objects(false).await? {
         objects.insert(obj.id.clone(), obj);
     }
     for (id, obj) in cache {
@@ -55,17 +56,11 @@ async fn resolve_and_load(
     Ok(id)
 }
 
-async fn save_objects(
+async fn save_all_objects(
     persistence: &SqlitePersistence,
     objects: &HashMap<ObjectId, Object>,
-    ids: &[ObjectId],
 ) -> Result<()> {
-    for id in ids {
-        if let Some(obj) = objects.get(id) {
-            persistence.save_object(obj).await?;
-        }
-    }
-    Ok(())
+    persist_inventory_changes(persistence, objects).await
 }
 
 fn render_object(obj: &Object, ctx: &DisplayContext, detailed: bool, debug: bool) {
@@ -123,11 +118,33 @@ async fn main() -> Result<()> {
         Ok((universe, loc_id)) => {
             loaded_universe = universe;
             active_anatomy = loaded_universe.active_world()?.anatomy.clone();
-            println!("Bootstrap complete. Starting at: {}", loc_id);
             current_location = Some(loc_id);
         }
         Err(e) => {
             println!("Warning: Bootstrap failed: {}", e);
+        }
+    }
+
+    match restore_session(
+        &persistence,
+        default_owner.clone(),
+        current_location.clone(),
+    )
+    .await
+    {
+        Ok(session) => {
+            cache = session.objects;
+            current_location = session.current_location;
+            println!(
+                "Restored {} object(s) from database.",
+                cache.len()
+            );
+            if let Some(loc_id) = &current_location {
+                println!("Current location: {}", loc_id);
+            }
+        }
+        Err(e) => {
+            println!("Warning: Failed to restore session: {}", e);
         }
     }
 
@@ -189,6 +206,8 @@ async fn main() -> Result<()> {
                         println!(
                             "  module bundle <outdir>      - package module to output directory"
                         );
+                        println!("  @delete <target>            - wizard: soft-delete an object");
+                        println!("  @undelete <id>              - wizard: restore soft-deleted object");
                         println!("  exit                        - quit");
                     }
                     "create" => {
@@ -322,6 +341,38 @@ async fn main() -> Result<()> {
                             Err(e) => println!("Error: {}", e),
                         }
                     }
+                    "@delete" => {
+                        if parts.len() < 2 {
+                            println!("Usage: @delete <target>");
+                            continue;
+                        }
+                        let target = parts[1..].join(" ");
+                        let objects = load_all_objects(&persistence, &cache).await?;
+                        match resolve_target(
+                            &target,
+                            current_location.as_ref(),
+                            Some(&default_owner),
+                            &objects,
+                        ) {
+                            Some(id) => match soft_delete_object(&persistence, &id, &mut cache).await
+                            {
+                                Ok(msg) => println!("{msg}"),
+                                Err(e) => println!("Error: {e}"),
+                            },
+                            None => println!("No such object."),
+                        }
+                    }
+                    "@undelete" => {
+                        if parts.len() < 2 {
+                            println!("Usage: @undelete <id>");
+                            continue;
+                        }
+                        let id = ObjectId::new(parts[1]);
+                        match undelete_object(&persistence, &id, &mut cache).await {
+                            Ok(msg) => println!("{msg}"),
+                            Err(e) => println!("Error: {e}"),
+                        }
+                    }
                     "inventory" | "i" => {
                         let objects = load_all_objects(&persistence, &cache).await?;
                         if let Some(player) = objects.get(&default_owner).cloned() {
@@ -350,8 +401,7 @@ async fn main() -> Result<()> {
                         ) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                let ids: Vec<ObjectId> = objects.keys().cloned().collect();
-                                save_objects(&persistence, &objects, &ids).await?;
+                                save_all_objects(&persistence, &objects).await?;
                                 cache.extend(objects);
                             }
                             Err(e) => println!("{e}"),
@@ -373,8 +423,7 @@ async fn main() -> Result<()> {
                         match drop_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                let ids: Vec<ObjectId> = objects.keys().cloned().collect();
-                                save_objects(&persistence, &objects, &ids).await?;
+                                save_all_objects(&persistence, &objects).await?;
                                 cache.extend(objects);
                             }
                             Err(e) => println!("{e}"),
@@ -393,8 +442,7 @@ async fn main() -> Result<()> {
                             match put_item(&mut ctx, item.trim(), container.trim()) {
                                 Ok(msg) => {
                                     println!("{msg}");
-                                    let ids: Vec<ObjectId> = objects.keys().cloned().collect();
-                                    save_objects(&persistence, &objects, &ids).await?;
+                                    save_all_objects(&persistence, &objects).await?;
                                     cache.extend(objects);
                                 }
                                 Err(e) => println!("{e}"),
@@ -416,8 +464,7 @@ async fn main() -> Result<()> {
                             match remove_item(&mut ctx, item.trim(), container.trim()) {
                                 Ok(msg) => {
                                     println!("{msg}");
-                                    let ids: Vec<ObjectId> = objects.keys().cloned().collect();
-                                    save_objects(&persistence, &objects, &ids).await?;
+                                    save_all_objects(&persistence, &objects).await?;
                                     cache.extend(objects);
                                 }
                                 Err(e) => println!("{e}"),
@@ -442,8 +489,7 @@ async fn main() -> Result<()> {
                         match wield_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                let ids: Vec<ObjectId> = objects.keys().cloned().collect();
-                                save_objects(&persistence, &objects, &ids).await?;
+                                save_all_objects(&persistence, &objects).await?;
                                 cache.extend(objects);
                             }
                             Err(e) => println!("{e}"),
@@ -514,8 +560,7 @@ async fn main() -> Result<()> {
                         match wear_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                let ids: Vec<ObjectId> = objects.keys().cloned().collect();
-                                save_objects(&persistence, &objects, &ids).await?;
+                                save_all_objects(&persistence, &objects).await?;
                                 cache.extend(objects);
                             }
                             Err(e) => println!("{e}"),

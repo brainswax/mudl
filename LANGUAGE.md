@@ -224,6 +224,10 @@ You are holding boots in your right hand.
 - `take` / `get` moves items from the current area/room into grasp slots from the player's `@creature` definition.
 - Items may set `hand_slot` to `left`, `right`, or `both` (two-handed).
 
+## Persistence
+
+Every `Object` is stored as JSON in SQLite. State changes from `take`, `drop`, `go`, and `create` are saved immediately. Objects are never hard-deleted — wizard `@delete` sets `is_deleted` and `@undelete <id>` restores them.
+
 ## Future Extensions
 * LLM-friendly generation (clear grammar + examples in prompts).
 * Meta-programming (objects modifying the language/runtime).

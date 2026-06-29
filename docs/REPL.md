@@ -83,6 +83,8 @@ Type `help` at the prompt to see the list of commands at any time.
 | `save <id>`              | Save an object from the cache to the database    | `save room:cozy-kitchen-001`         |
 | `module reload`          | Reload MUDL module from disk                     | `module reload`                      |
 | `module bundle <dir>`    | Package module to output directory               | `module bundle dist/default`         |
+| `@delete <target>`       | Wizard: soft-delete an object (kept in DB)       | `@delete boots`                      |
+| `@undelete <id>`         | Wizard: restore a soft-deleted object            | `@undelete item:boots-001`           |
 | `exit` or `quit`         | Exit the REPL                                    | `exit`                               |
 
 **Notes on commands:**
@@ -262,5 +264,7 @@ This design keeps the REPL thin while demonstrating how the real system will use
 - Use friendly names with `look` and `examine`; use full IDs or `@dump` when you need precision.
 - Changes are saved automatically in most cases, but you can explicitly use `save` if needed.
 - The database file `repl.db` can be deleted to start fresh.
+- All objects and state changes (inventory, location, created items) persist in SQLite. On restart the REPL hydrates the full world from the database and restores your location from the player object.
+- Soft-deleted objects (`@delete`) are hidden from `look` but remain in the DB; use `@undelete <id>` to restore them.
 
 If you run into issues or want to extend the REPL, feel free to look at `src/bin/repl.rs` and the files under `src/core/`.
