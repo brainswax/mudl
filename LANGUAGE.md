@@ -202,6 +202,28 @@ exits:
   north: north-passage
 ```
 
+## Items and Inventory (REPL)
+
+Items are objects with `location` set to a place or player. The REPL supports basic pickup:
+
+```
+> create item boots
+Created: boots (item:boots-001) at area:the-void-001
+> look
+The Void
+...
+You see: boots
+> take boots
+You take the boots.
+> look self
+Admin
+You are holding boots in your right hand.
+```
+
+- `create` places new objects at the player's current location when one is set.
+- `take` / `get` moves items from the current area/room into grasp slots from the player's `@creature` definition.
+- Items may set `hand_slot` to `left`, `right`, or `both` (two-handed).
+
 ## Future Extensions
 * LLM-friendly generation (clear grammar + examples in prompts).
 * Meta-programming (objects modifying the language/runtime).

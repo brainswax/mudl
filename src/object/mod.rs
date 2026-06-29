@@ -268,6 +268,14 @@ impl Object {
         self.id.as_str().split(':').next().unwrap_or("unknown")
     }
 
+    /// Whether this object is a navigable place (room, area, location, etc.).
+    pub fn is_location(&self) -> bool {
+        matches!(
+            self.object_type(),
+            "room" | "area" | "location" | "region" | "zone"
+        )
+    }
+
     /// Objects located inside this object (by `location` field).
     pub fn contents<'a>(&self, objects: &'a HashMap<ObjectId, Object>) -> Vec<&'a Object> {
         objects
@@ -580,17 +588,21 @@ impl Describable for Object {
         match ctx.mode {
             DisplayMode::Debug => self.dump(),
             DisplayMode::Builder => self.describe_detailed(ctx),
-            DisplayMode::Player => match self.object_type() {
-                "room" => describe_room_player(self, ctx),
-                _ => describe_entity_player(self, ctx),
-            },
+            DisplayMode::Player => {
+                if self.is_location() {
+                    describe_room_player(self, ctx)
+                } else {
+                    describe_entity_player(self, ctx)
+                }
+            }
         }
     }
 
     fn describe_detailed(&self, ctx: &DisplayContext) -> String {
-        match self.object_type() {
-            "room" => describe_room_builder(self, ctx),
-            _ => describe_entity_builder(self),
+        if self.is_location() {
+            describe_room_builder(self, ctx)
+        } else {
+            describe_entity_builder(self)
         }
     }
 

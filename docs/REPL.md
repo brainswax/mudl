@@ -64,14 +64,14 @@ Type `help` at the prompt to see the list of commands at any time.
 | Command                  | Description                                      | Example                              |
 |--------------------------|--------------------------------------------------|--------------------------------------|
 | `help`                   | Show the list of available commands              | `help`                               |
-| `create <type> <base_name>` | Create a new object using the ObjectFactory   | `create room cozy-kitchen`           |
+| `create <type> <base_name>` | Create a new object at your current location  | `create item boots`                  |
 | `list`                   | Show all objects currently in the session cache  | `list`                               |
 | `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
 | `examine [target]` (`x`) | Builder view with IDs, properties, and verbs     | `examine room:central-hub-001`       |
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
 | `go <dir>`               | Move in a direction from the current room        | `go north`                           |
 | `inventory` (`i`)        | Show hands, pockets, worn containers, and contents | `i`                                |
-| `get` / `take <item>`    | Pick up an item from the room                    | `take coin`                          |
+| `get` / `take <item>`    | Pick up a visible item from your location        | `take boots`                         |
 | `drop <item>`            | Drop a carried item into the room                | `drop coin`                          |
 | `put <item> in <container>` | Stow a carried item in a container            | `put coin in wallet`                 |
 | `remove <item> from <container>` | Take an item out of a container          | `remove coin from wallet`            |
@@ -109,19 +109,24 @@ Players spawn as **naked humans** from the active world's `creatures.mudl` (`@cr
 - **In hands** — `left_hand` / `right_hand` grasp slots; two-handed items (`hand_slot: both`) occupy both
 - **Worn** — items on `wear` slots (e.g. `torso` for a backpack via `wear_slot`)
 - **Inside containers** — nested via each container's `contents` list
+- **On the ground** — items with `location` set to your current area/room appear in `look` as `You see: …`
+
+`create item <name>` places the new item at your current location (area, room, or any navigable place). Then `take <name>` picks it up.
 
 Example output:
 
 ```text
+> create item boots
+Created: boots (item:boots-001) at area:the-void-001
+> look
+The Void
+You are in a featureless void.
+You see: boots
+> take boots
+You take the boots.
 > look self
 Admin
-You are completely naked and empty-handed.
-
-> take sword
-You take the Rusty Sword.
-> look self
-Admin
-You are holding Rusty Sword in your right hand.
+You are holding boots in your right hand.
 ```
 
 Use `inventory` for a structured slot listing. Pockets will arrive later via clothing items.
@@ -231,7 +236,7 @@ A cheerful yellow flower.
 
 ## How the REPL Uses the Core Components
 
-- **ObjectFactory**: The REPL creates an `ObjectFactory` that wraps the persistence layer. When you run `create`, it calls `factory.create(type_name, base_name, owner)`. The factory:
+- **ObjectFactory**: The REPL creates an `ObjectFactory` that wraps the persistence layer. When you run `create`, `create_at_location()` calls the factory then sets `location` to your current place when one is set. The factory:
   - Asks the persistence layer for the next counter value for that type + base name.
   - Generates a unique `ObjectId` in the `type:base-name-counter` format (using 3-digit hex).
   - Increments the counter in the database.
@@ -240,7 +245,7 @@ A cheerful yellow flower.
 
 - **Display Layer**: `look`, `examine`, and `@dump` route through the `Describable` trait with `DisplayMode::Player`, `DisplayMode::Builder`, and debug dump respectively. The REPL loads all known objects to resolve room contents and name-based targets.
 
-- **Inventory Layer**: `get`, `drop`, `put`, `remove`, `wield`, and `wear` route through `src/core/inventory.rs`. Inventory state is stored as object properties (`pockets`, `left_hand`, `right_hand`, `worn`, `contents`, `carried_slot`) and serializes cleanly via the existing SQLite persistence.
+- **Inventory Layer**: `get`/`take`, `drop`, `put`, `remove`, `wield`, and `wear` route through `src/inventory/` via `take_from_location()` in `src/command/`. Inventory state is stored as object properties (`body_slots`, `contents`, `carried_slot`) and serializes cleanly via the existing SQLite persistence.
 
 - **Persistence Layer**: The REPL uses `SqlitePersistence` (an implementation of the `Persistence` trait). This handles:
   - Saving and loading full `Object` structs as JSON in SQLite.

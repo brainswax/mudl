@@ -3,11 +3,13 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
-use mudl::command::{bootstrap_active_universe, package_module, reload_universe};
+use mudl::command::{
+    bootstrap_active_universe, create_at_location, package_module, reload_universe,
+    take_from_location,
+};
 use mudl::display::{resolve_target, Describable, DisplayContext, DisplayMode};
 use mudl::inventory::{
-    describe_inventory, drop_item, put_item, remove_item, take_item, wear_item, wield_item,
-    InventoryContext,
+    describe_inventory, drop_item, put_item, remove_item, wear_item, wield_item, InventoryContext,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
@@ -196,31 +198,27 @@ async fn main() -> Result<()> {
                         }
                         let type_name = parts[1];
                         let base_name = parts[2];
-                        let result = match type_name {
-                            "player" => {
-                                factory
-                                    .create_player(
-                                        base_name,
-                                        default_owner.clone(),
-                                        &active_anatomy,
-                                    )
-                                    .await
-                            }
-                            "item" => factory.create_item(base_name, default_owner.clone()).await,
-                            "container" => {
-                                factory
-                                    .create_container(base_name, default_owner.clone(), 10, true)
-                                    .await
-                            }
-                            _ => {
-                                factory
-                                    .create(type_name, base_name, default_owner.clone())
-                                    .await
-                            }
-                        };
-                        match result {
+                        match create_at_location(
+                            &factory,
+                            type_name,
+                            base_name,
+                            default_owner.clone(),
+                            current_location.as_ref(),
+                            &active_anatomy,
+                        )
+                        .await
+                        {
                             Ok(obj) => {
-                                println!("Created: {} ({})", &obj.name, &obj.id);
+                                if current_location.is_some() {
+                                    println!(
+                                        "Created: {} ({}) at {}",
+                                        &obj.name,
+                                        &obj.id,
+                                        obj.location.as_ref().unwrap()
+                                    );
+                                } else {
+                                    println!("Created: {} ({})", &obj.name, &obj.id);
+                                }
                                 cache.insert(obj.id.clone(), obj);
                             }
                             Err(e) => println!("Error creating: {}", e),
@@ -343,13 +341,13 @@ async fn main() -> Result<()> {
                         }
                         let item_name = parts[1..].join(" ");
                         let mut objects = load_all_objects(&persistence, &cache).await?;
-                        let mut ctx = InventoryContext {
-                            player_id: &default_owner,
-                            room_id: current_location.as_ref(),
-                            objects: &mut objects,
-                            anatomy: &active_anatomy,
-                        };
-                        match take_item(&mut ctx, &item_name) {
+                        match take_from_location(
+                            &default_owner,
+                            current_location.as_ref(),
+                            &item_name,
+                            &mut objects,
+                            &active_anatomy,
+                        ) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 let ids: Vec<ObjectId> = objects.keys().cloned().collect();

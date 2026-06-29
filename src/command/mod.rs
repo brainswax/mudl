@@ -1,7 +1,10 @@
 //! Command-layer helpers shared by REPL and future frontends.
 
-use crate::mudl::{load_module, LoadedUniverse};
-use crate::object::{ObjectFactory, ObjectId};
+use std::collections::HashMap;
+
+use crate::inventory::{take_item, InventoryContext, InventoryError};
+use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse};
+use crate::object::{Object, ObjectFactory, ObjectId};
 use crate::persistence::Persistence;
 use crate::world::{bootstrap_world, bundle_module, ModuleManifest};
 
@@ -29,4 +32,229 @@ pub fn package_module(module_dir: &str, output_dir: &str) -> anyhow::Result<Modu
 /// Reload a universe module from disk (for hot-reload during development).
 pub fn reload_universe(path: &str) -> anyhow::Result<LoadedUniverse> {
     load_module(path)
+}
+
+/// Create an object and place it at the player's current location when one is set.
+pub async fn create_at_location<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    type_name: &str,
+    base_name: &str,
+    owner: ObjectId,
+    location: Option<&ObjectId>,
+    anatomy: &AnatomyRegistry,
+) -> anyhow::Result<Object> {
+    let mut obj = match type_name {
+        "player" => factory.create_player(base_name, owner.clone(), anatomy).await?,
+        "item" => factory.create_item(base_name, owner.clone()).await?,
+        "container" => {
+            factory
+                .create_container(base_name, owner.clone(), 10, true)
+                .await?
+        }
+        _ => factory.create(type_name, base_name, owner).await?,
+    };
+
+    if let Some(loc_id) = location {
+        obj.location = Some(loc_id.clone());
+        factory.persistence().save_object(&obj).await?;
+    }
+
+    Ok(obj)
+}
+
+/// Pick up a visible item from the current location into the player's hand slots.
+pub fn take_from_location(
+    player_id: &ObjectId,
+    location_id: Option<&ObjectId>,
+    item_name: &str,
+    objects: &mut HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+) -> Result<String, InventoryError> {
+    let mut ctx = InventoryContext {
+        player_id,
+        room_id: location_id,
+        objects,
+        anatomy,
+    };
+    take_item(&mut ctx, item_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::display::{Describable, DisplayContext, DisplayMode};
+    use crate::inventory::describe_carried;
+    use crate::persistence::SqlitePersistence;
+
+    async fn test_factory() -> ObjectFactory<SqlitePersistence> {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        ObjectFactory::new(persistence)
+    }
+
+    fn test_anatomy() -> AnatomyRegistry {
+        load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone()
+    }
+
+    fn make_area(id: &str, name: &str, desc: &str, owner: ObjectId) -> Object {
+        let mut area = Object {
+            id: ObjectId::new(id),
+            name: name.to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+        };
+        area.add_property(crate::object::Property {
+            name: "description".to_string(),
+            value: crate::object::Value::String(desc.to_string()),
+            permissions: crate::object::PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+        area
+    }
+
+    #[tokio::test]
+    async fn create_item_placed_at_current_location() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+        let area = make_area(
+            "area:the-void-001",
+            "The Void",
+            "A featureless void.",
+            owner.clone(),
+        );
+
+        let boots = create_at_location(
+            &factory,
+            "item",
+            "boots",
+            owner.clone(),
+            Some(&area_id),
+            &anatomy,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(boots.location.as_ref(), Some(&area_id));
+        assert_eq!(boots.object_type(), "item");
+
+        let loaded = factory.load_object(&boots.id).await.unwrap().unwrap();
+        assert_eq!(loaded.location.as_ref(), Some(&area_id));
+
+        let mut objects = HashMap::new();
+        objects.insert(area_id.clone(), area);
+        objects.insert(boots.id.clone(), boots);
+
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player).with_objects(objects.clone());
+        let output = objects.get(&area_id).unwrap().describe(&ctx);
+        assert!(output.contains("boots"));
+        assert!(output.contains("You see:"));
+    }
+
+    #[tokio::test]
+    async fn take_item_from_area_into_hand() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+
+        let mut player = factory
+            .create_player("hero", owner.clone(), &anatomy)
+            .await
+            .unwrap();
+        player.location = Some(area_id.clone());
+
+        let mut boots = create_at_location(
+            &factory,
+            "item",
+            "boots",
+            owner.clone(),
+            Some(&area_id),
+            &anatomy,
+        )
+        .await
+        .unwrap();
+        boots.name = "Boots".to_string();
+
+        let area = make_area(
+            "area:the-void-001",
+            "The Void",
+            "A featureless void.",
+            owner.clone(),
+        );
+
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player.clone());
+        objects.insert(area_id.clone(), area);
+        objects.insert(boots.id.clone(), boots);
+
+        let msg = take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy)
+            .unwrap();
+        assert_eq!(msg, "You take the Boots.");
+
+        let player = objects.get(&owner).unwrap();
+        assert!(
+            player.body_slot_item("left_hand").is_some()
+                || player.body_slot_item("right_hand").is_some()
+        );
+
+        let carried = describe_carried(player, &objects, &anatomy);
+        assert!(carried.contains("Boots"));
+    }
+
+    #[tokio::test]
+    async fn take_fails_when_item_not_visible() {
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+        let mut objects = HashMap::new();
+
+        let err = take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy)
+            .unwrap_err();
+        assert_eq!(err, InventoryError::NotFound("boots".to_string()));
+    }
+
+    #[tokio::test]
+    async fn take_fails_when_hands_full() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+
+        let mut player = factory
+            .create_player("hero", owner.clone(), &anatomy)
+            .await
+            .unwrap();
+        player.location = Some(area_id.clone());
+
+        let mut sword = factory.create_item("sword", owner.clone()).await.unwrap();
+        sword.name = "Sword".to_string();
+        sword.set_property_string("hand_slot", "both");
+        sword.location = Some(area_id.clone());
+
+        let mut axe = factory.create_item("axe", owner.clone()).await.unwrap();
+        axe.name = "Axe".to_string();
+        axe.location = Some(area_id.clone());
+
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player);
+        objects.insert(sword.id.clone(), sword);
+        objects.insert(axe.id.clone(), axe);
+
+        take_from_location(&owner, Some(&area_id), "sword", &mut objects, &anatomy).unwrap();
+        let err = take_from_location(&owner, Some(&area_id), "axe", &mut objects, &anatomy)
+            .unwrap_err();
+        assert_eq!(err, InventoryError::HandsFull);
+    }
 }

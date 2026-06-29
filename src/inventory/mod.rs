@@ -863,6 +863,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn take_item_from_area_location() {
+        let (_factory, anatomy, player_id, _, mut objects) = setup_world().await;
+        let area_id = ObjectId::new("area:void-001");
+        let mut area = objects
+            .values()
+            .find(|o| o.name == "Test Room")
+            .unwrap()
+            .clone();
+        area.id = area_id.clone();
+
+        if let Some(player) = objects.get_mut(&player_id) {
+            player.location = Some(area_id.clone());
+        }
+        for obj in objects.values_mut() {
+            if obj.location.as_ref() == Some(&ObjectId::new("room:test-001")) {
+                obj.location = Some(area_id.clone());
+            }
+        }
+        objects.insert(area_id.clone(), area);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&area_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, "coin").unwrap();
+        let player = objects.get(&player_id).unwrap();
+        assert!(
+            player.body_slot_item("left_hand").is_some()
+                || player.body_slot_item("right_hand").is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn take_item_to_hand() {
         let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 

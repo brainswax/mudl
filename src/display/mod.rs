@@ -154,6 +154,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn describe_area_lists_ground_items() {
+        let factory = test_factory().await;
+        let owner = ObjectId::new("player:admin-001");
+        let area_id = ObjectId::new("area:the-void-001");
+        let mut area = make_room(
+            "area:the-void-001",
+            "The Void",
+            "A featureless void.",
+            owner.clone(),
+        );
+        area.add_exit("north", ObjectId::new("area:passage-001"));
+
+        let mut boots = factory
+            .create("item", "boots", owner.clone())
+            .await
+            .unwrap();
+        boots.name = "Boots".to_string();
+        boots.location = Some(area_id.clone());
+
+        let mut objects = HashMap::new();
+        objects.insert(area.id.clone(), area.clone());
+        objects.insert(boots.id.clone(), boots);
+
+        let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let output = area.describe(&ctx);
+
+        assert!(output.contains("The Void"));
+        assert!(output.contains("featureless void"));
+        assert!(output.contains("Obvious exits: north"));
+        assert!(output.contains("You see: Boots"));
+    }
+
+    #[tokio::test]
     async fn describe_room_player_mode() {
         let factory = test_factory().await;
         let owner = ObjectId::new("player:admin-001");
