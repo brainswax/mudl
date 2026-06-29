@@ -60,6 +60,13 @@ Type `help` at the prompt to see the list of commands at any time.
 | `examine [target]` (`x`) | Builder view with IDs, properties, and verbs     | `examine room:central-hub-001`       |
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
 | `go <dir>`               | Move in a direction from the current room        | `go north`                           |
+| `inventory` (`i`)        | Show hands, pockets, worn containers, and contents | `i`                                |
+| `get` / `take <item>`    | Pick up an item from the room                    | `take coin`                          |
+| `drop <item>`            | Drop a carried item into the room                | `drop coin`                          |
+| `put <item> in <container>` | Stow a carried item in a container            | `put coin in wallet`                 |
+| `remove <item> from <container>` | Take an item out of a container          | `remove coin from wallet`            |
+| `wield <item>`           | Hold or wield an item in your hand(s)             | `wield sword`                        |
+| `wear <item>`            | Wear a container or garment                      | `wear backpack`                      |
 | `add_prop <id> <name> <value>` | Add (or overwrite) a string property on an object | `add_prop room:cozy-kitchen-001 description "A warm and inviting kitchen."` |
 | `add_verb <id> <name> <code>` | Add a verb (with code) to an object            | `add_verb room:cozy-kitchen-001 bake "say('You bake some bread!')"` |
 | `load <id>`              | Load an object from the database into the cache  | `load room:cozy-kitchen-001`         |
@@ -81,7 +88,27 @@ The REPL uses three display modes from the presentation layer:
 | `examine` / `x` | Builder | Owner, location, properties, verbs, exit targets, contents with IDs |
 | `@dump` | Debug | Full JSON serialization of the object |
 
-**Target resolution:** Commands accept an optional target. Omit the target to use your current location. Use `here` explicitly, a friendly name (e.g. `Daisy`), an alias, or a full object ID.
+**Target resolution:** Commands accept an optional target. Omit the target to use your current location. Use `here` explicitly, `self` / `me` for your player, a friendly name (e.g. `Daisy`), an alias, or a full object ID.
+
+### Inventory
+
+Players start with empty pockets (capacity 5). Items can be:
+
+- **In pockets** — small, pocketable items (`is_pocketable: true`)
+- **In hands** — left hand, right hand, or wielded two-handed (`hand_slot: left`, `right`, or `both`)
+- **Worn** — wearable containers like backpacks (`is_wearable: true`, `is_container: true`)
+- **Inside containers** — nested via each container's `contents` list
+
+Use `look self` to see a natural-language summary of what you're carrying. Use `inventory` for a structured listing.
+
+Factory helpers for testing:
+
+```text
+create item coin          # pocketable item (default)
+create item sword         # then: add_prop ... hand_slot right, is_pocketable false
+```
+
+Containers are created via the factory's `create_container` API in code; in the REPL you can mark items with `is_container`, `capacity`, and `is_wearable` properties.
 
 ## Usage Examples
 
@@ -135,7 +162,35 @@ Verbs:
 }
 ```
 
-### 5. Create and inspect an item
+### 5. Look at yourself and check inventory
+
+```
+> look self
+Admin
+You are empty-handed.
+> inventory
+You are carrying:
+  nothing
+```
+
+### 6. Pick up, wear, and stow items
+
+```
+> create item coin
+Created: coin (item:coin-001)
+> add_prop item:coin-001 description "A shiny gold coin."
+Property added.
+> take coin
+You take the coin.
+> look self
+Admin
+You are carrying a coin (in your pocket).
+> inventory
+You are carrying:
+  [pocket] coin
+```
+
+### 7. Create and inspect an item
 
 ```
 > create item daisy
@@ -149,7 +204,7 @@ Verbs:
   (none)
 ```
 
-### 6. Add a property and look at it
+### 8. Add a property and look at it
 
 ```
 > add_prop item:daisy-001 description "A cheerful yellow flower."
@@ -169,6 +224,8 @@ A cheerful yellow flower.
   - Saves the new object immediately.
 
 - **Display Layer**: `look`, `examine`, and `@dump` route through the `Describable` trait with `DisplayMode::Player`, `DisplayMode::Builder`, and debug dump respectively. The REPL loads all known objects to resolve room contents and name-based targets.
+
+- **Inventory Layer**: `get`, `drop`, `put`, `remove`, `wield`, and `wear` route through `src/core/inventory.rs`. Inventory state is stored as object properties (`pockets`, `left_hand`, `right_hand`, `worn`, `contents`, `carried_slot`) and serializes cleanly via the existing SQLite persistence.
 
 - **Persistence Layer**: The REPL uses `SqlitePersistence` (an implementation of the `Persistence` trait). This handles:
   - Saving and loading full `Object` structs as JSON in SQLite.

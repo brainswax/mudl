@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use bitflags::bitflags;
 
 use super::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
+use super::inventory::describe_carried;
 use super::persistence::Persistence;
 
 bitflags! {
@@ -176,6 +177,34 @@ impl<P: Persistence> ObjectFactory<P> {
         Self { persistence }
     }
 
+    pub async fn create_player(&self, base_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
+        let mut player = self.create("player", base_name, owner).await?;
+        player.name = base_name.to_string();
+        player.init_inventory();
+        self.persistence.save_object(&player).await?;
+        Ok(player)
+    }
+
+    pub async fn create_item(&self, base_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
+        let mut item = self.create("item", base_name, owner).await?;
+        item.init_item_defaults(true);
+        self.persistence.save_object(&item).await?;
+        Ok(item)
+    }
+
+    pub async fn create_container(
+        &self,
+        base_name: &str,
+        owner: ObjectId,
+        capacity: u32,
+        wearable: bool,
+    ) -> anyhow::Result<Object> {
+        let mut container = self.create("item", base_name, owner).await?;
+        container.init_container_defaults(capacity, wearable);
+        self.persistence.save_object(&container).await?;
+        Ok(container)
+    }
+
     pub async fn create(
         &self,
         type_name: &str,
@@ -299,7 +328,7 @@ impl<P: Persistence> ObjectFactory<P> {
         }
 
         if self.load_object(&owner).await?.is_none() {
-            let mut player = self.create("player", "admin", owner.clone()).await?;
+            let mut player = self.create_player("admin", owner.clone()).await?;
             player.name = "Admin".to_string();
             if let Some(start_base) = &starting_location {
                 if let Some(start_id) = name_to_id.get(start_base) {
@@ -538,10 +567,13 @@ fn describe_room_player(obj: &Object, ctx: &DisplayContext) -> String {
     lines.join("\n")
 }
 
-fn describe_entity_player(obj: &Object) -> String {
+fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
     let mut lines = vec![obj.name.clone()];
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
+    }
+    if obj.object_type() == "player" && obj.id == ctx.observer {
+        lines.push(describe_carried(obj, &ctx.objects));
     }
     lines.join("\n")
 }
@@ -612,7 +644,7 @@ impl Describable for Object {
             DisplayMode::Builder => self.describe_detailed(ctx),
             DisplayMode::Player => match self.object_type() {
                 "room" => describe_room_player(self, ctx),
-                _ => describe_entity_player(self),
+                _ => describe_entity_player(self, ctx),
             },
         }
     }

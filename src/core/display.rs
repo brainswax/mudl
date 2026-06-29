@@ -76,12 +76,17 @@ pub trait Describable {
 pub fn resolve_target(
     name: &str,
     current_location: Option<&ObjectId>,
+    observer: Option<&ObjectId>,
     objects: &HashMap<ObjectId, Object>,
 ) -> Option<ObjectId> {
     let needle = name.to_lowercase();
 
     if needle == "here" {
         return current_location.cloned();
+    }
+
+    if needle == "self" || needle == "me" {
+        return observer.cloned();
     }
 
     let id = ObjectId::new(name);
@@ -212,14 +217,19 @@ mod tests {
         objects.insert(room_id.clone(), room);
 
         assert_eq!(
-            resolve_target("here", Some(&room_id), &objects),
+            resolve_target("here", Some(&room_id), Some(&room_id), &objects),
             Some(room_id.clone())
         );
         assert_eq!(
-            resolve_target("South Garden", None, &objects),
-            Some(room_id)
+            resolve_target("South Garden", None, None, &objects),
+            Some(room_id.clone())
         );
-        assert_eq!(resolve_target("missing", None, &objects), None);
+        assert_eq!(resolve_target("missing", None, None, &objects), None);
+        let player_id = ObjectId::new("player:admin-001");
+        assert_eq!(
+            resolve_target("self", None, Some(&player_id), &objects),
+            Some(player_id)
+        );
     }
 
     #[test]

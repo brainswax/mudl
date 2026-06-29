@@ -205,6 +205,26 @@ Implementations:
 - **Player/Thing**: name + description, owner info in Builder mode
 - Default fallback to property-based rendering.
 
+## Inventory
+
+Players and containers track carried items via properties (serialized with Serde):
+
+| Property | On | Type | Purpose |
+|----------|-----|------|---------|
+| `pockets` | player | List\<ObjectRef\> | Pocketable items |
+| `pocket_capacity` | player | Int | Max pocket slots (default 5) |
+| `left_hand` / `right_hand` | player | ObjectRef | Items held or wielded |
+| `worn` | player | List\<ObjectRef\> | Worn containers (backpack, etc.) |
+| `contents` | container | List\<ObjectRef\> | Items inside a container |
+| `capacity` | container | Int | Max items the container holds |
+| `carried_slot` | item | String | `pocket`, `left_hand`, `right_hand`, `worn` |
+| `is_pocketable` | item | Bool | Fits in pockets |
+| `is_wearable` | item | Bool | Can be worn |
+| `is_container` | item | Bool | Holds other items |
+| `hand_slot` | item | String | `left`, `right`, or `both` |
+
+Factory helpers: `create_player`, `create_item`, `create_container`. Inventory operations live in `src/core/inventory.rs`.
+
 ## Persistence Notes
 - Use ObjectFactory for creation.
 - Serialize full objects for Debug; store key display fields for efficiency.
