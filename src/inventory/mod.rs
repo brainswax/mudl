@@ -743,7 +743,52 @@ fn any_wear_slots_occupied(player: &Object, plan: &BodyPlan) -> bool {
         .any(|slot| player.body_slot_item(&slot.name).is_some())
 }
 
-fn describe_grasp(player: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
+struct HeldInGrasp {
+    slot_name: String,
+    slot: String,
+    item_name: String,
+}
+
+fn grasp_slot_sort_key(name: &str) -> u8 {
+    match name {
+        "right_hand" => 0,
+        "left_hand" => 1,
+        _ => 2,
+    }
+}
+
+fn grasp_held_items(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    plan: &BodyPlan,
+) -> Vec<HeldInGrasp> {
+    let mut held = Vec::new();
+    for slot in plan.grasp_slots() {
+        if let Some(item_id) = player.body_slot_item(&slot.name) {
+            if let Some(obj) = objects.get(&item_id) {
+                if obj.is_active() {
+                    held.push(HeldInGrasp {
+                        slot_name: slot.name.clone(),
+                        slot: slot_display_name(&slot.name),
+                        item_name: obj.name.clone(),
+                    });
+                }
+            }
+        }
+    }
+    held.sort_by(|a, b| {
+        grasp_slot_sort_key(&a.slot_name)
+            .cmp(&grasp_slot_sort_key(&b.slot_name))
+            .then(a.slot_name.cmp(&b.slot_name))
+    });
+    held
+}
+
+fn describe_grasp(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    plan: &BodyPlan,
+) -> Option<String> {
     let left = player.body_slot_item("left_hand");
     let right = player.body_slot_item("right_hand");
 
@@ -757,25 +802,25 @@ fn describe_grasp(player: &Object, objects: &HashMap<ObjectId, Object>) -> Optio
         }
     }
 
-    if let Some(right_id) = right {
-        if left.as_ref() != Some(&right_id) {
-            if let Some(obj) = objects.get(&right_id) {
-                if obj.is_active() {
-                    return Some(format!("You are holding {} in your right hand.", obj.name));
-                }
+    let held = grasp_held_items(player, objects, plan);
+    match held.len() {
+        0 => None,
+        1 => Some(format!(
+            "You are holding {} in your {}.",
+            held[0].item_name, held[0].slot
+        )),
+        2 => Some(format!(
+            "You are holding {} in your {} and {} in your {}.",
+            held[0].item_name, held[0].slot, held[1].item_name, held[1].slot
+        )),
+        _ => {
+            let mut lines = vec!["You are holding:".to_string()];
+            for entry in held {
+                lines.push(format!("  - {} in your {}", entry.item_name, entry.slot));
             }
+            Some(lines.join("\n"))
         }
     }
-
-    if let Some(left_id) = left {
-        if let Some(obj) = objects.get(&left_id) {
-            if obj.is_active() {
-                return Some(format!("You are holding {} in your left hand.", obj.name));
-            }
-        }
-    }
-
-    None
 }
 
 /// Natural-language summary of what a player is carrying (for look self).
@@ -792,12 +837,12 @@ pub fn describe_carried(
     };
 
     let naked = !any_wear_slots_occupied(player, plan);
-    let grasp = describe_grasp(player, objects);
+    let grasp = describe_grasp(player, objects, plan);
 
     match (naked, grasp) {
         (true, None) => "You are completely naked and empty-handed.".to_string(),
-        (true, Some(g)) => g,
         (false, None) => "You are wearing clothing.".to_string(),
+        (true, Some(g)) => format!("You are completely naked.\n{g}"),
         (false, Some(g)) => g,
     }
 }
@@ -1063,6 +1108,48 @@ mod tests {
         let desc = describe_carried(player, &objects, &anatomy);
         assert!(desc.contains("Rusty Sword"));
         assert!(desc.contains("right hand"));
+    }
+
+    #[tokio::test]
+    async fn describe_carried_lists_both_hands() {
+        let (factory, anatomy, player_id, room_id, mut objects) = minimal_take_world().await;
+
+        let mut rusty = factory
+            .create_named("sword", "rusty-sword", "Rusty Sword", player_id.clone())
+            .await
+            .unwrap();
+        rusty.location = Some(room_id.clone());
+
+        let mut wooden = factory
+            .create_named("sword", "wooden-sword", "Wooden Sword", player_id.clone())
+            .await
+            .unwrap();
+        wooden.location = Some(room_id.clone());
+
+        objects.insert(rusty.id.clone(), rusty);
+        objects.insert(wooden.id.clone(), wooden);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, "rusty").unwrap();
+        take_item(&mut ctx, "wooden").unwrap();
+
+        let player = objects.get(&player_id).unwrap();
+        let carried = describe_carried(player, &objects, &anatomy);
+        assert!(carried.contains("You are completely naked."));
+        assert!(carried.contains("Rusty Sword"));
+        assert!(carried.contains("Wooden Sword"));
+        assert!(carried.contains("right hand"));
+        assert!(carried.contains("left hand"));
+
+        let inv = describe_inventory(player, &objects, &anatomy);
+        assert!(inv.contains("[right hand] Rusty Sword"));
+        assert!(inv.contains("[left hand] Wooden Sword"));
     }
 
     async fn minimal_take_world() -> (

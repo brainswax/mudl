@@ -133,7 +133,7 @@ Admin
 You are holding Rusty Sword in your right hand.
 ```
 
-Use `inventory` for a structured slot listing. Pockets will arrive later via clothing items.
+Use `inventory` for a structured slot listing. `look self` uses the same slot data and lists every occupied hand (e.g. both hands when carrying two one-handed items). Pockets will arrive later via clothing items.
 
 ## Usage Examples
 
