@@ -33,19 +33,17 @@ Or run the built binary directly:
 ./target/debug/repl
 ```
 
-When it starts, you will see:
+When it starts, you will see a minimal welcome:
 
-```
-MUDL REPL starting...
-Using database: repl.db
-Default owner: player:admin-001
+```text
+Welcome to MUDL.
 Type 'help' for commands.
-Bootstrapping default world if needed...
-Bootstrap complete. Starting at: room:the-void-001
 >
 ```
 
-The REPL creates (or opens) a file called `repl.db` in the current directory for SQLite storage.
+Bootstrap, database paths, module loading, and object counts are logged via `tracing` (set `RUST_LOG=info` to see them on stderr). They are intentionally hidden from the interactive prompt so play stays immersive.
+
+The REPL creates (or opens) a SQLite database (`repl.db` by default, or `DATABASE_URL` from `.env`) for persistence.
 
 By default it loads `modules/default/universe.mudl` and bootstraps the `default_world` (naked human, starter rooms). Override with:
 
@@ -65,9 +63,9 @@ Type `help` at the prompt to see the list of commands at any time.
 |--------------------------|--------------------------------------------------|--------------------------------------|
 | `help`                   | Show the list of available commands              | `help`                               |
 | `create <type> <name...>` | Create a new object at your current location  | `create sword Rusty Sword`           |
-| `list`                   | Show all objects currently in the session cache  | `list`                               |
+| `list`                   | Builder: names in session working memory         | `list`                               |
 | `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
-| `examine [target]` (`x`) | Builder view with IDs, properties, and verbs     | `examine room:central-hub-001`       |
+| `examine [target]` (`x`) | Builder view: properties, verbs, named exits     | `examine`, `examine daisy`           |
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
 | `go <dir>`               | Move in a direction from the current room        | `go north`                           |
 | `inventory` (`i`)        | Show hands, pockets, worn containers, and contents | `i`                                |
@@ -88,19 +86,21 @@ Type `help` at the prompt to see the list of commands at any time.
 | `exit` or `quit`         | Exit the REPL                                    | `exit`                               |
 
 **Notes on commands:**
-- Object IDs follow the `type:base-name-counter` format (e.g. `room:cozy-kitchen-001`).
+- Object IDs follow the `type:base-name-counter` format internally (e.g. `room:cozy-kitchen-001`). Player commands never print them.
 - Most commands that modify objects will automatically save changes to the database.
 - The REPL keeps a small in-memory cache of objects you've recently created or loaded.
 
-### Display Modes
+### Output Philosophy
 
-The REPL uses three display modes from the presentation layer:
+MUDL aims for **MOO-like immersion**: player commands speak in narrative prose; builder commands stay contextual but avoid raw struct dumps; only debug commands expose engine internals.
 
 | Command | Mode | What you see |
 |---------|------|--------------|
-| `look` / `l` | Player | Name, description, obvious exits, visible contents — no internal IDs |
-| `examine` / `x` | Builder | Owner, location, properties, verbs, exit targets, contents with IDs |
-| `@dump` | Debug | Full JSON serialization of the object |
+| `look` / `l`, `take`, `create`, `go`, `inventory`, … | **Player** | Immersive text — names, descriptions, exits, natural inventory. No IDs. |
+| `examine` / `x`, `add_prop`, `add_verb`, `load`, `save`, `list`, … | **Builder** | Contextual detail — owner (as *you* or a name), properties, verbs, exits as place names |
+| `@dump` | **Debug** | Full JSON serialization of the object |
+
+Technical bootstrap and persistence events log to stderr when `RUST_LOG=info` (or higher). See [LANGUAGE.md](../LANGUAGE.md#player-facing-output) for the full output model and future MUDL customization hooks.
 
 **Target resolution:** Commands accept an optional target. Omit the target to use your current location. Use `here` explicitly, `self` / `me` for your player, a friendly name (e.g. `Daisy`), an alias, or a full object ID.
 
@@ -121,19 +121,24 @@ Example output:
 
 ```text
 > create sword Rusty Sword
-Created: Rusty Sword (sword:rusty-sword-001) at area:the-void-001
+You forge a Rusty Sword, and it clatters to the ground in The Void.
 > look
 The Void
 You are in a featureless void.
 You see: Rusty Sword
 > take rusty sword
-You take the Rusty Sword.
+You pick up the Rusty Sword.
 > look self
 Admin
+You are completely naked.
 You are holding Rusty Sword in your right hand.
+> inventory
+You are completely naked.
+You are carrying:
+  Rusty Sword — in your right hand
 ```
 
-Use `inventory` for a structured slot listing. `look self` uses the same slot data and lists every occupied hand (e.g. both hands when carrying two one-handed items). Pockets will arrive later via clothing items.
+`look self` summarizes what you carry in natural language. `inventory` lists each item with its body slot. Pockets will arrive later via clothing items.
 
 ## Usage Examples
 
@@ -153,7 +158,7 @@ Obvious exits: north
 
 ```
 > go north
-You go north.
+You head north.
 > l
 North Passage
 A narrow passage leading north from the void.
@@ -165,16 +170,19 @@ Obvious exits: north, south
 
 ```
 > examine
-North Passage [room:north-passage-001]
-Owner: player:admin-001
-Description: A narrow passage leading north from the void.
-Exits: north -> room:central-hub-001, south -> room:the-void-001
+North Passage
+Owner: you
+A narrow passage leading north from the void.
+Exits: north to Central Hub, south to The Void
+Present: Admin
 Properties:
-  description = A narrow passage leading north from the void.
-  exits = {north: room:central-hub-001, south: room:the-void-001}
+  description: A narrow passage leading north from the void.
+  exits: {north: North Passage, south: The Void}
 Verbs:
   (none)
 ```
+
+Builder `examine` resolves exit targets and owners to display names — no raw IDs unless you `@dump`.
 
 ### 4. Debug dump
 
@@ -195,20 +203,20 @@ Admin
 You are completely naked and empty-handed.
 > inventory
 You are completely naked.
-  empty-handed
+Your hands are empty.
 ```
 
 ### 6. Pick up and wield items
 
 ```
 > create item sword
-Created: sword (item:sword-001)
+You conjure a sword, and it settles onto the ground in The Void.
 > add_prop item:sword-001 description "A rusty old blade."
-Property added.
+You inscribe "description" upon sword.
 > add_prop item:sword-001 hand_slot right
-Property added.
+You inscribe "hand_slot" upon sword.
 > take sword
-You take the sword.
+You pick up the sword.
 > look self
 Admin
 You are holding sword in your right hand.
@@ -218,10 +226,10 @@ You are holding sword in your right hand.
 
 ```
 > create item daisy
-Created: daisy (item:daisy-001)
+You conjure a daisy, and it settles onto the ground in The Void.
 > examine daisy
-daisy [item:daisy-001]
-Owner: player:admin-001
+daisy
+Owner: you
 Properties:
   (none)
 Verbs:
@@ -232,7 +240,7 @@ Verbs:
 
 ```
 > add_prop item:daisy-001 description "A cheerful yellow flower."
-Property added.
+You inscribe "description" upon daisy.
 > look daisy
 daisy
 A cheerful yellow flower.
@@ -247,7 +255,7 @@ A cheerful yellow flower.
   - Builds a fresh `Object` with default values.
   - Saves the new object immediately.
 
-- **Display Layer**: `look`, `examine`, and `@dump` route through the `Describable` trait with `DisplayMode::Player`, `DisplayMode::Builder`, and debug dump respectively. The REPL loads all known objects to resolve room contents and name-based targets.
+- **Display Layer**: `look`, `examine`, and `@dump` route through the `Describable` trait with `DisplayMode::Player`, `DisplayMode::Builder`, and debug dump respectively. Command feedback (`create`, `go`, `add_prop`, …) uses `display::narrative` for MOO-style messages. The REPL loads all known objects to resolve room contents and name-based targets.
 
 - **Inventory Layer**: `get`/`take`, `drop`, `put`, `remove`, `wield`, and `wear` route through `src/inventory/` via `take_from_location()` in `src/command/`. Inventory state is stored as object properties (`body_slots`, `contents`, `carried_slot`) and serializes cleanly via the existing SQLite persistence.
 
@@ -263,7 +271,7 @@ This design keeps the REPL thin while demonstrating how the real system will use
 ## Tips for Experimentation
 
 - You can create different types: `create item silver-sword`, `create npc old-mage`, etc.
-- Use friendly names with `look` and `examine`; use full IDs or `@dump` when you need precision.
+- Use friendly names with `look` and `examine`; use `@dump` or `RUST_LOG=info` when you need internal IDs and persistence detail.
 - Changes are saved automatically in most cases, but you can explicitly use `save` if needed.
 - The database file `repl.db` can be deleted to start fresh.
 - All objects and state changes (inventory, location, created items) persist in SQLite. On restart the REPL hydrates the full world from the database and restores your location from the player object.

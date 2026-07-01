@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan};
+use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{Object, ObjectId, PermissionFlags, Property, Value};
 
 /// Errors returned by inventory operations.
@@ -479,7 +479,7 @@ pub fn take_item(
     let plan = player_body_plan(&player, ctx.anatomy)?;
     place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
 
-    Ok(format!("You take the {}.", item.name))
+    Ok(format!("You pick up the {}.", item.name))
 }
 
 pub fn drop_item(
@@ -864,7 +864,7 @@ pub fn describe_inventory(
         lines.push("You are completely naked.".to_string());
     }
 
-    let mut empty = true;
+    let mut entries = Vec::new();
     let slots = player.body_slots();
     let mut slot_names: Vec<String> = slots.keys().cloned().collect();
     slot_names.sort_unstable();
@@ -875,23 +875,31 @@ pub fn describe_inventory(
                 if !obj.is_active() {
                     continue;
                 }
-                empty = false;
                 let left = player.body_slot_item("left_hand");
                 let right = player.body_slot_item("right_hand");
-                let label = if slot.as_str() == "left_hand"
+                let placement = if slot.as_str() == "left_hand"
                     && right.as_ref() == Some(item_id)
                     && left.as_ref() == Some(item_id)
                 {
-                    "wielded".to_string()
+                    "wielded in both hands".to_string()
+                } else if plan
+                    .as_ref()
+                    .and_then(|p| p.slot(slot))
+                    .is_some_and(|s| s.slot_type == SlotType::Wear)
+                {
+                    format!("worn on your {}", slot_display_name(slot))
                 } else {
-                    slot_display_name(slot)
+                    format!("in your {}", slot_display_name(slot))
                 };
-                lines.push(format!("  [{label}] {}", obj.name));
+                entries.push(format!("  {} — {}", obj.name, placement));
 
                 if obj.is_container() {
                     for inner_id in obj.container_contents() {
                         if let Some(inner) = objects.get(&inner_id) {
-                            lines.push(format!("    inside {}: {}", obj.name, inner.name));
+                            entries.push(format!(
+                                "    {} — inside your {}",
+                                inner.name, obj.name
+                            ));
                         }
                     }
                 }
@@ -899,8 +907,11 @@ pub fn describe_inventory(
         }
     }
 
-    if empty {
-        lines.push("  empty-handed".to_string());
+    if entries.is_empty() {
+        lines.push("Your hands are empty.".to_string());
+    } else {
+        lines.push("You are carrying:".to_string());
+        lines.extend(entries);
     }
 
     lines.join("\n")
@@ -1148,8 +1159,8 @@ mod tests {
         assert!(carried.contains("left hand"));
 
         let inv = describe_inventory(player, &objects, &anatomy);
-        assert!(inv.contains("[right hand] Rusty Sword"));
-        assert!(inv.contains("[left hand] Wooden Sword"));
+        assert!(inv.contains("Rusty Sword — in your right hand"));
+        assert!(inv.contains("Wooden Sword — in your left hand"));
     }
 
     async fn minimal_take_world() -> (
@@ -1257,8 +1268,8 @@ mod tests {
         assert!(player.body_slot_item("right_hand").is_some());
 
         let inv = describe_inventory(player, &objects, &anatomy);
-        assert!(inv.contains("[left hand]"));
-        assert!(inv.contains("[right hand]"));
+        assert!(inv.contains("in your left hand"));
+        assert!(inv.contains("in your right hand"));
     }
 
     #[tokio::test]

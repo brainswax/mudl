@@ -149,7 +149,7 @@ pub async fn soft_delete_object<P: Persistence>(
     obj.soft_delete();
     persistence.save_object(&obj).await?;
     objects.insert(id.clone(), obj);
-    Ok(format!("Soft-deleted {name} ({id})."))
+    Ok(crate::display::narrate_soft_delete(&name))
 }
 
 /// Restore a soft-deleted object by ID (wizard).
@@ -169,14 +169,16 @@ pub async fn undelete_object<P: Persistence>(
     obj.undelete();
     persistence.save_object(&obj).await?;
     objects.insert(id.clone(), obj);
-    Ok(format!("Restored {name} ({id})."))
+    Ok(crate::display::narrate_restore(&name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::object::slugify_display_name;
-    use crate::display::{Describable, DisplayContext, DisplayMode};
+    use crate::display::{
+        narrate_create, Describable, DisplayContext, DisplayMode,
+    };
     use crate::inventory::describe_carried;
     use crate::persistence::SqlitePersistence;
     use crate::world::hydrate_world;
@@ -345,7 +347,7 @@ mod tests {
 
         let msg = take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy)
             .unwrap();
-        assert_eq!(msg, "You take the Boots.");
+        assert_eq!(msg, "You pick up the Boots.");
 
         let player = objects.get(&owner).unwrap();
         assert!(
@@ -450,6 +452,66 @@ mod tests {
         let restored = hydrate_world(&persistence).await.unwrap();
         assert!(restored.contains_key(&boots.id));
         assert!(restored.get(&boots.id).unwrap().is_active());
+    }
+
+    #[tokio::test]
+    async fn immersive_create_take_look_self_flow() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+        let area = make_area(
+            "area:the-void-001",
+            "The Void",
+            "A featureless void.",
+            owner.clone(),
+        );
+
+        let mut player = factory
+            .create_player("hero", owner.clone(), &anatomy)
+            .await
+            .unwrap();
+        player.location = Some(area_id.clone());
+
+        let sword = create_at_location(
+            &factory,
+            "sword",
+            "Rusty Sword",
+            owner.clone(),
+            Some(&area_id),
+            &anatomy,
+        )
+        .await
+        .unwrap();
+
+        let create_msg = narrate_create(&sword, Some(&area));
+        assert!(create_msg.contains("Rusty Sword"));
+        assert!(create_msg.contains("The Void"));
+        assert!(!create_msg.contains(':'));
+
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player.clone());
+        objects.insert(area_id.clone(), area);
+        objects.insert(sword.id.clone(), sword.clone());
+
+        let take_msg =
+            take_from_location(&owner, Some(&area_id), "rusty sword", &mut objects, &anatomy)
+                .unwrap();
+        assert!(take_msg.contains("Rusty Sword"));
+        assert!(!take_msg.contains(':'));
+
+        let player = objects.get(&owner).unwrap();
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_objects(objects.clone())
+            .with_anatomy(anatomy.clone());
+        let look_self = player.describe(&ctx);
+        assert!(look_self.contains("Rusty Sword"));
+        assert!(!look_self.contains("sword:rusty-sword"));
+        assert!(!look_self.contains("player:hero"));
+
+        let inventory = describe_carried(player, &objects, &anatomy);
+        assert!(inventory.contains("Rusty Sword"));
+        assert!(!inventory.contains(':'));
     }
 
     #[tokio::test]

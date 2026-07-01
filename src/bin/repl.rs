@@ -9,13 +9,21 @@ use mudl::command::{
     undelete_object,
 };
 use mudl::world::restore_session;
-use mudl::display::{resolve_target, Describable, DisplayContext, DisplayMode};
+use mudl::display::{
+    narrate_create, narrate_go, narrate_module_bundled,
+    narrate_module_reloaded, narrate_no_exit, narrate_no_location, narrate_no_location_builder,
+    narrate_loaded, narrate_not_in_cache, narrate_property_added, narrate_saved,
+    narrate_target_not_found,
+    narrate_verb_added, narrate_wizard_not_found, resolve_target, Describable, DisplayContext,
+    DisplayMode,
+};
 use mudl::inventory::{
     describe_inventory, drop_item, put_item, remove_item, wear_item, wield_item, InventoryContext,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
 use mudl::persistence::{Persistence, SqlitePersistence};
+use tracing::{error, info, warn};
 
 async fn load_all_objects(
     persistence: &SqlitePersistence,
@@ -64,6 +72,22 @@ async fn save_all_objects(
     persist_inventory_changes(persistence, objects).await
 }
 
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+}
+
+fn location_object<'a>(
+    loc_id: &ObjectId,
+    objects: &'a HashMap<ObjectId, Object>,
+) -> Option<&'a Object> {
+    objects.get(loc_id)
+}
+
 fn render_object(obj: &Object, ctx: &DisplayContext, detailed: bool, debug: bool) {
     let output = if debug {
         obj.dump()
@@ -78,9 +102,11 @@ fn render_object(obj: &Object, ctx: &DisplayContext, detailed: bool, debug: bool
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv::dotenv().ok();
+    init_tracing();
+
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "repl.db".to_string());
 
-    println!("MUDL REPL starting...");
+    info!("MUDL REPL starting");
     let persistence = SqlitePersistence::new(&db_url).await?;
     let factory = ObjectFactory::new(persistence.clone());
     let mut cache: HashMap<ObjectId, Object> = HashMap::new();
@@ -88,12 +114,10 @@ async fn main() -> Result<()> {
         std::env::var("DEFAULT_PLAYER").unwrap_or_else(|_| "player:admin-001".to_string()),
     );
 
-    println!("Using database: {}", db_url);
-    println!("Default owner: {}", default_owner);
-    println!("Type 'help' for commands.");
+    info!(database = %db_url, player = %default_owner, "session configuration");
 
     let module_dir = default_module_dir();
-    println!("Loading module: {}", module_dir.display());
+    info!(module = %module_dir.display(), "loading universe module");
 
     let mut loaded_universe: LoadedUniverse = reload_universe(
         module_dir
@@ -103,26 +127,26 @@ async fn main() -> Result<()> {
     let active_world = loaded_universe.active_world()?;
     let mut active_anatomy = active_world.anatomy.clone();
     if active_anatomy.creature("human").is_some() {
-        println!(
-            "Loaded universe '{}' / world '{}' ({} sources, human creature)",
-            loaded_universe.name,
-            active_world.name,
-            active_world.sources.len()
+        info!(
+            universe = %loaded_universe.name,
+            world = %active_world.name,
+            sources = active_world.sources.len(),
+            "universe loaded"
         );
     } else {
-        println!("Warning: human creature definition not found in active world");
+        warn!("human creature definition not found in active world");
     }
 
-    println!("Bootstrapping world if needed...");
     let mut current_location: Option<ObjectId> = None;
     match bootstrap_active_universe(&factory, default_owner.clone()).await {
         Ok((universe, loc_id)) => {
             loaded_universe = universe;
             active_anatomy = loaded_universe.active_world()?.anatomy.clone();
-            current_location = Some(loc_id);
+            current_location = Some(loc_id.clone());
+            info!(location = %loc_id, "world bootstrapped");
         }
         Err(e) => {
-            println!("Warning: Bootstrap failed: {}", e);
+            warn!(error = %e, "bootstrap failed");
         }
     }
 
@@ -136,18 +160,19 @@ async fn main() -> Result<()> {
         Ok(session) => {
             cache = session.objects;
             current_location = session.current_location;
-            println!(
-                "Restored {} object(s) from database.",
-                cache.len()
+            info!(
+                objects = cache.len(),
+                location = ?current_location,
+                "session restored"
             );
-            if let Some(loc_id) = &current_location {
-                println!("Current location: {}", loc_id);
-            }
         }
         Err(e) => {
-            println!("Warning: Failed to restore session: {}", e);
+            warn!(error = %e, "failed to restore session");
         }
     }
+
+    println!("Welcome to MUDL.");
+    println!("Type 'help' for commands.");
 
     let mut rl = DefaultEditor::new()?;
     let history_path = if let Ok(home) = std::env::var("HOME") {
@@ -230,28 +255,35 @@ async fn main() -> Result<()> {
                         .await
                         {
                             Ok(obj) => {
-                                if current_location.is_some() {
-                                    println!(
-                                        "Created: {} ({}) at {}",
-                                        &obj.name,
-                                        &obj.id,
-                                        obj.location.as_ref().unwrap()
-                                    );
-                                } else {
-                                    println!("Created: {} ({})", &obj.name, &obj.id);
-                                }
+                                info!(
+                                    id = %obj.id,
+                                    name = %obj.name,
+                                    location = ?obj.location,
+                                    "object created"
+                                );
+                                let objects = load_all_objects(&persistence, &cache).await?;
+                                let loc = obj
+                                    .location
+                                    .as_ref()
+                                    .and_then(|id| location_object(id, &objects));
+                                println!("{}", narrate_create(&obj, loc));
                                 cache.insert(obj.id.clone(), obj);
                             }
-                            Err(e) => println!("Error creating: {}", e),
+                            Err(e) => {
+                                error!(error = %e, "create failed");
+                                println!("Your conjuration fizzles.");
+                            }
                         }
                     }
                     "list" => {
                         if cache.is_empty() {
-                            println!("No objects in cache. Use 'load' or 'create'.");
+                            println!("Your working memory is empty.");
                         } else {
-                            println!("Cached objects:");
+                            let names: Vec<String> =
+                                cache.values().map(|obj| obj.name.clone()).collect();
+                            println!("You recall: {}", names.join(", "));
                             for (id, obj) in &cache {
-                                println!("  {} - {}", id, obj.name);
+                                info!(id = %id, name = %obj.name, "cached object");
                             }
                         }
                     }
@@ -274,16 +306,19 @@ async fn main() -> Result<()> {
                                         .with_anatomy(active_anatomy.clone());
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, false, false);
+                                } else if let Some(target) = parts.get(1) {
+                                    println!("{}", narrate_target_not_found(target));
                                 } else {
-                                    println!("Object not found: {}", id);
+                                    println!("{}", narrate_no_location());
                                 }
                             }
                             Ok(None) => {
-                                println!(
-                                    "No current location. Use 'look <target>' or 'look here'."
-                                );
+                                println!("{}", narrate_no_location());
                             }
-                            Err(e) => println!("Error: {}", e),
+                            Err(e) => {
+                                error!(error = %e, "look failed");
+                                println!("Something stirs in the void, but you cannot make sense of it.");
+                            }
                         }
                     }
                     "examine" | "x" => {
@@ -307,16 +342,23 @@ async fn main() -> Result<()> {
                                 .with_anatomy(active_anatomy.clone());
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, true, false);
+                                } else if let Some(target) = parts.get(1) {
+                                    println!("{}", narrate_target_not_found(target));
                                 } else {
-                                    println!("Object not found: {}", id);
+                                    println!("{}", narrate_no_location_builder(
+                                        "Try 'examine <target>' or 'examine here'."
+                                    ));
                                 }
                             }
                             Ok(None) => {
-                                println!(
-                                    "No current location. Use 'examine <target>' or 'examine here'."
-                                );
+                                println!("{}", narrate_no_location_builder(
+                                    "Try 'examine <target>' or 'examine here'."
+                                ));
                             }
-                            Err(e) => println!("Error: {}", e),
+                            Err(e) => {
+                                error!(error = %e, "examine failed");
+                                println!("The details elude you for now.");
+                            }
                         }
                     }
                     "@dump" => {
@@ -333,14 +375,23 @@ async fn main() -> Result<()> {
                             Ok(Some(id)) => {
                                 if let Some(obj) = cache.get(&id) {
                                     println!("{}", obj.dump());
+                                } else if let Some(target) = parts.get(1) {
+                                    println!("{}", narrate_target_not_found(target));
                                 } else {
-                                    println!("Object not found: {}", id);
+                                    println!("{}", narrate_no_location_builder(
+                                        "Use '@dump <target>'."
+                                    ));
                                 }
                             }
                             Ok(None) => {
-                                println!("No current location. Use '@dump <target>'.");
+                                println!("{}", narrate_no_location_builder(
+                                    "Use '@dump <target>'."
+                                ));
                             }
-                            Err(e) => println!("Error: {}", e),
+                            Err(e) => {
+                                error!(error = %e, "@dump failed");
+                                println!("The underlying structure remains hidden.");
+                            }
                         }
                     }
                     "@delete" => {
@@ -359,9 +410,12 @@ async fn main() -> Result<()> {
                             Some(id) => match soft_delete_object(&persistence, &id, &mut cache).await
                             {
                                 Ok(msg) => println!("{msg}"),
-                                Err(e) => println!("Error: {e}"),
+                                Err(e) => {
+                                    error!(error = %e, "soft delete failed");
+                                    println!("The unraveling fails — something resists.");
+                                }
                             },
-                            None => println!("No such object."),
+                            None => println!("{}", narrate_wizard_not_found()),
                         }
                     }
                     "@undelete" => {
@@ -372,7 +426,10 @@ async fn main() -> Result<()> {
                         let id = ObjectId::new(parts[1]);
                         match undelete_object(&persistence, &id, &mut cache).await {
                             Ok(msg) => println!("{msg}"),
-                            Err(e) => println!("Error: {e}"),
+                            Err(e) => {
+                                error!(error = %e, id = %id, "undelete failed");
+                                println!("Restoration fails — the threads won't reweave.");
+                            }
                         }
                     }
                     "inventory" | "i" => {
@@ -384,7 +441,7 @@ async fn main() -> Result<()> {
                         {
                             println!("{}", describe_inventory(&player, &objects, &active_anatomy));
                         } else {
-                            println!("Player not found.");
+                            println!("You seem to have lost yourself.");
                         }
                     }
                     "get" | "take" => {
@@ -511,14 +568,21 @@ async fn main() -> Result<()> {
                                         active_anatomy =
                                             loaded_universe.active_world()?.anatomy.clone();
                                         let world = loaded_universe.active_world()?;
-                                        println!(
-                                            "Reloaded universe '{}' / world '{}' ({} sources)",
-                                            loaded_universe.name,
-                                            world.name,
-                                            world.sources.len()
+                                        info!(
+                                            universe = %loaded_universe.name,
+                                            world = %world.name,
+                                            sources = world.sources.len(),
+                                            "module reloaded"
                                         );
+                                        println!("{}", narrate_module_reloaded(
+                                            &loaded_universe.name,
+                                            &world.name,
+                                        ));
                                     }
-                                    Err(e) => println!("Error: {}", e),
+                                    Err(e) => {
+                                        error!(error = %e, "module reload failed");
+                                        println!("Reality refuses to reload.");
+                                    }
                                 }
                             }
                             "bundle" => {
@@ -533,14 +597,25 @@ async fn main() -> Result<()> {
                                     out,
                                 ) {
                                     Ok(manifest) => {
-                                        println!(
-                                            "Bundled module '{}' to {} ({} files)",
-                                            manifest.name,
-                                            out,
-                                            manifest.files.len()
+                                        let module_path = module_path
+                                            .to_str()
+                                            .unwrap_or("modules/default");
+                                        info!(
+                                            module = %manifest.name,
+                                            output = %out,
+                                            files = manifest.files.len(),
+                                            "module bundled"
                                         );
+                                        println!("{}", narrate_module_bundled(
+                                            module_path,
+                                            out,
+                                            manifest.files.len(),
+                                        ));
                                     }
-                                    Err(e) => println!("Error: {}", e),
+                                    Err(e) => {
+                                        error!(error = %e, "module bundle failed");
+                                        println!("The bundle will not hold together.");
+                                    }
                                 }
                             }
                             other => println!("Unknown module command: {other}"),
@@ -584,11 +659,12 @@ async fn main() -> Result<()> {
                                         o
                                     }
                                     Ok(None) => {
-                                        println!("Current location not found.");
+                                        println!("The ground shifts beneath you — you are nowhere.");
                                         continue;
                                     }
                                     Err(e) => {
-                                        println!("Error loading location: {}", e);
+                                        error!(error = %e, "failed to load location");
+                                        println!("The ground shifts beneath you — you are nowhere.");
                                         continue;
                                     }
                                 }
@@ -601,20 +677,22 @@ async fn main() -> Result<()> {
                                     match persistence.load_object(&default_owner).await {
                                         Ok(Some(o)) => o,
                                         Ok(None) => {
-                                            println!("Player not found.");
+                                            println!("You seem to have lost yourself.");
                                             continue;
                                         }
                                         Err(e) => {
-                                            println!("Error loading player: {}", e);
+                                            error!(error = %e, "failed to load player");
+                                            println!("You seem to have lost yourself.");
                                             continue;
                                         }
                                     }
                                 };
                                 player.location = Some(target_id.clone());
                                 if let Err(e) = persistence.save_object(&player).await {
-                                    println!("Error saving player location: {}", e);
+                                    error!(error = %e, "failed to save player location");
+                                    println!("You try to move, but something holds you in place.");
                                 } else {
-                                    println!("You go {}.", dir);
+                                    println!("{}", narrate_go(dir));
                                     current_location = Some(target_id.clone());
                                 }
                                 cache.insert(default_owner.clone(), player);
@@ -623,10 +701,10 @@ async fn main() -> Result<()> {
                                     cache.insert(target_id.clone(), new_loc);
                                 }
                             } else {
-                                println!("There is no exit {}.", dir);
+                                println!("{}", narrate_no_exit(dir));
                             }
                         } else {
-                            println!("No current location set. Use 'look' or bootstrap.");
+                            println!("{}", narrate_no_location());
                         }
                     }
                     "add_prop" => {
@@ -643,26 +721,28 @@ async fn main() -> Result<()> {
                             match persistence.load_object(&id).await {
                                 Ok(Some(o)) => o,
                                 Ok(None) => {
-                                    println!("Object not found: {}", id);
+                                    println!("{}", narrate_wizard_not_found());
                                     continue;
                                 }
                                 Err(e) => {
-                                    println!("Error: {}", e);
+                                    error!(error = %e, id = %id, "add_prop load failed");
+                                    println!("You cannot reach that object to inscribe it.");
                                     continue;
                                 }
                             }
                         };
                         let prop = Property {
-                            name: prop_name,
+                            name: prop_name.clone(),
                             value: Value::String(value_str),
                             permissions: PermissionFlags::OWNER,
                             behavior: None,
                         };
                         obj.add_property(prop);
                         if let Err(e) = persistence.save_object(&obj).await {
-                            println!("Error saving: {}", e);
+                            error!(error = %e, "add_prop save failed");
+                            println!("The inscription fades before it can take hold.");
                         } else {
-                            println!("Property added.");
+                            println!("{}", narrate_property_added(&obj, &prop_name));
                         }
                         cache.insert(id, obj);
                     }
@@ -680,25 +760,27 @@ async fn main() -> Result<()> {
                             match persistence.load_object(&id).await {
                                 Ok(Some(o)) => o,
                                 Ok(None) => {
-                                    println!("Object not found: {}", id);
+                                    println!("{}", narrate_wizard_not_found());
                                     continue;
                                 }
                                 Err(e) => {
-                                    println!("Error: {}", e);
+                                    error!(error = %e, id = %id, "add_verb load failed");
+                                    println!("You cannot reach that object to teach it.");
                                     continue;
                                 }
                             }
                         };
                         let verb = Verb {
-                            name: verb_name,
+                            name: verb_name.clone(),
                             code,
                             permissions: PermissionFlags::OWNER,
                         };
                         obj.add_verb(verb);
                         if let Err(e) = persistence.save_object(&obj).await {
-                            println!("Error saving: {}", e);
+                            error!(error = %e, "add_verb save failed");
+                            println!("The lesson slips away before it sticks.");
                         } else {
-                            println!("Verb added.");
+                            println!("{}", narrate_verb_added(&obj, &verb_name));
                         }
                         cache.insert(id, obj);
                     }
@@ -710,8 +792,9 @@ async fn main() -> Result<()> {
                         let id = ObjectId::new(parts[1]);
                         match persistence.load_object(&id).await {
                             Ok(Some(obj)) => {
+                                info!(id = %id, name = %obj.name, "object loaded into session");
                                 cache.insert(id.clone(), obj.clone());
-                                println!("Loaded.");
+                                println!("{}", narrate_loaded(&obj.name));
                                 let objects = load_all_objects(&persistence, &cache).await?;
                                 let ctx = DisplayContext::new(
                                     default_owner.clone(),
@@ -721,8 +804,11 @@ async fn main() -> Result<()> {
                                 .with_anatomy(active_anatomy.clone());
                                 render_object(&obj, &ctx, true, false);
                             }
-                            Ok(None) => println!("Not found: {}", id),
-                            Err(e) => println!("Error: {}", e),
+                            Ok(None) => println!("{}", narrate_wizard_not_found()),
+                            Err(e) => {
+                                error!(error = %e, id = %id, "load failed");
+                                println!("That memory refuses to surface.");
+                            }
                         }
                     }
                     "save" => {
@@ -732,12 +818,19 @@ async fn main() -> Result<()> {
                         }
                         let id = ObjectId::new(parts[1]);
                         if let Some(obj) = cache.get(&id) {
+                            let name = obj.name.clone();
                             match persistence.save_object(obj).await {
-                                Ok(()) => println!("Saved {}", id),
-                                Err(e) => println!("Error: {}", e),
+                                Ok(()) => {
+                                    info!(id = %id, name = %name, "object saved");
+                                    println!("{}", narrate_saved(&name));
+                                }
+                                Err(e) => {
+                                    error!(error = %e, id = %id, "save failed");
+                                    println!("The archive rejects your commit.");
+                                }
                             }
                         } else {
-                            println!("Object not in cache. Use load first.");
+                            println!("{}", narrate_not_in_cache());
                         }
                     }
                     "exit" | "quit" => {

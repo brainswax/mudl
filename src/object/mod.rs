@@ -477,28 +477,8 @@ impl Object {
     }
 }
 
-fn format_value(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Int(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::ObjectRef(id) => id.to_string(),
-        Value::List(items) => format!(
-            "[{}]",
-            items
-                .iter()
-                .map(format_value)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Value::Map(map) => {
-            let pairs: Vec<String> = map
-                .iter()
-                .map(|(k, v)| format!("{}: {}", k, format_value(v)))
-                .collect();
-            format!("{{{}}}", pairs.join(", "))
-        }
-    }
+fn format_value(value: &Value, objects: &HashMap<ObjectId, Object>) -> String {
+    crate::display::format_property_value(value, objects)
 }
 
 fn format_exits_player(exits: &HashMap<String, ObjectId>) -> String {
@@ -535,7 +515,7 @@ fn format_contents_player(obj: &Object, ctx: &DisplayContext) -> String {
     }
 }
 
-fn format_properties_builder(obj: &Object) -> String {
+fn format_properties_builder(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
     if obj.properties.is_empty() {
         return "  (none)".to_string();
     }
@@ -545,7 +525,11 @@ fn format_properties_builder(obj: &Object) -> String {
         .into_iter()
         .map(|name| {
             let prop = &obj.properties[name];
-            format!("  {} = {}", name, format_value(&prop.value))
+            format!(
+                "  {}: {}",
+                name,
+                format_value(&prop.value, objects)
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -601,13 +585,15 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
 }
 
 fn describe_room_builder(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![
-        format!("{} [{}]", obj.name, obj.id),
-        format!("Owner: {}", obj.owner),
-    ];
+    let mut lines = vec![obj.name.clone()];
+
+    lines.push(format!(
+        "Owner: {}",
+        crate::display::owner_label(&obj.owner, &ctx.observer, &ctx.objects)
+    ));
 
     if let Some(desc) = obj.get_description() {
-        lines.push(format!("Description: {}", desc));
+        lines.push(desc);
     }
 
     let exits = obj.get_exits();
@@ -616,7 +602,13 @@ fn describe_room_builder(obj: &Object, ctx: &DisplayContext) -> String {
         dirs.sort_unstable();
         let exit_list: Vec<String> = dirs
             .into_iter()
-            .map(|dir| format!("{} -> {}", dir, exits[dir]))
+            .map(|dir| {
+                format!(
+                    "{} to {}",
+                    dir,
+                    crate::display::object_name(&exits[dir], &ctx.objects)
+                )
+            })
             .collect();
         lines.push(format!("Exits: {}", exit_list.join(", ")));
     }
@@ -624,35 +616,40 @@ fn describe_room_builder(obj: &Object, ctx: &DisplayContext) -> String {
     let contents: Vec<String> = obj
         .contents(&ctx.objects)
         .into_iter()
-        .map(|item| format!("{} [{}]", item.name, item.id))
+        .map(|item| item.name.clone())
         .collect();
     if !contents.is_empty() {
-        lines.push(format!("Contents: {}", contents.join(", ")));
+        lines.push(format!("Present: {}", contents.join(", ")));
     }
 
     lines.push("Properties:".to_string());
-    lines.push(format_properties_builder(obj));
+    lines.push(format_properties_builder(obj, &ctx.objects));
     lines.push("Verbs:".to_string());
     lines.push(format_verbs_builder(obj));
 
     lines.join("\n")
 }
 
-fn describe_entity_builder(obj: &Object) -> String {
-    let mut lines = vec![
-        format!("{} [{}]", obj.name, obj.id),
-        format!("Owner: {}", obj.owner),
-    ];
+fn describe_entity_builder(obj: &Object, ctx: &DisplayContext) -> String {
+    let mut lines = vec![obj.name.clone()];
+
+    lines.push(format!(
+        "Owner: {}",
+        crate::display::owner_label(&obj.owner, &ctx.observer, &ctx.objects)
+    ));
 
     if let Some(loc) = &obj.location {
-        lines.push(format!("Location: {}", loc));
+        lines.push(format!(
+            "Location: {}",
+            crate::display::location_label(loc, &ctx.objects)
+        ));
     }
     if let Some(desc) = obj.get_description() {
-        lines.push(format!("Description: {}", desc));
+        lines.push(desc);
     }
 
     lines.push("Properties:".to_string());
-    lines.push(format_properties_builder(obj));
+    lines.push(format_properties_builder(obj, &ctx.objects));
     lines.push("Verbs:".to_string());
     lines.push(format_verbs_builder(obj));
 
@@ -678,7 +675,7 @@ impl Describable for Object {
         if self.is_location() {
             describe_room_builder(self, ctx)
         } else {
-            describe_entity_builder(self)
+            describe_entity_builder(self, ctx)
         }
     }
 

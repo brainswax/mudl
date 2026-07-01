@@ -69,17 +69,12 @@ make run-repl
 On startup you should see something like:
 
 ```text
-MUDL REPL starting...
-Using database: repl.db
-Default owner: player:admin-001
+Welcome to MUDL.
 Type 'help' for commands.
-Loading module: modules/default
-Loaded universe 'default' / world 'default_world' (6 sources, human creature)
-Bootstrapping world if needed...
-Restored 5 object(s) from database.
-Current location: area:the-void-001
 >
 ```
+
+Bootstrap, database paths, and module loading log to stderr when `RUST_LOG=info` — they stay off the prompt so play stays immersive.
 
 The REPL loads `modules/default/universe.mudl`, bootstraps `default_world` if the database is empty, and places you in **The Void** as a naked human with no starting gear.
 
@@ -107,7 +102,7 @@ You are in a featureless void. This is the starting point for new players.
 Exits: north
 
 > create item "shiny pebble"
-Created: shiny pebble (item:shiny-pebble-00a) at area:the-void-001
+You conjure a shiny pebble, and it settles onto the ground in The Void.
 
 > take pebble
 You pick up the shiny pebble.
@@ -115,10 +110,10 @@ You pick up the shiny pebble.
 > i
 You are completely naked.
 You are carrying:
-  shiny pebble (in left_hand)
+  shiny pebble — in your left hand
 
 > go north
-You go north.
+You head north.
 
 > look
 North Passage

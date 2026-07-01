@@ -4,6 +4,16 @@ use std::collections::HashMap;
 use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
 
+pub mod narrative;
+pub use narrative::{
+    format_property_value, location_label, narrate_create, narrate_create_builder,
+    narrate_go, narrate_module_bundled, narrate_module_reloaded, narrate_no_exit,
+    narrate_loaded, narrate_no_location, narrate_no_location_builder, narrate_not_in_cache,
+    narrate_property_added, narrate_restore, narrate_saved, narrate_soft_delete,
+    narrate_target_not_found,
+    narrate_verb_added, narrate_wizard_not_found, object_name, owner_label,
+};
+
 /// How an object should be rendered for a given command/audience.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DisplayMode {
@@ -236,12 +246,15 @@ mod tests {
             owner.clone(),
         );
 
-        let ctx = DisplayContext::new(owner, DisplayMode::Builder).with_objects(HashMap::new());
+        let mut objects = HashMap::new();
+        objects.insert(room.id.clone(), room.clone());
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Builder).with_objects(objects);
         let output = room.describe_detailed(&ctx);
 
-        assert!(output.contains("room:garden-001"));
-        assert!(output.contains("Owner: player:admin-001"));
-        assert!(output.contains("description"));
+        assert!(output.contains("South Garden"));
+        assert!(output.contains("Owner: you"));
+        assert!(!output.contains("room:garden-001"));
+        assert!(!output.contains("player:admin-001"));
     }
 
     #[tokio::test]
@@ -344,11 +357,14 @@ mod tests {
             permissions: PermissionFlags::EVERYONE,
         });
 
-        let ctx = DisplayContext::new(owner, DisplayMode::Builder);
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player.clone());
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Builder).with_objects(objects);
         let output = player.describe_detailed(&ctx);
 
-        assert!(output.contains("player:admin-001"));
-        assert!(output.contains("Owner:"));
+        assert!(output.contains("Admin"));
+        assert!(output.contains("Owner: you"));
         assert!(output.contains("wave"));
+        assert!(!output.contains("player:admin-001"));
     }
 }
