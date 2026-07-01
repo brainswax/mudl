@@ -202,27 +202,55 @@ exits:
   north: north-passage
 ```
 
+## Player-Facing Output
+
+MUDL separates **what the world knows** from **what players read**. The engine tracks stable object IDs, types, and JSON state internally; frontends render MOO-style narrative text.
+
+### Three display tiers
+
+| Tier | Audience | Commands | Shows |
+|------|----------|----------|-------|
+| **Player** | Everyone playing | `look`, `take`, `create`, `go`, `inventory`, … | Immersive prose only — names, descriptions, exits, natural inventory |
+| **Builder** | World authors | `examine`, `add_prop`, `add_verb`, `load`, `save`, … | Contextual detail — owners, properties, verbs, exit *names* (not raw IDs) |
+| **Debug** | Engine developers | `@dump`, logs (`RUST_LOG`) | Full JSON, IDs, persistence paths, bootstrap diagnostics |
+
+**Rules:**
+
+- Player commands never print raw IDs, type prefixes, or struct dumps.
+- Builder feedback uses in-world phrasing where possible (`You weave … into being`, `You inscribe … upon …`) while remaining informative.
+- Technical details go to `tracing` logs, not the REPL prompt or future IRC channel.
+- Future MUDL verbs may override default messages per object or command via properties / event hooks.
+
+### Example session (player tier)
+
+```text
+> create sword Rusty Sword
+You forge a Rusty Sword, and it clatters to the ground in The Void.
+> look
+The Void
+You are in a featureless void.
+You see: Rusty Sword
+> take rusty sword
+You pick up the Rusty Sword.
+> look self
+Admin
+You are completely naked.
+You are holding Rusty Sword in your right hand.
+> inventory
+You are completely naked.
+You are carrying:
+  Rusty Sword — in your right hand
+```
+
+Object IDs still exist internally (`Rusty Sword` → `sword:rusty-sword-001`); use `@dump` or `RUST_LOG=info` when you need them.
+
 ## Items and Inventory (REPL)
 
 Items are objects with `location` set to a place or player. The REPL supports basic pickup:
 
-```
-> create sword Rusty Sword
-Created: Rusty Sword (sword:rusty-sword-001) at area:the-void-001
-> look
-The Void
-...
-You see: Rusty Sword
-> take rusty sword
-You take the Rusty Sword.
-> look self
-Admin
-You are holding Rusty Sword in your right hand.
-```
-
 - `create <type> <name...>` — everything after the type is the display name (spaces allowed). Quoted names work: `create sword "Rusty Sword"`.
 - Object IDs use lowercase hyphenated slugs derived from the name (`Rusty Sword` → `sword:rusty-sword-001`). Display names keep original capitalization.
-- `create` places new objects at the player's current location when one is set.
+- `create` places new objects at your current location when one is set.
 - `take` / `get` moves items from the ground in your current location into grasp slots. Items you already carry are ignored when resolving the target, so `take sword` picks up a ground sword even if you're holding another.
 - Items may set `hand_slot` to `left`, `right`, or `both` (two-handed).
 
