@@ -4,9 +4,9 @@ use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
-    bootstrap_active_universe, create_at_location, create_at_location_with_options, package_module,
-    parse_create_args, parse_create_options, persist_inventory_changes, reload_universe,
-    soft_delete_object, take_from_location, undelete_object,
+    bootstrap_active_universe, create_at_location_with_options, package_module,
+    parse_create_command, persist_inventory_changes, reload_universe, soft_delete_object,
+    take_from_location, undelete_object,
 };
 use mudl::display::{
     narrate_create, narrate_go, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
@@ -239,73 +239,22 @@ async fn main() -> Result<()> {
                         );
                         println!("  exit                        - quit");
                     }
-                    "@create" => {
-                        let rest = input.trim().strip_prefix("@create").unwrap_or("").trim();
-                        let segments: Vec<&str> = rest.split_whitespace().collect();
-                        if segments.len() < 2 {
-                            println!("Usage: @create <type> <name...> [capacity=N] [max_weight=N]");
-                            continue;
-                        }
-                        let type_name = segments[0].to_ascii_lowercase();
-                        let opt_start = segments.iter().position(|s| s.contains('='));
-                        let (name_tokens, opt_tokens) = if let Some(idx) = opt_start {
-                            (&segments[1..idx], &segments[idx..])
-                        } else {
-                            (&segments[1..], &[] as &[&str])
-                        };
-                        let display_name = if name_tokens.len() == 1 {
-                            name_tokens[0].trim_matches('"').to_string()
-                        } else {
-                            name_tokens.join(" ")
-                        };
-                        let options = parse_create_options(opt_tokens);
-                        match create_at_location_with_options(
-                            &factory,
-                            &type_name,
-                            &display_name,
-                            default_owner.clone(),
-                            current_location.as_ref(),
-                            &active_anatomy,
-                            options,
-                        )
-                        .await
-                        {
-                            Ok(obj) => {
-                                info!(
-                                    id = %obj.id,
-                                    name = %obj.name,
-                                    roles = ?obj.roles(),
-                                    "wizard object created"
-                                );
-                                let objects = load_all_objects(&persistence, &cache).await?;
-                                let loc = obj
-                                    .location
-                                    .as_ref()
-                                    .and_then(|id| location_object(id, &objects));
-                                println!("{}", narrate_create(&obj, loc));
-                                cache.insert(obj.id.clone(), obj);
-                            }
-                            Err(e) => {
-                                error!(error = %e, "wizard create failed");
-                                println!("Your conjuration fizzles.");
-                            }
-                        }
-                    }
-                    "create" => {
-                        let (type_name, display_name) = match parse_create_args(&parts, input) {
+                    "@create" | "create" => {
+                        let parsed = match parse_create_command(input) {
                             Ok(parsed) => parsed,
                             Err(e) => {
                                 println!("{e}");
                                 continue;
                             }
                         };
-                        match create_at_location(
+                        match create_at_location_with_options(
                             &factory,
-                            &type_name,
-                            &display_name,
+                            &parsed.type_name,
+                            &parsed.display_name,
                             default_owner.clone(),
                             current_location.as_ref(),
                             &active_anatomy,
+                            parsed.options,
                         )
                         .await
                         {
@@ -314,6 +263,7 @@ async fn main() -> Result<()> {
                                     id = %obj.id,
                                     name = %obj.name,
                                     location = ?obj.location,
+                                    roles = ?obj.roles(),
                                     "object created"
                                 );
                                 let objects = load_all_objects(&persistence, &cache).await?;

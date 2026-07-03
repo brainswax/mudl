@@ -96,6 +96,9 @@ pub struct Object {
     pub deleted_at: Option<String>,
 }
 
+/// Maximum length of the name segment in generated object IDs.
+pub const ID_BASE_MAX_LEN: usize = 16;
+
 /// Convert a display name into a lowercase hyphenated slug for object IDs.
 pub fn slugify_display_name(name: &str) -> String {
     let mut slug = String::new();
@@ -119,9 +122,35 @@ pub fn slugify_display_name(name: &str) -> String {
     }
 }
 
+/// Truncate a slug to [`ID_BASE_MAX_LEN`] on a char boundary.
+pub fn constrain_id_base(slug: &str) -> String {
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        return "object".to_string();
+    }
+    if slug.len() <= ID_BASE_MAX_LEN {
+        return slug.to_string();
+    }
+    let mut end = ID_BASE_MAX_LEN;
+    while end > 0 && !slug.is_char_boundary(end) {
+        end -= 1;
+    }
+    let trimmed = slug[..end].trim_end_matches('-');
+    if trimmed.is_empty() {
+        "object".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Slugify a display name and constrain it for use in object IDs.
+pub fn id_base_from_display_name(name: &str) -> String {
+    constrain_id_base(&slugify_display_name(name))
+}
+
 pub fn generate_object_id(obj_type: &str, base_name: &str, counter: u32) -> ObjectId {
     let ty = obj_type.to_ascii_lowercase();
-    let base = base_name.to_ascii_lowercase();
+    let base = constrain_id_base(&base_name.to_ascii_lowercase());
     ObjectId(format!("{ty}:{base}-{counter:03x}"))
 }
 
@@ -568,5 +597,21 @@ mod tests {
     fn generate_object_id_is_always_lowercase() {
         let id = generate_object_id("Sword", "Rusty-Sword", 1);
         assert_eq!(id.as_str(), "sword:rusty-sword-001");
+    }
+
+    #[test]
+    fn constrain_id_base_truncates_long_names() {
+        let long = slugify_display_name("extraordinarily-long-container-name");
+        assert!(long.len() > ID_BASE_MAX_LEN);
+        let base = constrain_id_base(&long);
+        assert!(base.len() <= ID_BASE_MAX_LEN);
+        assert_eq!(base, "extraordinarily");
+    }
+
+    #[test]
+    fn id_base_from_display_name_is_bounded() {
+        let base = id_base_from_display_name("Purse");
+        assert_eq!(base, "purse");
+        assert!(base.len() <= ID_BASE_MAX_LEN);
     }
 }

@@ -36,27 +36,112 @@ pub fn reload_universe(path: &str) -> anyhow::Result<LoadedUniverse> {
     load_module(path)
 }
 
-/// Parse `create <type> <name...>` supporting multi-word and quoted display names.
-pub fn parse_create_args(parts: &[&str], input: &str) -> anyhow::Result<(String, String)> {
-    if parts.len() < 3 {
-        anyhow::bail!("Usage: create <type> <name...>");
-    }
-    let type_name = parts[1].to_ascii_lowercase();
-    let rest = input
-        .trim()
+/// Parsed `create` / `@create` command: clean display name separate from role options.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedCreateCommand {
+    pub type_name: String,
+    pub display_name: String,
+    pub options: CreateOptions,
+}
+
+/// Whether a token is a `key=value` option (not part of the display name).
+pub fn is_option_token(token: &str) -> bool {
+    token.split_once('=').is_some_and(|(key, value)| {
+        !key.is_empty()
+            && !value.is_empty()
+            && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
+}
+
+/// Parse `create <type> <name...> [key=value...]` or `@create ...`.
+///
+/// Options (`capacity=3`, `max_weight=10`, etc.) are stripped from the display name.
+pub fn parse_create_command(input: &str) -> anyhow::Result<ParsedCreateCommand> {
+    let trimmed = input.trim();
+    let without_at = trimmed.strip_prefix('@').unwrap_or(trimmed);
+    let rest = without_at
         .strip_prefix("create")
-        .ok_or_else(|| anyhow::anyhow!("Usage: create <type> <name...>"))?
+        .ok_or_else(|| anyhow::anyhow!("Usage: create <type> <name...> [key=value...]"))?
         .trim_start();
-    let name_part = if let Some(stripped) = rest.strip_prefix(parts[1]) {
-        stripped.trim_start().to_string()
-    } else {
-        parts[2..].join(" ")
-    };
-    let display_name = parse_display_name(&name_part)?;
-    if display_name.is_empty() {
-        anyhow::bail!("Usage: create <type> <name...>");
+
+    if rest.is_empty() {
+        anyhow::bail!("Usage: create <type> <name...> [key=value...]");
     }
-    Ok((type_name, display_name))
+
+    let type_name = rest
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Usage: create <type> <name...>"))?
+        .to_ascii_lowercase();
+
+    let type_end = rest
+        .find(&type_name)
+        .ok_or_else(|| anyhow::anyhow!("Usage: create <type> <name...>"))?
+        + type_name.len();
+    let after_type = rest[type_end..].trim_start();
+
+    if after_type.is_empty() {
+        anyhow::bail!("Usage: create <type> <name...> [key=value...]");
+    }
+
+    let (display_name, option_tokens) = split_display_name_and_options(after_type)?;
+    if display_name.is_empty() {
+        anyhow::bail!("Usage: create <type> <name...> [key=value...]");
+    }
+
+    Ok(ParsedCreateCommand {
+        type_name,
+        display_name,
+        options: parse_create_options(&option_tokens),
+    })
+}
+
+/// Parse `create <type> <name...>` supporting multi-word and quoted display names.
+///
+/// Key=value options are stripped; use [`parse_create_command`] when options are needed.
+pub fn parse_create_args(parts: &[&str], input: &str) -> anyhow::Result<(String, String)> {
+    let _ = parts;
+    let parsed = parse_create_command(input)?;
+    Ok((parsed.type_name, parsed.display_name))
+}
+
+fn split_display_name_and_options(after_type: &str) -> anyhow::Result<(String, Vec<&str>)> {
+    if let Some((name, remainder)) = parse_leading_quoted_name(after_type) {
+        let opts: Vec<&str> = remainder
+            .split_whitespace()
+            .filter(|t| is_option_token(t))
+            .collect();
+        return Ok((name, opts));
+    }
+
+    let tokens: Vec<&str> = after_type.split_whitespace().collect();
+    let opt_idx = tokens.iter().position(|t| is_option_token(t));
+
+    match opt_idx {
+        None => Ok((parse_display_name(after_type)?, Vec::new())),
+        Some(idx) => {
+            let first_opt = tokens[idx];
+            let opt_byte = after_type
+                .find(first_opt)
+                .ok_or_else(|| anyhow::anyhow!("invalid create command"))?;
+            let name_raw = after_type[..opt_byte].trim();
+            let display_name = parse_display_name(name_raw)?;
+            Ok((display_name, tokens[idx..].to_vec()))
+        }
+    }
+}
+
+fn parse_leading_quoted_name(s: &str) -> Option<(String, &str)> {
+    let s = s.trim_start();
+    let quote = s.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let inner = &s[1..];
+    let end = inner.find(quote)?;
+    let name = inner[..end].to_string();
+    let remainder = inner[end + 1..].trim();
+    Some((name, remainder))
 }
 
 fn parse_display_name(raw: &str) -> anyhow::Result<String> {
@@ -76,7 +161,7 @@ fn parse_display_name(raw: &str) -> anyhow::Result<String> {
 }
 
 /// Optional wizard overrides for `@create` (capacity, weight limits, stack count, etc.).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CreateOptions {
     pub capacity: Option<u32>,
     pub max_weight: Option<i64>,
@@ -192,7 +277,7 @@ pub async fn create_at_location_with_options<P: Persistence>(
                 .await?
         }
         other => {
-            let slug = crate::object::slugify_display_name(display_name);
+            let slug = crate::object::id_base_from_display_name(display_name);
             let mut obj = factory
                 .create_named(other, &slug, display_name, owner)
                 .await?;
@@ -296,7 +381,7 @@ mod tests {
     use super::*;
     use crate::display::{narrate_create, Describable, DisplayContext, DisplayMode};
     use crate::inventory::describe_carried;
-    use crate::object::slugify_display_name;
+    use crate::object::{id_base_from_display_name, slugify_display_name};
     use crate::persistence::SqlitePersistence;
     use crate::world::hydrate_world;
 
@@ -336,6 +421,39 @@ mod tests {
             behavior: None,
         });
         area
+    }
+
+    #[test]
+    fn parse_create_command_strips_options_from_name() {
+        let parsed =
+            parse_create_command("create container purse capacity=3 max_weight=10").unwrap();
+        assert_eq!(parsed.type_name, "container");
+        assert_eq!(parsed.display_name, "purse");
+        assert_eq!(parsed.options.capacity, Some(3));
+        assert_eq!(parsed.options.max_weight, Some(10));
+    }
+
+    #[test]
+    fn parse_create_command_quoted_name_with_options() {
+        let parsed =
+            parse_create_command(r#"create container "Leather Bag" capacity=8 max_weight=40"#)
+                .unwrap();
+        assert_eq!(parsed.display_name, "Leather Bag");
+        assert_eq!(parsed.options.capacity, Some(8));
+    }
+
+    #[test]
+    fn parse_create_command_multi_word_name_without_options() {
+        let parsed = parse_create_command("create sword Rusty Sword").unwrap();
+        assert_eq!(parsed.type_name, "sword");
+        assert_eq!(parsed.display_name, "Rusty Sword");
+        assert_eq!(parsed.options, CreateOptions::default());
+    }
+
+    #[test]
+    fn id_base_from_display_name_truncates_long_names() {
+        let base = id_base_from_display_name("Extraordinarily Long Container Name");
+        assert!(base.len() <= crate::object::ID_BASE_MAX_LEN);
     }
 
     #[test]
@@ -638,6 +756,34 @@ mod tests {
         let inventory = describe_carried(player, &objects, &anatomy);
         assert!(inventory.contains("Rusty Sword"));
         assert!(!inventory.contains(':'));
+    }
+
+    #[tokio::test]
+    async fn create_container_with_params_uses_clean_name_and_id() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+
+        let parsed =
+            parse_create_command("create container purse capacity=3 max_weight=10").unwrap();
+        let purse = create_at_location_with_options(
+            &factory,
+            &parsed.type_name,
+            &parsed.display_name,
+            owner,
+            Some(&area_id),
+            &anatomy,
+            parsed.options,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(purse.name, "purse");
+        assert!(purse.id.as_str().starts_with("item:purse-"));
+        assert!(!purse.id.as_str().contains("capacity"));
+        assert_eq!(purse.container_capacity(), 3);
+        assert_eq!(purse.container_max_weight(), Some(10));
     }
 
     #[tokio::test]

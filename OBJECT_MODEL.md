@@ -137,11 +137,14 @@ Every object has a unique, immutable internal identifier.
 **Format**: `type:base-name-counter`
 
 - `type`: Category (room, item, npc, exit, player, abstract, etc.)
-- `base-name`: Human-readable name (lowercase, hyphenated)
+- `base-name`: Slug derived from the **display name only** (lowercase, hyphenated, max **16 characters**). Creation options (`capacity=3`, etc.) are never included.
 - `counter`: 3-digit hexadecimal (000–FFF). Automatically increments when duplicates are created. Extends to 4+ digits if needed.
+
+**Display name vs ID base**: `create container purse capacity=3` sets `name = "purse"` and generates `item:purse-001`. Role parameters are stored as properties, not appended to the name or ID.
 
 **Examples**:
 - `room:cozy-kitchen-001`
+- `item:purse-001` (from display name "purse")
 - `item:silver-sword-00a`
 - `npc:old-mage-0f3`
 - `exit:north-042`

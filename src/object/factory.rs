@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use crate::mudl::{AnatomyRegistry, PlayerTemplate};
 use crate::object::{
-    generate_object_id,
+    constrain_id_base, generate_object_id, id_base_from_display_name,
     roles::{ContainerSpec, StackableSpec, WearableSpec},
     slugify_display_name, Object, ObjectId, PermissionFlags,
 };
@@ -37,7 +37,7 @@ impl<P: Persistence> ObjectFactory<P> {
                 creature: "human".to_string(),
                 gender: "neutral".to_string(),
             });
-        let slug = slugify_display_name(display_name);
+        let slug = id_base_from_display_name(display_name);
         let mut player = self
             .create_named("player", &slug, display_name, owner)
             .await?;
@@ -47,7 +47,7 @@ impl<P: Persistence> ObjectFactory<P> {
     }
 
     pub async fn create_item(&self, display_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(display_name);
+        let slug = id_base_from_display_name(display_name);
         let mut item = self
             .create_named("item", &slug, display_name, owner)
             .await?;
@@ -89,7 +89,7 @@ impl<P: Persistence> ObjectFactory<P> {
         spec: ContainerSpec,
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(display_name);
+        let slug = id_base_from_display_name(display_name);
         let mut container = self
             .create_named("item", &slug, display_name, owner)
             .await?;
@@ -109,7 +109,7 @@ impl<P: Persistence> ObjectFactory<P> {
         spec: WearableSpec,
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(display_name);
+        let slug = id_base_from_display_name(display_name);
         let mut item = self
             .create_named("item", &slug, display_name, owner)
             .await?;
@@ -130,7 +130,7 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
         count: u32,
     ) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(display_name);
+        let slug = id_base_from_display_name(display_name);
         let mut item = self
             .create_named("item", &slug, display_name, owner)
             .await?;
@@ -159,7 +159,7 @@ impl<P: Persistence> ObjectFactory<P> {
     ) -> anyhow::Result<Vec<Object>> {
         let mut items = Vec::with_capacity(count as usize);
         for _ in 0..count.max(1) {
-            let slug = slugify_display_name(display_name);
+            let slug = id_base_from_display_name(display_name);
             let mut item = self
                 .create_named("item", &slug, display_name, owner.clone())
                 .await?;
@@ -209,7 +209,7 @@ impl<P: Persistence> ObjectFactory<P> {
         display_name: &str,
         owner: ObjectId,
     ) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(slug);
+        let slug = constrain_id_base(&slugify_display_name(slug));
         let type_name = type_name.to_ascii_lowercase();
         let counter = self
             .persistence

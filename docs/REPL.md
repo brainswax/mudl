@@ -114,7 +114,9 @@ Players spawn as **naked humans** from the active world's `creatures.mudl` (`@cr
 - **Inside containers** — nested via each container's `contents` list
 - **On the ground** — items with `location` set to your current area/room appear in `look` as `You see: …`
 
-`create <type> <name...>` places the new object at your current location (area, room, or any navigable place). Multi-word names are supported; IDs are lowercase slugs (`Rusty Sword` → `sword:rusty-sword-001`). Quote names if needed: `create sword "Rusty Sword"`.
+`create <type> <name...>` places the new object at your current location (area, room, or any navigable place). Multi-word names are supported; IDs are lowercase slugs capped at 16 characters (`Rusty Sword` → `sword:rusty-sword-001`). Quote names if needed: `create sword "Rusty Sword"`.
+
+Options are separate from the name: `create container purse capacity=3 max_weight=10` creates an object named **purse** with ID `item:purse-001`, not `purse capacity=3 max_weight=10`.
 
 `take` / `get` only search the ground in your current location — items already in your hands are ignored. One ground match takes silently; multiple ground matches prompt "Which X do you mean?".
 

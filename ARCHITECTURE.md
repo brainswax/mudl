@@ -182,7 +182,7 @@ The object model's prototype/parent system (`prototype: Option<ObjectId>`) is th
 
 ## Player Commands (REPL / MVP)
 
-- **`create <type> <name>`** — Creates an object via `ObjectFactory`. When the player has a current location, the new object is placed there automatically (works for `area`, `room`, `location`, or any navigable place — not hardcoded to rooms).
+- **`create <type> <name> [key=value...]`** — Creates an object via `ObjectFactory`. The display name is parsed separately from options (`capacity=3`, `max_weight=10`, etc.); options become properties, not part of `name` or the ID slug. ID base names are slugified and capped at 16 characters (`purse` → `item:purse-001`). When the player has a current location, the new object is placed there automatically.
 - **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
 - **`look`** — Locations (`room`, `area`, …) list ground items via `You see: …`. **`look self`** and **`inventory`** reflect held items using creature slot state.
 
