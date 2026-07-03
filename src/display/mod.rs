@@ -4,10 +4,12 @@ use std::collections::HashMap;
 use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
 
+pub mod carried;
 pub mod container;
 pub mod narrative;
 pub mod resolve;
 pub mod weight;
+pub use carried::format_look_self_summary;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_inside_container,
     format_stackable_label,
@@ -24,8 +26,7 @@ pub use resolve::{
     ResolveScope, ResolvedMatch, TargetResolution,
 };
 pub use weight::{
-    format_carried_items_brief, format_carried_weight_summary, format_weight_examine_builder,
-    format_weight_examine_player,
+    format_carried_weight_summary, format_weight_examine_builder, format_weight_examine_player,
 };
 
 /// How an object should be rendered for a given command/audience.
@@ -407,7 +408,98 @@ mod tests {
     }
 
     #[test]
-    fn look_brief_hides_weight_and_shows_item_count() {
+    fn look_self_shows_holding_and_wearing_summary() {
+        use crate::mudl::load_module;
+
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let owner = ObjectId::new("player:admin-001");
+        let mut player = Object {
+            id: owner.clone(),
+            name: "Admin".to_string(),
+            aliases: Vec::new(),
+            location: Some(ObjectId::new("room:void-001")),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        player.init_creature_role(anatomy.player_template("default").unwrap());
+
+        let mut purse = Object {
+            id: ObjectId::new("item:purse-001"),
+            name: "purse".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        purse.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 3,
+            max_weight: Some(10),
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+        });
+
+        let mut backpack = Object {
+            id: ObjectId::new("item:backpack-001"),
+            name: "backpack".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        backpack.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 5,
+            max_weight: None,
+            max_volume: None,
+            wearable: true,
+            wear_slot: Some("torso".to_string()),
+        });
+
+        player.set_body_slot("right_hand", Some(purse.id.clone()));
+        player.set_body_slot("torso", Some(backpack.id.clone()));
+
+        let mut objects = HashMap::new();
+        objects.insert(purse.id.clone(), purse);
+        objects.insert(backpack.id.clone(), backpack);
+        objects.insert(player.id.clone(), player.clone());
+
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_objects(objects)
+            .with_anatomy(anatomy)
+            .with_flags(DisplayFlags::BRIEF);
+        let output = player.describe(&ctx);
+
+        assert!(output.contains("You are holding: purse."));
+        assert!(output.contains("Wearing: backpack."));
+        assert!(!output.contains("right hand"));
+        assert!(!output.contains("weighs"));
+    }
+
+    #[test]
+    fn look_brief_hides_weight_on_objects() {
         let owner = ObjectId::new("player:admin-001");
         let mut purse = Object {
             id: ObjectId::new("item:purse-001"),

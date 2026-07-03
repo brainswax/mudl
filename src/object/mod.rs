@@ -494,7 +494,7 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
     }
     if obj.object_type() == "player" && obj.id == ctx.observer {
         let carried = if brief {
-            crate::display::format_carried_items_brief(obj, &ctx.objects)
+            crate::display::format_look_self_summary(obj, &ctx.objects, &ctx.anatomy)
         } else {
             let mut detail = describe_carried(obj, &ctx.objects, &ctx.anatomy);
             if let Some(summary) =

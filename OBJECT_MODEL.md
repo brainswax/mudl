@@ -243,7 +243,7 @@ pub enum LocationRef {
 
 **Put quantity**: `put 10 coins in purse` caps transfer count; `put coins in purse` moves as many units as fit (weight/volume/slots). Partial transfers update `stack_count` on source and target; incompatible remainder gets `N won't fit.` feedback.
 
-**Weight** (`src/object/weight.rs`): `Object::weight()` returns unit weight × `stack_count` for stackables. `Object::total_weight(objects)` recursively sums shell weight plus nested container contents (cycle-safe). `Object::contents_weight(objects)` sums direct contents' total weights for capacity checks. `player_carried_weight` totals across body slots. Display: `look` omits weight (`DisplayFlags::BRIEF`); in-game `examine` shows `The purse weighs 2/10.` and carried weight on self; `@examine` shows `Weight:`, `Contents weight:`, and `Carried weight:` lines; `look self` shows only `You are holding N items.`
+**Weight** (`src/object/weight.rs`): `Object::weight()` returns unit weight × `stack_count` for stackables. `Object::total_weight(objects)` recursively sums shell weight plus nested container contents (cycle-safe). `Object::contents_weight(objects)` sums direct contents' total weights for capacity checks. `player_carried_weight` totals across body slots. Display: `look` omits weight (`DisplayFlags::BRIEF`); `look self` lists held/worn item names only (`src/display/carried.rs`); in-game `examine` shows weight and full grasp detail; `@examine` shows `Weight:`, `Contents weight:`, and `Carried weight:` lines. See [COMMANDS.md](COMMANDS.md).
 
 ## Anatomy and Inventory
 
