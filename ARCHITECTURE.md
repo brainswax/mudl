@@ -185,8 +185,9 @@ The object model's prototype/parent system (`prototype: Option<ObjectId>`) is th
 - **`create <type> <name> [key=value...]`** — Creates an object via `ObjectFactory`. The display name is parsed separately from options (`capacity=3`, `max_weight=10`, etc.); options become properties, not part of `name` or the ID slug. ID base names are slugified and capped at 16 characters (`purse` → `item:purse-001`). When the player has a current location, the new object is placed there automatically.
 - **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate with short IDs. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
 - **`look`** — Locations (`room`, `area`, …) list ground items via `You see: …` with stack counts (`20 coins`). **`look self`** and **`inventory`** reflect held items using creature slot state.
-- **`examine`** — In-game close inspection: name, description, container contents (same presentation rules as `look`). No internal IDs or property dumps.
-- **`@examine`** — Wizard meta-command: structured builder view with short ID, owner, location, properties, and verbs. Requires wizard permission (stubbed true in REPL for now).
+- **`examine`** — In-game close inspection: name, description, weight (`The purse weighs 2/10.`, `They weigh 20.` for stacks), container contents. No internal IDs or property dumps.
+- **`@examine`** — Wizard meta-command: structured builder view with short ID, owner, location, weight breakdown (`Weight: 20 (2 × 10)`, `Contents weight: 7/10`, `Carried weight:` for players), properties, and verbs. Requires wizard permission (stubbed true in REPL for now).
+- **`look self` / `inventory`** — Append total carried weight when non-zero (`You are carrying 15 weight in total.`).
 
 ### Command conventions (`@` meta-commands)
 

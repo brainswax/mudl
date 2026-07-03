@@ -7,6 +7,7 @@ use crate::object::{Object, ObjectId};
 pub mod container;
 pub mod narrative;
 pub mod resolve;
+pub mod weight;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_inside_container,
     format_stackable_label,
@@ -21,6 +22,9 @@ pub use narrative::{
 pub use resolve::{
     format_disambiguation, is_in_player_possession, name_matches, resolve_object, short_id,
     ResolveScope, ResolvedMatch, TargetResolution,
+};
+pub use weight::{
+    format_carried_weight_summary, format_weight_examine_builder, format_weight_examine_player,
 };
 
 /// How an object should be rendered for a given command/audience.
@@ -394,6 +398,96 @@ mod tests {
         assert!(!output.contains("ID:"));
         assert!(!output.contains("Properties:"));
         assert!(!output.contains("flip"));
+    }
+
+    #[test]
+    fn in_game_examine_shows_container_weight() {
+        let owner = ObjectId::new("player:admin-001");
+        let mut purse = Object {
+            id: ObjectId::new("item:purse-001"),
+            name: "purse".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        purse.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 3,
+            max_weight: Some(10),
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+        });
+
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(purse.id.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.set_property_int("weight", 1);
+        coins.apply_stackable_role(&crate::object::StackableSpec {
+            count: 2,
+            max_stack: 99,
+        });
+        purse.set_property_list("contents", vec![coins.id.clone()]);
+
+        let mut objects = HashMap::new();
+        objects.insert(coins.id.clone(), coins);
+        objects.insert(purse.id.clone(), purse.clone());
+
+        let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let output = purse.describe(&ctx);
+        assert!(output.contains("The purse weighs 2/10."));
+    }
+
+    #[test]
+    fn meta_examine_shows_weight_details() {
+        let owner = ObjectId::new("player:admin-001");
+        let mut purse = Object {
+            id: ObjectId::new("item:purse-001"),
+            name: "purse".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        purse.set_property_int("weight", 1);
+        purse.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 3,
+            max_weight: Some(10),
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(purse.id.clone(), purse.clone());
+
+        let ctx = DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
+        let output = purse.describe_detailed(&ctx);
+        assert!(output.contains("Contents weight: 0/10"));
+        assert!(output.contains("Weight: 1"));
     }
 
     #[test]

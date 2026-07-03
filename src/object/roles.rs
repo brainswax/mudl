@@ -399,15 +399,6 @@ impl Object {
         self.set_property_list(prop, list);
     }
 
-    /// Sum weight of all objects inside this container.
-    pub fn contents_weight(&self, objects: &HashMap<ObjectId, Object>) -> i64 {
-        self.container_contents()
-            .iter()
-            .filter_map(|id| objects.get(id))
-            .map(|obj| obj.weight())
-            .sum()
-    }
-
     /// Sum volume of all objects inside this container.
     pub fn contents_volume(&self, objects: &HashMap<ObjectId, Object>) -> i64 {
         self.container_contents()

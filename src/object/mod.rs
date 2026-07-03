@@ -1,6 +1,7 @@
 mod factory;
 mod location;
 mod roles;
+mod weight;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -13,6 +14,7 @@ use crate::inventory::describe_carried;
 pub use factory::ObjectFactory;
 pub use location::LocationRef;
 pub use roles::{ContainerSpec, ItemPhysSpec, ObjectRoles, RoleKind, StackableSpec, WearableSpec};
+pub use weight::player_carried_weight;
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -478,6 +480,9 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
     }
+    if let Some(weight) = crate::display::format_weight_examine_player(obj, &ctx.objects) {
+        lines.push(weight);
+    }
     if obj.is_container() {
         let inside = crate::display::format_inside_container(obj, &ctx.objects);
         if !inside.is_empty() {
@@ -485,7 +490,16 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
         }
     }
     if obj.object_type() == "player" && obj.id == ctx.observer {
-        lines.push(describe_carried(obj, &ctx.objects, &ctx.anatomy));
+        let mut carried = describe_carried(obj, &ctx.objects, &ctx.anatomy);
+        if let Some(summary) =
+            crate::display::format_carried_weight_summary(obj, &ctx.objects)
+        {
+            if !carried.is_empty() {
+                carried.push('\n');
+            }
+            carried.push_str(&summary);
+        }
+        lines.push(carried);
     }
     lines.join("\n")
 }
@@ -561,6 +575,10 @@ fn describe_entity_builder(obj: &Object, ctx: &DisplayContext) -> String {
             obj,
             &ctx.objects,
         ));
+    }
+
+    for weight_line in crate::display::format_weight_examine_builder(obj, &ctx.objects) {
+        lines.push(weight_line);
     }
 
     lines.push("Properties:".to_string());
