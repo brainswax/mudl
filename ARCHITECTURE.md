@@ -195,6 +195,8 @@ Command helpers live in `src/command/`; inventory slot logic in `src/inventory/`
 - `move_object(src: LocationRef, dst: LocationRef, obj: ObjId)` validates source placement, checks destination capacity/weight/volume, updates holder lists (`contents`, `body_slots`), and fires `on_move` hooks.
 - Inventory commands (`take`, `drop`, `put`, `remove`, `wear`) delegate to `MoveManager` convenience wrappers.
 - `ObjectFactory::create_stackable_item` creates one instance with `stack_count`; `create_item_instances` spawns separate IDs for non-stacked duplicates.
+- `put [count] <item> in <container>` transfers a specific stack quantity; omitting count moves as many units as fit (weight/volume/slots). Remainder stays carried with feedback (`5 won't fit.`).
+- `look <container>` shows `Inside the purse: 20 coins` using stack-aware labels (`src/display/container.rs`).
 
 ## Persistence Strategy
 

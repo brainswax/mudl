@@ -4,7 +4,12 @@ use std::collections::HashMap;
 use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
 
+pub mod container;
 pub mod narrative;
+pub use container::{
+    container_content_labels, format_container_contents_builder, format_inside_container,
+    format_stackable_label,
+};
 pub use narrative::{
     format_property_value, location_label, narrate_create, narrate_create_builder, narrate_go,
     narrate_loaded, narrate_module_bundled, narrate_module_reloaded, narrate_no_exit,

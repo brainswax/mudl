@@ -15,7 +15,8 @@ use mudl::display::{
     narrate_wizard_not_found, resolve_target, Describable, DisplayContext, DisplayMode,
 };
 use mudl::inventory::{
-    describe_inventory, drop_item, put_item, remove_item, wear_item, wield_item, InventoryContext,
+    describe_inventory, drop_item, parse_put_args, put_item, remove_item, wear_item, wield_item,
+    InventoryContext,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
@@ -215,7 +216,9 @@ async fn main() -> Result<()> {
                         );
                         println!("  get/take <item>             - pick up an item from the room");
                         println!("  drop <item>                 - drop a carried item");
-                        println!("  put <item> in <container>   - stow an item in a container");
+                        println!(
+                            "  put [count] <item> in <container> - stow items (e.g. put 10 coins in purse)"
+                        );
                         println!(
                             "  remove <item> from <container> - take an item out of a container"
                         );
@@ -506,24 +509,30 @@ async fn main() -> Result<()> {
                     }
                     "put" => {
                         let rest = parts[1..].join(" ");
-                        if let Some((item, container)) = rest.split_once(" in ") {
-                            let mut objects = load_all_objects(&persistence, &cache).await?;
-                            let mut ctx = InventoryContext {
-                                player_id: &default_owner,
-                                room_id: current_location.as_ref(),
-                                objects: &mut objects,
-                                anatomy: &active_anatomy,
-                            };
-                            match put_item(&mut ctx, item.trim(), container.trim()) {
-                                Ok(msg) => {
-                                    println!("{msg}");
-                                    save_all_objects(&persistence, &objects).await?;
-                                    cache.extend(objects);
+                        match parse_put_args(&rest) {
+                            Ok(req) => {
+                                let mut objects = load_all_objects(&persistence, &cache).await?;
+                                let mut ctx = InventoryContext {
+                                    player_id: &default_owner,
+                                    room_id: current_location.as_ref(),
+                                    objects: &mut objects,
+                                    anatomy: &active_anatomy,
+                                };
+                                match put_item(
+                                    &mut ctx,
+                                    &req.item_name,
+                                    &req.container_name,
+                                    req.quantity,
+                                ) {
+                                    Ok(msg) => {
+                                        println!("{msg}");
+                                        save_all_objects(&persistence, &objects).await?;
+                                        cache.extend(objects);
+                                    }
+                                    Err(e) => println!("{e}"),
                                 }
-                                Err(e) => println!("{e}"),
                             }
-                        } else {
-                            println!("Usage: put <item> in <container>");
+                            Err(e) => println!("{e}"),
                         }
                     }
                     "remove" => {

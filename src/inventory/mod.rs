@@ -357,10 +357,83 @@ pub fn drop_item(
     Ok(format!("You drop the {item_name_display}."))
 }
 
+/// Parsed `put [count] <item> in <container>` command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PutRequest {
+    pub quantity: Option<u32>,
+    pub item_name: String,
+    pub container_name: String,
+}
+
+/// Parse `put 10 coins in purse` or `put coins in purse`.
+pub fn parse_put_args(rest: &str) -> Result<PutRequest, InventoryError> {
+    let (left, container_name) = rest.split_once(" in ").ok_or_else(|| {
+        InventoryError::InvalidTarget("Usage: put [count] <item> in <container>".into())
+    })?;
+    let left = left.trim();
+    let container_name = container_name.trim().to_string();
+    if left.is_empty() || container_name.is_empty() {
+        return Err(InventoryError::InvalidTarget(
+            "Usage: put [count] <item> in <container>".into(),
+        ));
+    }
+
+    let tokens: Vec<&str> = left.split_whitespace().collect();
+    if tokens.len() >= 2 {
+        if let Ok(qty) = tokens[0].parse::<u32>() {
+            if qty == 0 {
+                return Err(InventoryError::InvalidTarget(
+                    "You must put at least one.".into(),
+                ));
+            }
+            return Ok(PutRequest {
+                quantity: Some(qty),
+                item_name: tokens[1..].join(" "),
+                container_name,
+            });
+        }
+    }
+
+    Ok(PutRequest {
+        quantity: None,
+        item_name: left.to_string(),
+        container_name,
+    })
+}
+
+/// Build player feedback after a put operation.
+pub fn format_put_message(
+    item_display: &str,
+    container_display: &str,
+    transferred: u32,
+    total_held: u32,
+    quantity: Option<u32>,
+) -> String {
+    let remainder_in_hand = total_held.saturating_sub(transferred);
+
+    let base = if transferred == 1 && quantity.is_none() && total_held == 1 {
+        format!("You put the {item_display} in your {container_display}.")
+    } else {
+        format!("You put {transferred} {item_display} in your {container_display}.")
+    };
+
+    if let Some(req) = quantity {
+        if transferred < req {
+            return format!("{base} {} won't fit.", req.saturating_sub(transferred));
+        }
+        base
+    } else if remainder_in_hand > 0 {
+        format!("{base} {remainder_in_hand} won't fit.")
+    } else {
+        base
+    }
+}
+
 pub fn put_item(
     ctx: &mut InventoryContext<'_>,
     item_name: &str,
     container_name: &str,
+    quantity: Option<u32>,
 ) -> Result<String, InventoryError> {
     let item_id = resolve_inventory_target(
         item_name,
@@ -409,18 +482,18 @@ pub fn put_item(
         1
     };
 
-    let result = with_move_ctx(ctx, |mctx| move_to_container(mctx, &item_id, &container_id))?;
+    let result = with_move_ctx(ctx, |mctx| {
+        move_to_container(mctx, &item_id, &container_id, quantity)
+    })?;
 
     let transferred = result.units_transferred.unwrap_or(total_count);
-    if item.is_stackable() && (transferred < total_count || transferred > 1) {
-        Ok(format!(
-            "You put {transferred} {item_display} in your {container_display}."
-        ))
-    } else {
-        Ok(format!(
-            "You put the {item_display} in your {container_display}."
-        ))
-    }
+    Ok(format_put_message(
+        &item_display,
+        &container_display,
+        transferred,
+        total_count,
+        quantity,
+    ))
 }
 
 pub fn remove_item(
@@ -740,7 +813,8 @@ pub fn describe_inventory(
                 if obj.is_container() {
                     for inner_id in obj.container_contents() {
                         if let Some(inner) = objects.get(&inner_id) {
-                            entries.push(format!("    {} — inside your {}", inner.name, obj.name));
+                            let label = crate::display::format_stackable_label(inner);
+                            entries.push(format!("    {label} — inside your {}", obj.name));
                         }
                     }
                 }
@@ -1171,7 +1245,7 @@ mod tests {
         );
 
         take_item(&mut ctx, "coin").unwrap();
-        put_item(&mut ctx, "coin", "backpack").unwrap();
+        put_item(&mut ctx, "coin", "backpack", None).unwrap();
 
         let coin_id = objects
             .values()
@@ -1233,8 +1307,9 @@ mod tests {
             anatomy: &anatomy,
         };
 
-        let msg = put_item(&mut ctx, "coins", "purse").unwrap();
+        let msg = put_item(&mut ctx, "coins", "purse", None).unwrap();
         assert!(msg.contains("10"));
+        assert!(msg.contains("won't fit"));
         assert!(msg.contains("purse"));
 
         let purse = objects.get(&purse_id).unwrap();
@@ -1244,5 +1319,128 @@ mod tests {
 
         let held = objects.get(&coins_id).unwrap();
         assert_eq!(held.stack_count(), 10);
+    }
+
+    #[test]
+    fn parse_put_args_with_quantity() {
+        let req = parse_put_args("10 coins in purse").unwrap();
+        assert_eq!(req.quantity, Some(10));
+        assert_eq!(req.item_name, "coins");
+        assert_eq!(req.container_name, "purse");
+    }
+
+    #[test]
+    fn parse_put_args_without_quantity() {
+        let req = parse_put_args("coins in purse").unwrap();
+        assert_eq!(req.quantity, None);
+        assert_eq!(req.item_name, "coins");
+    }
+
+    #[test]
+    fn format_put_message_partial_auto() {
+        let msg = format_put_message("coins", "purse", 15, 20, None);
+        assert_eq!(msg, "You put 15 coins in your purse. 5 won't fit.");
+    }
+
+    #[test]
+    fn format_put_message_exact_quantity() {
+        let msg = format_put_message("coins", "purse", 10, 20, Some(10));
+        assert_eq!(msg, "You put 10 coins in your purse.");
+    }
+
+    #[tokio::test]
+    async fn put_specified_quantity_in_purse() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut purse = factory
+            .create_container_with_spec(
+                "purse",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 3,
+                    max_weight: Some(10),
+                    max_volume: None,
+                    wearable: true,
+                    wear_slot: Some("torso".to_string()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        purse.name = "purse".to_string();
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.set_property_int("weight", 1);
+        coins.location = Some(player_id.clone());
+
+        let purse_id = purse.id.clone();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(purse_id.clone()));
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(purse_id.clone(), purse);
+        objects.insert(coins_id.clone(), coins);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let msg = put_item(&mut ctx, "coins", "purse", Some(10)).unwrap();
+        assert_eq!(msg, "You put 10 coins in your purse.");
+
+        let held = objects.get(&coins_id).unwrap();
+        assert_eq!(held.stack_count(), 10);
+        let purse = objects.get(&purse_id).unwrap();
+        let stored = objects.get(&purse.container_contents()[0]).unwrap();
+        assert_eq!(stored.stack_count(), 10);
+    }
+
+    #[tokio::test]
+    async fn look_purse_shows_stackable_contents() {
+        use crate::display::{Describable, DisplayContext, DisplayMode};
+
+        let (factory, anatomy, player_id, _room_id, mut objects) = setup_world().await;
+
+        let mut purse = factory
+            .create_container_with_spec(
+                "purse",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 3,
+                    max_weight: Some(10),
+                    max_volume: None,
+                    wearable: false,
+                    wear_slot: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        purse.name = "purse".to_string();
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.location = Some(purse.id.clone());
+        purse.set_property_list("contents", vec![coins.id.clone()]);
+
+        objects.insert(purse.id.clone(), purse.clone());
+        objects.insert(coins.id.clone(), coins);
+
+        let ctx = DisplayContext::new(player_id.clone(), DisplayMode::Player)
+            .with_objects(objects)
+            .with_anatomy(anatomy);
+
+        let output = purse.describe(&ctx);
+        assert!(output.contains("Inside the purse: 20 coins"));
     }
 }

@@ -237,6 +237,10 @@ pub enum LocationRef {
 
 **Dirty tracking**: `DirtyTracker` records mutated object IDs; `persist_dirty()` saves only those rows.
 
+**Look / examine**: Containers show stack-aware contents (`Inside the purse: 20 coins`) via `src/display/container.rs`. Builder `examine` lists `Contents: 20 coins, …`.
+
+**Put quantity**: `put 10 coins in purse` caps transfer count; `put coins in purse` moves as many units as fit (weight/volume/slots). Partial transfers update `stack_count` on source and target; incompatible remainder gets `N won't fit.` feedback.
+
 ## Anatomy and Inventory
 
 Body plans are defined in MUDL (`creatures.mudl`) and loaded into an `AnatomyRegistry`. Players reference a plan via `creature` / `body_plan` and track occupancy in `body_slots` (a map of slot name → item ID, including worn items).

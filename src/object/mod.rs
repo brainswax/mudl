@@ -477,6 +477,12 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
     }
+    if obj.is_container() {
+        let inside = crate::display::format_inside_container(obj, &ctx.objects);
+        if !inside.is_empty() {
+            lines.push(inside);
+        }
+    }
     if obj.object_type() == "player" && obj.id == ctx.observer {
         lines.push(describe_carried(obj, &ctx.objects, &ctx.anatomy));
     }
@@ -545,6 +551,13 @@ fn describe_entity_builder(obj: &Object, ctx: &DisplayContext) -> String {
     }
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
+    }
+
+    if obj.is_container() {
+        lines.push(crate::display::format_container_contents_builder(
+            obj,
+            &ctx.objects,
+        ));
     }
 
     lines.push("Properties:".to_string());

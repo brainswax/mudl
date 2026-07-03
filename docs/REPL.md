@@ -72,7 +72,7 @@ Type `help` at the prompt to see the list of commands at any time.
 | `inventory` (`i`)        | Show hands, pockets, worn containers, and contents | `i`                                |
 | `get` / `take <item>`    | Pick up an item from the ground (not held items) | `take sword`                         |
 | `drop <item>`            | Drop a carried item into the room                | `drop coin`                          |
-| `put <item> in <container>` | Stow a carried item in a container            | `put coin in wallet`                 |
+| `put [count] <item> in <container>` | Stow carried items (optional stack count) | `put 10 coins in purse`              |
 | `remove <item> from <container>` | Take an item out of a container          | `remove coin from wallet`            |
 | `wield <item>`           | Hold or wield an item in your hand(s)             | `wield sword`                        |
 | `wear <item>`            | Wear a container or garment                      | `wear backpack`                      |
@@ -127,8 +127,13 @@ Options are separate from the name: `create container purse capacity=3 max_weigh
 You forge a Leather Bag, and it clatters to the ground in The Void.
 > @create stackable "Gold Coin" count=25
 You forge a Gold Coin, and it clatters to the ground in The Void.
-> put coin in bag
-You put the Gold Coin in your Leather Bag.
+> put 10 coins in purse
+You put 10 coins in your purse.
+> put coins in purse
+You put 10 coins in your purse. 10 won't fit.
+> look purse
+purse
+Inside the purse: 10 coins
 ```
 
 Example output:

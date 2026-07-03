@@ -44,10 +44,13 @@ pub fn stack_merge_key(item: &Object) -> String {
 }
 
 /// Compute how many units of `item` can fit into `container`.
+///
+/// `requested_units` caps the transfer (e.g. `put 10 coins`); `None` means as many as fit.
 pub fn compute_container_fit(
     container: &Object,
     item: &Object,
     objects: &HashMap<ObjectId, Object>,
+    requested_units: Option<u32>,
 ) -> Result<ContainerFit, MoveError> {
     if !container.is_container() {
         return Err(MoveError::NotContainer);
@@ -97,6 +100,14 @@ pub fn compute_container_fit(
         max_units = 0;
     }
 
+    if let Some(req) = requested_units {
+        if req == 0 {
+            max_units = 0;
+        } else {
+            max_units = max_units.min(req.min(stack_count));
+        }
+    }
+
     Ok(ContainerFit {
         units: max_units,
         merge_target,
@@ -109,7 +120,7 @@ pub fn fit_failure_reason(
     item: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> MoveError {
-    let fit = compute_container_fit(container, item, objects).unwrap_or(ContainerFit {
+    let fit = compute_container_fit(container, item, objects, None).unwrap_or(ContainerFit {
         units: 0,
         merge_target: None,
     });
@@ -219,7 +230,7 @@ mod tests {
         let coins = coins(20);
         let objects = HashMap::new();
 
-        let fit = compute_container_fit(&purse, &coins, &objects).unwrap();
+        let fit = compute_container_fit(&purse, &coins, &objects, None).unwrap();
         assert_eq!(fit.units, 10);
         assert_eq!(fit.merge_target, None);
     }
@@ -230,7 +241,7 @@ mod tests {
         let coins = coins(5);
         let objects = HashMap::new();
 
-        let fit = compute_container_fit(&purse, &coins, &objects).unwrap();
+        let fit = compute_container_fit(&purse, &coins, &objects, None).unwrap();
         assert_eq!(fit.units, 5);
     }
 
@@ -248,8 +259,18 @@ mod tests {
         let mut objects = HashMap::new();
         objects.insert(existing.id.clone(), existing);
 
-        let fit = compute_container_fit(&purse, &incoming, &objects).unwrap();
+        let fit = compute_container_fit(&purse, &incoming, &objects, None).unwrap();
         assert_eq!(fit.merge_target, Some(ObjectId::new("item:coins-001")));
         assert_eq!(fit.units, 7); // max_weight 10 - 3 existing = 7 room
+    }
+
+    #[test]
+    fn requested_quantity_caps_fit() {
+        let purse = purse();
+        let coins = coins(20);
+        let objects = HashMap::new();
+
+        let fit = compute_container_fit(&purse, &coins, &objects, Some(10)).unwrap();
+        assert_eq!(fit.units, 10);
     }
 }

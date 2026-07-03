@@ -558,7 +558,7 @@ pub fn move_object(
             .get(container_id)
             .ok_or(MoveError::NotContainer)?
             .clone();
-        let fit = compute_container_fit(&container, &item, ctx.objects)?;
+        let fit = compute_container_fit(&container, &item, ctx.objects, None)?;
         Some(place_in_container(ctx, obj_id, container_id, &src, &fit)?)
     } else {
         remove_from_source(ctx, obj_id, &src)?;
@@ -617,19 +617,69 @@ pub fn move_to_inventory(
     move_object(ctx, obj_id, src, LocationRef::Inventory(player_id.clone()))
 }
 
-/// Convenience: move into a container.
+/// Convenience: move into a container, optionally limiting stackable quantity.
 pub fn move_to_container(
     ctx: &mut MoveContext<'_>,
     obj_id: &ObjectId,
     container_id: &ObjectId,
+    requested_units: Option<u32>,
 ) -> Result<MoveResult, MoveError> {
+    if let (Some(0), _) = (requested_units, ()) {
+        return Err(MoveError::InvalidTarget(
+            "You must put at least one.".into(),
+        ));
+    }
+
     let src = resolve_location(obj_id, ctx.objects).ok_or(MoveError::NotAtSource)?;
-    move_object(
-        ctx,
-        obj_id,
-        src,
-        LocationRef::Container(container_id.clone(), None),
-    )
+
+    if let LocationRef::Container(c, _) = &src {
+        if c == container_id {
+            return Err(MoveError::SelfContainment);
+        }
+    }
+    if container_id == obj_id {
+        return Err(MoveError::SelfContainment);
+    }
+
+    verify_at_source(obj_id, &src, ctx.objects)?;
+
+    let item = ctx
+        .objects
+        .get(obj_id)
+        .ok_or_else(|| MoveError::NotFound(obj_id.to_string()))?
+        .clone();
+    let container = ctx
+        .objects
+        .get(container_id)
+        .ok_or(MoveError::NotContainer)?
+        .clone();
+
+    let fit = compute_container_fit(&container, &item, ctx.objects, requested_units)?;
+    if fit.units == 0 {
+        return Err(fit_failure_reason(&container, &item, ctx.objects));
+    }
+
+    let units = place_in_container(ctx, obj_id, container_id, &src, &fit)?;
+
+    let mut touched = vec![obj_id.clone(), container_id.clone()];
+    if let Some(id) = src.holder_id() {
+        touched.push(id.clone());
+    }
+    ctx.mark_dirty(touched);
+
+    let event = MoveEvent {
+        object_id: obj_id.clone(),
+        source: src.clone(),
+        destination: LocationRef::Container(container_id.clone(), None),
+    };
+    ctx.hooks.fire_on_move(&event);
+
+    Ok(MoveResult {
+        object_id: obj_id.clone(),
+        source: src,
+        destination: LocationRef::Container(container_id.clone(), None),
+        units_transferred: Some(units),
+    })
 }
 
 #[cfg(test)]
