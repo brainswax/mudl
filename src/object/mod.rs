@@ -401,10 +401,11 @@ fn format_contents_player(obj: &Object, ctx: &DisplayContext) -> String {
         .map(|item| match item.object_type() {
             "player" => item.name.clone(),
             "item" | "thing" => {
+                let label = crate::display::format_stackable_label(item);
                 if let Some(desc) = item.get_description() {
-                    format!("{} — {}", item.name, desc)
+                    format!("{label} — {desc}")
                 } else {
-                    item.name.clone()
+                    label
                 }
             }
             _ => item.name.clone(),
@@ -538,6 +539,8 @@ fn describe_room_builder(obj: &Object, ctx: &DisplayContext) -> String {
 fn describe_entity_builder(obj: &Object, ctx: &DisplayContext) -> String {
     let mut lines = vec![obj.name.clone()];
 
+    lines.push(format!("ID: {}", crate::display::short_id(&obj.id)));
+
     lines.push(format!(
         "Owner: {}",
         crate::display::owner_label(&obj.owner, &ctx.observer, &ctx.objects)
@@ -626,5 +629,58 @@ mod tests {
         let base = id_base_from_display_name("Purse");
         assert_eq!(base, "purse");
         assert!(base.len() <= ID_BASE_MAX_LEN);
+    }
+
+    #[test]
+    fn room_look_shows_stackable_quantity() {
+        let owner = ObjectId::new("player:admin-001");
+        let room_id = ObjectId::new("room:void-001");
+        let mut room = Object {
+            id: room_id.clone(),
+            name: "The Void".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        room.add_property(Property {
+            name: "description".to_string(),
+            value: Value::String("Empty.".to_string()),
+            permissions: PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.apply_stackable_role(&StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(room.id.clone(), room.clone());
+        objects.insert(coins.id.clone(), coins);
+
+        let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let output = room.describe(&ctx);
+        assert!(output.contains("You see: 20 coins"));
     }
 }

@@ -12,7 +12,8 @@ use mudl::display::{
     narrate_create, narrate_go, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
     narrate_no_exit, narrate_no_location, narrate_no_location_builder, narrate_not_in_cache,
     narrate_property_added, narrate_saved, narrate_target_not_found, narrate_verb_added,
-    narrate_wizard_not_found, resolve_target, Describable, DisplayContext, DisplayMode,
+    narrate_wizard_not_found, resolve_object, resolve_target, Describable, DisplayContext,
+    DisplayMode, ResolveScope, TargetResolution,
 };
 use mudl::inventory::{
     describe_inventory, drop_item, parse_put_args, put_item, remove_item, wear_item, wield_item,
@@ -44,16 +45,24 @@ async fn resolve_and_load(
     observer: &ObjectId,
     persistence: &SqlitePersistence,
     cache: &mut HashMap<ObjectId, Object>,
-) -> Result<Option<ObjectId>> {
+) -> Result<TargetResolution> {
     let objects = load_all_objects(persistence, cache).await?;
 
-    let id = if let Some(name) = target {
-        resolve_target(name, current_location.as_ref(), Some(observer), &objects)
+    let resolution = if let Some(name) = target {
+        resolve_object(
+            name,
+            observer,
+            current_location.as_ref(),
+            &objects,
+            ResolveScope::General,
+        )
+    } else if let Some(loc) = current_location {
+        TargetResolution::Found(loc.clone())
     } else {
-        current_location.clone()
+        TargetResolution::NotFound
     };
 
-    if let Some(ref id) = id {
+    if let TargetResolution::Found(ref id) = resolution {
         if !cache.contains_key(id) {
             if let Some(obj) = persistence.load_object(id).await? {
                 cache.insert(id.clone(), obj);
@@ -61,7 +70,7 @@ async fn resolve_and_load(
         }
     }
 
-    Ok(id)
+    Ok(resolution)
 }
 
 async fn save_all_objects(
@@ -306,7 +315,7 @@ async fn main() -> Result<()> {
                         )
                         .await
                         {
-                            Ok(Some(id)) => {
+                            Ok(TargetResolution::Found(id)) => {
                                 let objects = load_all_objects(&persistence, &cache).await?;
                                 let ctx =
                                     DisplayContext::new(default_owner.clone(), DisplayMode::Player)
@@ -320,8 +329,16 @@ async fn main() -> Result<()> {
                                     println!("{}", narrate_no_location());
                                 }
                             }
-                            Ok(None) => {
-                                println!("{}", narrate_no_location());
+                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+                            Ok(TargetResolution::NotFound) => {
+                                if parts.get(1).is_some() {
+                                    println!(
+                                        "{}",
+                                        narrate_target_not_found(parts.get(1).unwrap())
+                                    );
+                                } else {
+                                    println!("{}", narrate_no_location());
+                                }
                             }
                             Err(e) => {
                                 error!(error = %e, "look failed");
@@ -342,7 +359,7 @@ async fn main() -> Result<()> {
                         )
                         .await
                         {
-                            Ok(Some(id)) => {
+                            Ok(TargetResolution::Found(id)) => {
                                 let objects = load_all_objects(&persistence, &cache).await?;
                                 let ctx = DisplayContext::new(
                                     default_owner.clone(),
@@ -363,13 +380,21 @@ async fn main() -> Result<()> {
                                     );
                                 }
                             }
-                            Ok(None) => {
-                                println!(
-                                    "{}",
-                                    narrate_no_location_builder(
-                                        "Try 'examine <target>' or 'examine here'."
-                                    )
-                                );
+                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+                            Ok(TargetResolution::NotFound) => {
+                                if parts.get(1).is_some() {
+                                    println!(
+                                        "{}",
+                                        narrate_target_not_found(parts.get(1).unwrap())
+                                    );
+                                } else {
+                                    println!(
+                                        "{}",
+                                        narrate_no_location_builder(
+                                            "Try 'examine <target>' or 'examine here'."
+                                        )
+                                    );
+                                }
                             }
                             Err(e) => {
                                 error!(error = %e, "examine failed");
@@ -388,7 +413,7 @@ async fn main() -> Result<()> {
                         )
                         .await
                         {
-                            Ok(Some(id)) => {
+                            Ok(TargetResolution::Found(id)) => {
                                 if let Some(obj) = cache.get(&id) {
                                     println!("{}", obj.dump());
                                 } else if let Some(target) = parts.get(1) {
@@ -400,11 +425,19 @@ async fn main() -> Result<()> {
                                     );
                                 }
                             }
-                            Ok(None) => {
-                                println!(
-                                    "{}",
-                                    narrate_no_location_builder("Use '@dump <target>'.")
-                                );
+                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+                            Ok(TargetResolution::NotFound) => {
+                                if parts.get(1).is_some() {
+                                    println!(
+                                        "{}",
+                                        narrate_target_not_found(parts.get(1).unwrap())
+                                    );
+                                } else {
+                                    println!(
+                                        "{}",
+                                        narrate_no_location_builder("Use '@dump <target>'.")
+                                    );
+                                }
                             }
                             Err(e) => {
                                 error!(error = %e, "@dump failed");

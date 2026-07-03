@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::display::{resolve_object, ResolveScope as LookupScope, TargetResolution};
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{LocationRef, Object, ObjectId};
 use crate::world::move_manager::{
@@ -82,19 +83,6 @@ fn player_body_plan<'a>(
         .ok_or(InventoryError::NoBodyPlan)
 }
 
-fn name_matches(needle: &str, obj: &Object) -> bool {
-    let name_lower = obj.name.to_lowercase();
-    name_lower == needle
-        || name_lower.contains(needle)
-        || name_lower
-            .split_whitespace()
-            .any(|word| word == needle || word.starts_with(needle))
-        || obj.aliases.iter().any(|a| {
-            let alias = a.to_lowercase();
-            alias == needle || alias.contains(needle)
-        })
-}
-
 /// Where to search when resolving an inventory command target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolveScope {
@@ -106,14 +94,12 @@ enum ResolveScope {
     CarriedOrGround,
 }
 
-fn is_on_ground(
-    obj: &Object,
-    obj_id: &ObjectId,
-    room_id: &ObjectId,
-    player_id: &ObjectId,
-    objects: &HashMap<ObjectId, Object>,
-) -> bool {
-    obj.location.as_ref() == Some(room_id) && !is_carried_by(player_id, obj_id, objects)
+fn resolve_scope_to_lookup(scope: ResolveScope) -> LookupScope {
+    match scope {
+        ResolveScope::Carried => LookupScope::PossessionOnly,
+        ResolveScope::Ground => LookupScope::RoomOnly,
+        ResolveScope::CarriedOrGround => LookupScope::PossessionOrRoom,
+    }
 }
 
 fn resolve_inventory_target(
@@ -123,60 +109,21 @@ fn resolve_inventory_target(
     objects: &HashMap<ObjectId, Object>,
     scope: ResolveScope,
 ) -> Result<ObjectId, InventoryError> {
-    let needle = name.to_lowercase();
-
-    if needle == "self" || needle == "me" {
-        return Ok(player_id.clone());
-    }
-
-    if needle == "here" {
-        return room_id.cloned().ok_or(InventoryError::NoRoom);
-    }
-
-    let id = ObjectId::new(name);
-    if let Some(obj) = objects.get(&id) {
-        if obj.is_active() && scope_matches(obj, &id, room_id, player_id, objects, scope) {
-            return Ok(id);
-        }
-    }
-
-    let mut matches = Vec::new();
-    for (obj_id, obj) in objects {
-        if !obj.is_active() {
-            continue;
-        }
-        if name_matches(&needle, obj)
-            && scope_matches(obj, obj_id, room_id, player_id, objects, scope)
-        {
-            matches.push(obj_id.clone());
-        }
-    }
-
-    match matches.len() {
-        0 => Err(InventoryError::NotFound(name.to_string())),
-        1 => Ok(matches[0].clone()),
-        _ => Err(InventoryError::InvalidTarget(format!(
-            "Which {name} do you mean?"
-        ))),
-    }
-}
-
-fn scope_matches(
-    obj: &Object,
-    obj_id: &ObjectId,
-    room_id: Option<&ObjectId>,
-    player_id: &ObjectId,
-    objects: &HashMap<ObjectId, Object>,
-    scope: ResolveScope,
-) -> bool {
-    match scope {
-        ResolveScope::Carried => is_carried_by(player_id, obj_id, objects),
-        ResolveScope::Ground => {
-            room_id.is_some_and(|room| is_on_ground(obj, obj_id, room, player_id, objects))
-        }
-        ResolveScope::CarriedOrGround => {
-            is_carried_by(player_id, obj_id, objects)
-                || room_id.is_some_and(|room| obj.location.as_ref() == Some(room))
+    match resolve_object(
+        name,
+        player_id,
+        room_id,
+        objects,
+        resolve_scope_to_lookup(scope),
+    ) {
+        TargetResolution::Found(id) => Ok(id),
+        TargetResolution::Ambiguous(msg) => Err(InventoryError::InvalidTarget(msg)),
+        TargetResolution::NotFound => {
+            if name.to_lowercase() == "here" {
+                Err(InventoryError::NoRoom)
+            } else {
+                Err(InventoryError::NotFound(name.to_string()))
+            }
         }
     }
 }
@@ -186,23 +133,7 @@ pub fn is_carried_by(
     item_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
 ) -> bool {
-    let Some(player) = objects.get(player_id) else {
-        return false;
-    };
-
-    if player.body_slots().values().any(|id| id == item_id) {
-        return true;
-    }
-
-    for carried_id in player.carried_body_items() {
-        if let Some(container) = objects.get(&carried_id) {
-            if container.is_container() && container.container_contents().contains(item_id) {
-                return true;
-            }
-        }
-    }
-
-    item_id == player_id
+    crate::display::is_in_player_possession(player_id, item_id, objects)
 }
 
 fn grasp_slot_free(player: &Object, slot: &str) -> bool {
@@ -523,15 +454,32 @@ pub fn remove_item(
     }
 
     let needle = item_name.to_lowercase();
-    let item_id = container
+    let mut matches: Vec<ObjectId> = container
         .container_contents()
         .into_iter()
-        .find(|id| {
+        .filter(|id| {
             ctx.objects
                 .get(id)
-                .is_some_and(|obj| name_matches(&needle, obj))
+                .is_some_and(|obj| obj.is_active() && crate::display::name_matches(&needle, obj))
         })
-        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?;
+        .collect();
+
+    let item_id = match matches.len() {
+        0 => return Err(InventoryError::NotFound(item_name.to_string())),
+        1 => matches.remove(0),
+        _ => {
+            let resolved: Vec<_> = matches
+                .into_iter()
+                .map(|id| crate::display::ResolvedMatch {
+                    id,
+                    location_hint: Some(format!("in {}", container.name.to_lowercase())),
+                })
+                .collect();
+            return Err(InventoryError::InvalidTarget(
+                crate::display::format_disambiguation(item_name, &resolved),
+            ));
+        }
+    };
 
     let item = ctx.objects.get(&item_id).unwrap().clone();
     let item_display = item.name.clone();
@@ -1214,10 +1162,13 @@ mod tests {
         };
 
         let err = take_item(&mut ctx, "sword").unwrap_err();
-        assert_eq!(
-            err,
-            InventoryError::InvalidTarget("Which sword do you mean?".to_string())
-        );
+        match err {
+            InventoryError::InvalidTarget(msg) => {
+                assert!(msg.contains("Which sword do you mean?"));
+                assert!(msg.contains("sword-"));
+            }
+            other => panic!("expected InvalidTarget, got {other:?}"),
+        }
     }
 
     #[tokio::test]

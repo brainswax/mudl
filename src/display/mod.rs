@@ -6,6 +6,7 @@ use crate::object::{Object, ObjectId};
 
 pub mod container;
 pub mod narrative;
+pub mod resolve;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_inside_container,
     format_stackable_label,
@@ -16,6 +17,10 @@ pub use narrative::{
     narrate_no_location, narrate_no_location_builder, narrate_not_in_cache, narrate_property_added,
     narrate_restore, narrate_saved, narrate_soft_delete, narrate_target_not_found,
     narrate_verb_added, narrate_wizard_not_found, object_name, owner_label,
+};
+pub use resolve::{
+    format_disambiguation, is_in_player_possession, name_matches, resolve_object, short_id,
+    ResolveScope, ResolvedMatch, TargetResolution,
 };
 
 /// How an object should be rendered for a given command/audience.
@@ -95,7 +100,8 @@ pub trait Describable {
 
 /// Resolve a player-facing target name to an object ID.
 ///
-/// Supports full IDs, friendly names, aliases, and the special target `here`.
+/// Uses possession-first search with room and global fallback. Returns `None` when
+/// the target is missing or ambiguous (use [`resolve_object`] for disambiguation text).
 pub fn resolve_target(
     name: &str,
     current_location: Option<&ObjectId>,
@@ -117,21 +123,28 @@ pub fn resolve_target(
         return Some(id);
     }
 
-    for (obj_id, obj) in objects {
-        if !obj.is_active() {
-            continue;
+    if let Some(observer) = observer {
+        match resolve_object(
+            name,
+            observer,
+            current_location,
+            objects,
+            ResolveScope::General,
+        ) {
+            TargetResolution::Found(id) => Some(id),
+            TargetResolution::Ambiguous(_) | TargetResolution::NotFound => None,
         }
-        if obj.name.to_lowercase() == needle {
-            return Some(obj_id.clone());
-        }
-        for alias in &obj.aliases {
-            if alias.to_lowercase() == needle {
+    } else {
+        for (obj_id, obj) in objects {
+            if !obj.is_active() {
+                continue;
+            }
+            if name_matches(&needle, obj) {
                 return Some(obj_id.clone());
             }
         }
+        None
     }
-
-    None
 }
 
 #[cfg(test)]
@@ -367,6 +380,7 @@ mod tests {
         let output = player.describe_detailed(&ctx);
 
         assert!(output.contains("Admin"));
+        assert!(output.contains("ID: admin-001"));
         assert!(output.contains("Owner: you"));
         assert!(output.contains("wave"));
         assert!(!output.contains("player:admin-001"));

@@ -237,7 +237,9 @@ pub enum LocationRef {
 
 **Dirty tracking**: `DirtyTracker` records mutated object IDs; `persist_dirty()` saves only those rows.
 
-**Look / examine**: Containers show stack-aware contents (`Inside the purse: 20 coins`) via `src/display/container.rs`. Builder `examine` lists `Contents: 20 coins, …`.
+**Look / examine**: Stackables show quantity everywhere — room ground (`You see: 20 coins`), container look (`Inside the purse: 20 coins`), and inventory listings. Builder `examine` always includes the short ID (`ID: coins-042`) and lists `Contents: 20 coins, …`.
+
+**Target resolution** (`src/display/resolve.rs`): verbs resolve names with possession-first priority (body slots → BFS through carried containers → room ground → global). Duplicate matches prompt disambiguation with short IDs and container hints (`coins-042 (in purse)`). Inventory verbs map to scoped lookups (`PossessionOnly`, `RoomOnly`, `PossessionOrRoom`).
 
 **Put quantity**: `put 10 coins in purse` caps transfer count; `put coins in purse` moves as many units as fit (weight/volume/slots). Partial transfers update `stack_count` on source and target; incompatible remainder gets `N won't fit.` feedback.
 
