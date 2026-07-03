@@ -250,7 +250,10 @@ mod tests {
         let area = sample_object("area:the-void-001", "The Void");
         let mut player = sample_object("player:admin-001", "Admin");
         player.location = Some(area_id.clone());
-        player.set_property_map("body_slots", [( "right_hand".to_string(), item_id.clone() )].into());
+        player.set_property_map(
+            "body_slots",
+            [("right_hand".to_string(), item_id.clone())].into(),
+        );
 
         let mut boots = sample_object("item:boots-001", "boots");
         boots.location = Some(player_id.clone());

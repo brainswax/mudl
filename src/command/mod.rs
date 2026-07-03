@@ -3,10 +3,12 @@
 use std::collections::HashMap;
 
 use crate::inventory::{take_item, InventoryContext, InventoryError};
-use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse};
-use crate::object::{Object, ObjectFactory, ObjectId};
+use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse, MudlRoleProps};
+use crate::object::{ContainerSpec, Object, ObjectFactory, ObjectId, WearableSpec};
 use crate::persistence::Persistence;
-use crate::world::{bootstrap_world, bundle_module, persist_all, ModuleManifest};
+use crate::world::{
+    bootstrap_world, bundle_module, persist_all, persist_dirty, DirtyTracker, ModuleManifest,
+};
 
 /// Load the active MUDL universe from `MUDL_MODULE` / `MUDL_UNIVERSE` env or default.
 pub fn load_active_universe() -> anyhow::Result<LoadedUniverse> {
@@ -73,6 +75,41 @@ fn parse_display_name(raw: &str) -> anyhow::Result<String> {
     Ok(trimmed.to_string())
 }
 
+/// Optional wizard overrides for `@create` (capacity, weight limits, stack count, etc.).
+#[derive(Debug, Clone, Default)]
+pub struct CreateOptions {
+    pub capacity: Option<u32>,
+    pub max_weight: Option<i64>,
+    pub max_volume: Option<i64>,
+    pub wearable: Option<bool>,
+    pub wear_slot: Option<String>,
+    pub stack_count: Option<u32>,
+    pub prototype: Option<ObjectId>,
+    pub mudl_props: MudlRoleProps,
+}
+
+/// Parse `key=value` tokens from `@create` trailing arguments.
+pub fn parse_create_options(tokens: &[&str]) -> CreateOptions {
+    let mut opts = CreateOptions::default();
+    for token in tokens {
+        if let Some((key, value)) = token.split_once('=') {
+            match key {
+                "capacity" => opts.capacity = value.parse().ok(),
+                "max_weight" | "weight_limit" => opts.max_weight = value.parse().ok(),
+                "max_volume" | "volume_limit" => opts.max_volume = value.parse().ok(),
+                "wearable" => opts.wearable = Some(value == "true"),
+                "wear_slot" => opts.wear_slot = Some(value.to_string()),
+                "count" | "stack_count" => opts.stack_count = value.parse().ok(),
+                "prototype" => opts.prototype = Some(ObjectId::new(value)),
+                _ => {
+                    opts.mudl_props = MudlRoleProps::from_pairs(&[(key, value.trim_matches('"'))]);
+                }
+            }
+        }
+    }
+    opts
+}
+
 /// Create an object and place it at the player's current location when one is set.
 pub async fn create_at_location<P: Persistence>(
     factory: &ObjectFactory<P>,
@@ -81,6 +118,28 @@ pub async fn create_at_location<P: Persistence>(
     owner: ObjectId,
     location: Option<&ObjectId>,
     anatomy: &AnatomyRegistry,
+) -> anyhow::Result<Object> {
+    create_at_location_with_options(
+        factory,
+        type_name,
+        display_name,
+        owner,
+        location,
+        anatomy,
+        CreateOptions::default(),
+    )
+    .await
+}
+
+/// Create with wizard options (`@create container "Bag" capacity=10`).
+pub async fn create_at_location_with_options<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    type_name: &str,
+    display_name: &str,
+    owner: ObjectId,
+    location: Option<&ObjectId>,
+    anatomy: &AnatomyRegistry,
+    options: CreateOptions,
 ) -> anyhow::Result<Object> {
     let mut obj = match type_name {
         "player" => {
@@ -91,14 +150,60 @@ pub async fn create_at_location<P: Persistence>(
         "item" => factory.create_item(display_name, owner.clone()).await?,
         "container" => {
             factory
-                .create_container(display_name, owner.clone(), 10, true)
+                .create_container_with_spec(
+                    display_name,
+                    owner.clone(),
+                    ContainerSpec {
+                        capacity: options.capacity.unwrap_or(10),
+                        max_weight: options.max_weight,
+                        max_volume: options.max_volume,
+                        wearable: options.wearable.unwrap_or(true),
+                        wear_slot: options.wear_slot.clone(),
+                    },
+                    options.prototype.clone(),
+                )
+                .await?
+        }
+        "wearable" => {
+            factory
+                .create_wearable(
+                    display_name,
+                    owner.clone(),
+                    WearableSpec {
+                        wear_slot: options
+                            .wear_slot
+                            .clone()
+                            .unwrap_or_else(|| "torso".to_string()),
+                        weight: options.max_weight.unwrap_or(1),
+                        volume: options.max_volume.unwrap_or(1),
+                    },
+                    options.prototype.clone(),
+                )
+                .await?
+        }
+        "stackable" => {
+            factory
+                .create_stackable_item(
+                    display_name,
+                    owner.clone(),
+                    options.prototype.clone(),
+                    options.stack_count.unwrap_or(1),
+                )
                 .await?
         }
         other => {
             let slug = crate::object::slugify_display_name(display_name);
-            factory
+            let mut obj = factory
                 .create_named(other, &slug, display_name, owner)
-                .await?
+                .await?;
+            if let Some(proto) = &options.prototype {
+                obj.prototype = Some(proto.clone());
+            }
+            if options.mudl_props != MudlRoleProps::default() {
+                options.mudl_props.apply_to(&mut obj);
+                factory.persistence().save_object(&obj).await?;
+            }
+            obj
         }
     };
 
@@ -133,6 +238,20 @@ pub async fn persist_inventory_changes<P: Persistence>(
     objects: &HashMap<ObjectId, Object>,
 ) -> anyhow::Result<()> {
     persist_all(persistence, objects).await
+}
+
+/// Persist only dirty objects; falls back to full persist when tracker is empty.
+pub async fn persist_inventory_dirty<P: Persistence>(
+    persistence: &P,
+    objects: &HashMap<ObjectId, Object>,
+    dirty: &mut DirtyTracker,
+) -> anyhow::Result<()> {
+    if dirty.is_empty() {
+        persist_all(persistence, objects).await?;
+    } else {
+        persist_dirty(persistence, objects, dirty).await?;
+    }
+    Ok(())
 }
 
 /// Soft-delete an object by ID (wizard). Object remains in the database.
@@ -175,11 +294,9 @@ pub async fn undelete_object<P: Persistence>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::slugify_display_name;
-    use crate::display::{
-        narrate_create, Describable, DisplayContext, DisplayMode,
-    };
+    use crate::display::{narrate_create, Describable, DisplayContext, DisplayMode};
     use crate::inventory::describe_carried;
+    use crate::object::slugify_display_name;
     use crate::persistence::SqlitePersistence;
     use crate::world::hydrate_world;
 
@@ -242,7 +359,10 @@ mod tests {
     #[test]
     fn slugify_produces_lowercase_hyphenated_id_base() {
         assert_eq!(slugify_display_name("Rusty Sword"), "rusty-sword");
-        assert_eq!(slugify_display_name("  Big   Red  Boots  "), "big-red-boots");
+        assert_eq!(
+            slugify_display_name("  Big   Red  Boots  "),
+            "big-red-boots"
+        );
     }
 
     #[tokio::test]
@@ -302,7 +422,8 @@ mod tests {
         objects.insert(area_id.clone(), area);
         objects.insert(boots.id.clone(), boots);
 
-        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player).with_objects(objects.clone());
+        let ctx =
+            DisplayContext::new(owner.clone(), DisplayMode::Player).with_objects(objects.clone());
         let output = objects.get(&area_id).unwrap().describe(&ctx);
         assert!(output.contains("boots"));
         assert!(output.contains("You see:"));
@@ -345,8 +466,8 @@ mod tests {
         objects.insert(area_id.clone(), area);
         objects.insert(boots.id.clone(), boots);
 
-        let msg = take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy)
-            .unwrap();
+        let msg =
+            take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy).unwrap();
         assert_eq!(msg, "You pick up the Boots.");
 
         let player = objects.get(&owner).unwrap();
@@ -494,9 +615,14 @@ mod tests {
         objects.insert(area_id.clone(), area);
         objects.insert(sword.id.clone(), sword.clone());
 
-        let take_msg =
-            take_from_location(&owner, Some(&area_id), "rusty sword", &mut objects, &anatomy)
-                .unwrap();
+        let take_msg = take_from_location(
+            &owner,
+            Some(&area_id),
+            "rusty sword",
+            &mut objects,
+            &anatomy,
+        )
+        .unwrap();
         assert!(take_msg.contains("Rusty Sword"));
         assert!(!take_msg.contains(':'));
 
@@ -512,6 +638,59 @@ mod tests {
         let inventory = describe_carried(player, &objects, &anatomy);
         assert!(inventory.contains("Rusty Sword"));
         assert!(!inventory.contains(':'));
+    }
+
+    #[tokio::test]
+    async fn wizard_create_container_with_capacity() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+        let area_id = ObjectId::new("area:the-void-001");
+
+        let mut opts = CreateOptions::default();
+        opts.capacity = Some(3);
+        opts.max_weight = Some(25);
+
+        let bag = create_at_location_with_options(
+            &factory,
+            "container",
+            "Leather Bag",
+            owner,
+            Some(&area_id),
+            &anatomy,
+            opts,
+        )
+        .await
+        .unwrap();
+
+        assert!(bag.is_container());
+        assert_eq!(bag.container_capacity(), 3);
+        assert_eq!(bag.container_max_weight(), Some(25));
+    }
+
+    #[tokio::test]
+    async fn wizard_create_stackable_item() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+
+        let mut opts = CreateOptions::default();
+        opts.stack_count = Some(42);
+
+        let coins = create_at_location_with_options(
+            &factory,
+            "stackable",
+            "Gold Coin",
+            owner,
+            None,
+            &anatomy,
+            opts,
+        )
+        .await
+        .unwrap();
+
+        assert!(coins.is_stackable());
+        assert_eq!(coins.stack_count(), 42);
     }
 
     #[tokio::test]
@@ -542,8 +721,8 @@ mod tests {
         objects.insert(axe.id.clone(), axe);
 
         take_from_location(&owner, Some(&area_id), "sword", &mut objects, &anatomy).unwrap();
-        let err = take_from_location(&owner, Some(&area_id), "axe", &mut objects, &anatomy)
-            .unwrap_err();
+        let err =
+            take_from_location(&owner, Some(&area_id), "axe", &mut objects, &anatomy).unwrap_err();
         assert_eq!(err, InventoryError::HandsFull);
     }
 }

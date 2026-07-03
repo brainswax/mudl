@@ -6,11 +6,10 @@ use crate::object::{Object, ObjectId};
 
 pub mod narrative;
 pub use narrative::{
-    format_property_value, location_label, narrate_create, narrate_create_builder,
-    narrate_go, narrate_module_bundled, narrate_module_reloaded, narrate_no_exit,
-    narrate_loaded, narrate_no_location, narrate_no_location_builder, narrate_not_in_cache,
-    narrate_property_added, narrate_restore, narrate_saved, narrate_soft_delete,
-    narrate_target_not_found,
+    format_property_value, location_label, narrate_create, narrate_create_builder, narrate_go,
+    narrate_loaded, narrate_module_bundled, narrate_module_reloaded, narrate_no_exit,
+    narrate_no_location, narrate_no_location_builder, narrate_not_in_cache, narrate_property_added,
+    narrate_restore, narrate_saved, narrate_soft_delete, narrate_target_not_found,
     narrate_verb_added, narrate_wizard_not_found, object_name, owner_label,
 };
 
@@ -323,7 +322,7 @@ mod tests {
             .unwrap()
             .anatomy
             .clone();
-        player.init_body(anatomy.player_template("default").unwrap());
+        player.init_creature_role(anatomy.player_template("default").unwrap());
 
         let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player).with_anatomy(anatomy);
         let output = player.describe(&ctx);

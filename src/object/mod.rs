@@ -1,3 +1,7 @@
+mod factory;
+mod location;
+mod roles;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -5,8 +9,10 @@ use bitflags::bitflags;
 
 use crate::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
 use crate::inventory::describe_carried;
-use crate::mudl::{AnatomyRegistry, PlayerTemplate};
-use crate::persistence::Persistence;
+
+pub use factory::ObjectFactory;
+pub use location::LocationRef;
+pub use roles::{ContainerSpec, ItemPhysSpec, ObjectRoles, RoleKind, StackableSpec, WearableSpec};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,121 +123,6 @@ pub fn generate_object_id(obj_type: &str, base_name: &str, counter: u32) -> Obje
     let ty = obj_type.to_ascii_lowercase();
     let base = base_name.to_ascii_lowercase();
     ObjectId(format!("{ty}:{base}-{counter:03x}"))
-}
-
-pub struct ObjectFactory<P: Persistence> {
-    persistence: P,
-}
-
-impl<P: Persistence> ObjectFactory<P> {
-    pub fn new(persistence: P) -> Self {
-        Self { persistence }
-    }
-
-    pub fn persistence(&self) -> &P {
-        &self.persistence
-    }
-
-    pub async fn create_player(
-        &self,
-        display_name: &str,
-        owner: ObjectId,
-        anatomy: &AnatomyRegistry,
-    ) -> anyhow::Result<Object> {
-        let template = anatomy
-            .default_template()
-            .cloned()
-            .unwrap_or(PlayerTemplate {
-                name: "default".to_string(),
-                creature: "human".to_string(),
-                gender: "neutral".to_string(),
-            });
-        let slug = slugify_display_name(display_name);
-        let mut player = self
-            .create_named("player", &slug, display_name, owner)
-            .await?;
-        player.init_body(&template);
-        self.persistence.save_object(&player).await?;
-        Ok(player)
-    }
-
-    pub async fn create_item(&self, display_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(display_name);
-        let mut item = self
-            .create_named("item", &slug, display_name, owner)
-            .await?;
-        item.init_item_defaults(true);
-        self.persistence.save_object(&item).await?;
-        Ok(item)
-    }
-
-    pub async fn create_container(
-        &self,
-        display_name: &str,
-        owner: ObjectId,
-        capacity: u32,
-        wearable: bool,
-    ) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(display_name);
-        let mut container = self
-            .create_named("item", &slug, display_name, owner)
-            .await?;
-        container.init_container_defaults(capacity, wearable);
-        self.persistence.save_object(&container).await?;
-        Ok(container)
-    }
-
-    /// Create an object using a slug for the ID and a separate display name.
-    pub async fn create_named(
-        &self,
-        type_name: &str,
-        slug: &str,
-        display_name: &str,
-        owner: ObjectId,
-    ) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(slug);
-        let type_name = type_name.to_ascii_lowercase();
-        let counter = self
-            .persistence
-            .get_next_id_counter(&type_name, &slug)
-            .await?;
-        let id = generate_object_id(&type_name, &slug, counter);
-        self.persistence
-            .increment_counter(&type_name, &slug)
-            .await?;
-
-        let object = Object {
-            id,
-            name: display_name.to_string(),
-            aliases: Vec::new(),
-            location: None,
-            prototype: None,
-            owner,
-            permissions: PermissionFlags::OWNER,
-            properties: HashMap::new(),
-            verbs: HashMap::new(),
-            event_handlers: HashMap::new(),
-            is_deleted: false,
-            deleted_at: None,
-        };
-
-        self.persistence.save_object(&object).await?;
-        Ok(object)
-    }
-
-    /// Create an object where the slug and display name are the same (bootstrap/tests).
-    pub async fn create(
-        &self,
-        type_name: &str,
-        slug: &str,
-        owner: ObjectId,
-    ) -> anyhow::Result<Object> {
-        self.create_named(type_name, slug, slug, owner).await
-    }
-
-    pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
-        self.persistence.load_object(id).await
-    }
 }
 
 impl Object {
@@ -358,23 +249,6 @@ impl Object {
             .values()
             .filter(|obj| obj.is_active() && obj.location.as_ref() == Some(&self.id))
             .collect()
-    }
-
-    /// Initialize a naked player from a MUDL player template and creature definition.
-    pub fn init_body(&mut self, template: &PlayerTemplate) {
-        self.add_property(Property {
-            name: "creature".to_string(),
-            value: Value::String(template.creature.clone()),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-        self.add_property(Property {
-            name: "gender".to_string(),
-            value: Value::String(template.gender.clone()),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-        self.set_property_map("body_slots", HashMap::new());
     }
 
     pub fn creature_name(&self) -> Option<String> {
@@ -525,11 +399,7 @@ fn format_properties_builder(obj: &Object, objects: &HashMap<ObjectId, Object>) 
         .into_iter()
         .map(|name| {
             let prop = &obj.properties[name];
-            format!(
-                "  {}: {}",
-                name,
-                format_value(&prop.value, objects)
-            )
+            format!("  {}: {}", name, format_value(&prop.value, objects))
         })
         .collect::<Vec<_>>()
         .join("\n")

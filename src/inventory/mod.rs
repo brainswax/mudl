@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
-use crate::object::{Object, ObjectId, PermissionFlags, Property, Value};
+use crate::object::{LocationRef, Object, ObjectId};
+use crate::world::move_manager::{
+    move_object, move_to_container, move_to_room, MoveContext, MoveError, MoveHooks,
+};
 
 /// Errors returned by inventory operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,165 +59,17 @@ pub struct InventoryContext<'a> {
     pub anatomy: &'a AnatomyRegistry,
 }
 
-impl Object {
-    pub fn init_item_defaults(&mut self, pocketable: bool) {
-        self.set_property_bool("is_pocketable", pocketable);
-        self.set_property_bool("is_wearable", false);
-        self.set_property_bool("is_container", false);
-    }
-
-    pub fn init_container_defaults(&mut self, capacity: u32, wearable: bool) {
-        self.set_property_bool("is_container", true);
-        self.set_property_int("capacity", i64::from(capacity));
-        self.set_property_list("contents", vec![]);
-        self.set_property_bool("is_wearable", wearable);
-        self.set_property_bool("is_pocketable", false);
-        if wearable {
-            self.set_property_string("wear_slot", "torso");
-        }
-    }
-
-    pub fn set_property_bool(&mut self, name: &str, value: bool) {
-        self.add_property(Property {
-            name: name.to_string(),
-            value: Value::Bool(value),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-    }
-
-    pub fn set_property_int(&mut self, name: &str, value: i64) {
-        self.add_property(Property {
-            name: name.to_string(),
-            value: Value::Int(value),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-    }
-
-    pub fn set_property_string(&mut self, name: &str, value: impl Into<String>) {
-        self.add_property(Property {
-            name: name.to_string(),
-            value: Value::String(value.into()),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-    }
-
-    pub fn set_property_list(&mut self, name: &str, items: Vec<ObjectId>) {
-        self.add_property(Property {
-            name: name.to_string(),
-            value: Value::List(items.into_iter().map(Value::ObjectRef).collect()),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-    }
-
-    pub fn get_bool_property(&self, name: &str) -> Option<bool> {
-        self.get_property(name).and_then(|p| {
-            if let Value::Bool(b) = &p.value {
-                Some(*b)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn get_int_property(&self, name: &str) -> Option<i64> {
-        self.get_property(name).and_then(|p| {
-            if let Value::Int(n) = &p.value {
-                Some(*n)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn get_string_property(&self, name: &str) -> Option<String> {
-        self.get_property(name).and_then(|p| {
-            if let Value::String(s) = &p.value {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn get_object_list_property(&self, name: &str) -> Vec<ObjectId> {
-        self.get_property(name)
-            .and_then(|p| {
-                if let Value::List(items) = &p.value {
-                    Some(
-                        items
-                            .iter()
-                            .filter_map(|v| {
-                                if let Value::ObjectRef(id) = v {
-                                    Some(id.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect(),
-                    )
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn is_container(&self) -> bool {
-        self.get_bool_property("is_container").unwrap_or(false)
-    }
-
-    pub fn is_wearable(&self) -> bool {
-        self.get_bool_property("is_wearable").unwrap_or(false)
-    }
-
-    pub fn hand_slot(&self) -> Option<String> {
-        self.get_string_property("hand_slot")
-    }
-
-    pub fn wear_slot(&self) -> Option<String> {
-        self.get_string_property("wear_slot")
-    }
-
-    pub fn container_capacity(&self) -> Option<u32> {
-        self.get_int_property("capacity").map(|c| c as u32)
-    }
-
-    pub fn container_contents(&self) -> Vec<ObjectId> {
-        self.get_object_list_property("contents")
-    }
-
-    pub fn carried_slot(&self) -> Option<String> {
-        self.get_string_property("carried_slot")
-    }
-
-    pub fn set_carried_slot(&mut self, slot: Option<&str>) {
-        if let Some(slot) = slot {
-            self.set_property_string("carried_slot", slot);
-        } else {
-            self.properties.remove("carried_slot");
-        }
-    }
-
-    fn add_to_list_property(&mut self, prop: &str, id: ObjectId) {
-        let mut list = self.get_object_list_property(prop);
-        if !list.contains(&id) {
-            list.push(id);
-            self.set_property_list(prop, list);
-        }
-    }
-
-    fn remove_from_list_property(&mut self, prop: &str, id: &ObjectId) {
-        let list: Vec<ObjectId> = self
-            .get_object_list_property(prop)
-            .into_iter()
-            .filter(|item| item != id)
-            .collect();
-        self.set_property_list(prop, list);
-    }
+fn with_move_ctx<'a, 'b, F, T>(ctx: &'a mut InventoryContext<'b>, f: F) -> Result<T, InventoryError>
+where
+    F: FnOnce(&mut MoveContext<'a>) -> Result<T, MoveError>,
+{
+    let mut move_ctx = MoveContext {
+        objects: ctx.objects,
+        anatomy: Some(ctx.anatomy),
+        hooks: MoveHooks::default(),
+        dirty: None,
+    };
+    f(&mut move_ctx).map_err(Into::into)
 }
 
 fn player_body_plan<'a>(
@@ -290,7 +145,8 @@ fn resolve_inventory_target(
         if !obj.is_active() {
             continue;
         }
-        if name_matches(&needle, obj) && scope_matches(obj, obj_id, room_id, player_id, objects, scope)
+        if name_matches(&needle, obj)
+            && scope_matches(obj, obj_id, room_id, player_id, objects, scope)
         {
             matches.push(obj_id.clone());
         }
@@ -315,8 +171,9 @@ fn scope_matches(
 ) -> bool {
     match scope {
         ResolveScope::Carried => is_carried_by(player_id, obj_id, objects),
-        ResolveScope::Ground => room_id
-            .is_some_and(|room| is_on_ground(obj, obj_id, room, player_id, objects)),
+        ResolveScope::Ground => {
+            room_id.is_some_and(|room| is_on_ground(obj, obj_id, room, player_id, objects))
+        }
         ResolveScope::CarriedOrGround => {
             is_carried_by(player_id, obj_id, objects)
                 || room_id.is_some_and(|room| obj.location.as_ref() == Some(room))
@@ -416,29 +273,6 @@ fn place_in_grasp_slots(
     Ok(target_slots)
 }
 
-fn place_in_wear_slot(
-    player_id: &ObjectId,
-    item_id: &ObjectId,
-    slot: &str,
-    objects: &mut HashMap<ObjectId, Object>,
-) -> Result<(), InventoryError> {
-    let player = objects.get(player_id).unwrap().clone();
-    if player.body_slot_item(slot).is_some() {
-        return Err(InventoryError::SlotFull(slot.to_string()));
-    }
-
-    let mut player = objects.get(player_id).unwrap().clone();
-    player.set_body_slot(slot, Some(item_id.clone()));
-    objects.insert(player_id.clone(), player);
-
-    let mut item = objects.get(item_id).unwrap().clone();
-    item.location = Some(player_id.clone());
-    item.set_carried_slot(Some(slot));
-    objects.insert(item_id.clone(), item);
-
-    Ok(())
-}
-
 fn remove_from_player(
     player_id: &ObjectId,
     item_id: &ObjectId,
@@ -475,9 +309,15 @@ pub fn take_item(
         return Err(InventoryError::AlreadyCarrying);
     }
 
-    let player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    let plan = player_body_plan(&player, ctx.anatomy)?;
-    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
+    let player_id = ctx.player_id.clone();
+    with_move_ctx(ctx, |mctx| {
+        move_object(
+            mctx,
+            &item_id,
+            LocationRef::Room(room_id),
+            LocationRef::Inventory(player_id),
+        )
+    })?;
 
     Ok(format!("You pick up the {}.", item.name))
 }
@@ -512,12 +352,7 @@ pub fn drop_item(
         }
     }
 
-    remove_from_player(ctx.player_id, &item_id, ctx.objects);
-
-    let mut item = ctx.objects.get(&item_id).unwrap().clone();
-    item.location = Some(room_id);
-    item.set_carried_slot(None);
-    ctx.objects.insert(item_id, item);
+    with_move_ctx(ctx, |mctx| move_to_room(mctx, &item_id, &room_id))?;
 
     Ok(format!("You drop the {item_name_display}."))
 }
@@ -534,14 +369,13 @@ pub fn put_item(
         ctx.objects,
         ResolveScope::Carried,
     )?;
-    let container_id =
-        resolve_inventory_target(
-            container_name,
-            None,
-            ctx.player_id,
-            ctx.objects,
-            ResolveScope::Carried,
-        )?;
+    let container_id = resolve_inventory_target(
+        container_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    )?;
 
     if item_id == container_id {
         return Err(InventoryError::InvalidTarget(
@@ -566,25 +400,11 @@ pub fn put_item(
         return Err(InventoryError::ContainerNotCarried);
     }
 
-    let capacity = container.container_capacity().unwrap_or(10) as usize;
-    if container.container_contents().len() >= capacity {
-        return Err(InventoryError::ContainerFull);
-    }
-
     let item = ctx.objects.get(&item_id).unwrap().clone();
     let item_display = item.name.clone();
     let container_display = container.name.clone();
 
-    remove_from_player(ctx.player_id, &item_id, ctx.objects);
-
-    let mut container = ctx.objects.get(&container_id).unwrap().clone();
-    container.add_to_list_property("contents", item_id.clone());
-    ctx.objects.insert(container_id.clone(), container);
-
-    let mut item = ctx.objects.get(&item_id).unwrap().clone();
-    item.location = Some(container_id);
-    item.set_carried_slot(None);
-    ctx.objects.insert(item_id, item);
+    with_move_ctx(ctx, |mctx| move_to_container(mctx, &item_id, &container_id))?;
 
     Ok(format!(
         "You put the {item_display} in your {container_display}."
@@ -596,14 +416,13 @@ pub fn remove_item(
     item_name: &str,
     container_name: &str,
 ) -> Result<String, InventoryError> {
-    let container_id =
-        resolve_inventory_target(
-            container_name,
-            None,
-            ctx.player_id,
-            ctx.objects,
-            ResolveScope::Carried,
-        )?;
+    let container_id = resolve_inventory_target(
+        container_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    )?;
 
     let container = ctx
         .objects
@@ -633,13 +452,15 @@ pub fn remove_item(
     let item_display = item.name.clone();
     let container_display = container.name.clone();
 
-    let mut container = ctx.objects.get(&container_id).unwrap().clone();
-    container.remove_from_list_property("contents", &item_id);
-    ctx.objects.insert(container_id.clone(), container);
-
-    let player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    let plan = player_body_plan(&player, ctx.anatomy)?;
-    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
+    let player_id = ctx.player_id.clone();
+    with_move_ctx(ctx, |mctx| {
+        move_object(
+            mctx,
+            &item_id,
+            LocationRef::Container(container_id.clone(), None),
+            LocationRef::Inventory(player_id),
+        )
+    })?;
 
     Ok(format!(
         "You remove the {item_display} from your {container_display}."
@@ -714,12 +535,6 @@ pub fn wear_item(
         return Err(InventoryError::NotWearable);
     }
 
-    if is_carried_by(ctx.player_id, &item_id, ctx.objects) {
-        remove_from_player(ctx.player_id, &item_id, ctx.objects);
-    } else if item.location.as_ref() != Some(&room_id) {
-        return Err(InventoryError::NotInRoom);
-    }
-
     let player = ctx.objects.get(ctx.player_id).unwrap().clone();
     let plan = player_body_plan(&player, ctx.anatomy)?;
     let target_slot = item
@@ -731,9 +546,26 @@ pub fn wear_item(
         return Err(InventoryError::NotWearable);
     }
 
-    place_in_wear_slot(ctx.player_id, &item_id, &target_slot, ctx.objects)?;
+    let src = if is_carried_by(ctx.player_id, &item_id, ctx.objects) {
+        crate::world::move_manager::resolve_location(&item_id, ctx.objects)
+            .ok_or(InventoryError::NotCarried)?
+    } else if item.location.as_ref() == Some(&room_id) {
+        LocationRef::Room(room_id)
+    } else {
+        return Err(InventoryError::NotInRoom);
+    };
 
-    let display = ctx.objects.get(&item_id).unwrap().name.clone();
+    let player_id = ctx.player_id.clone();
+    let display = item.name.clone();
+    with_move_ctx(ctx, |mctx| {
+        move_object(
+            mctx,
+            &item_id,
+            src,
+            LocationRef::BodySlot(player_id, target_slot),
+        )
+    })?;
+
     Ok(format!("You wear the {display}."))
 }
 
@@ -896,10 +728,7 @@ pub fn describe_inventory(
                 if obj.is_container() {
                     for inner_id in obj.container_contents() {
                         if let Some(inner) = objects.get(&inner_id) {
-                            entries.push(format!(
-                                "    {} — inside your {}",
-                                inner.name, obj.name
-                            ));
+                            entries.push(format!("    {} — inside your {}", inner.name, obj.name));
                         }
                     }
                 }

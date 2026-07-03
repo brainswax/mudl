@@ -67,6 +67,7 @@ Type `help` at the prompt to see the list of commands at any time.
 | `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
 | `examine [target]` (`x`) | Builder view: properties, verbs, named exits     | `examine`, `examine daisy`           |
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
+| `@create <type> <name...> [key=value...]` | Wizard create with role options | `@create container "Leather Bag" capacity=8 max_weight=40` |
 | `go <dir>`               | Move in a direction from the current room        | `go north`                           |
 | `inventory` (`i`)        | Show hands, pockets, worn containers, and contents | `i`                                |
 | `get` / `take <item>`    | Pick up an item from the ground (not held items) | `take sword`                         |
@@ -116,6 +117,17 @@ Players spawn as **naked humans** from the active world's `creatures.mudl` (`@cr
 `create <type> <name...>` places the new object at your current location (area, room, or any navigable place). Multi-word names are supported; IDs are lowercase slugs (`Rusty Sword` → `sword:rusty-sword-001`). Quote names if needed: `create sword "Rusty Sword"`.
 
 `take` / `get` only search the ground in your current location — items already in your hands are ignored. One ground match takes silently; multiple ground matches prompt "Which X do you mean?".
+
+`@create` supports role-aware types: `container`, `wearable`, `stackable`, plus `key=value` options (`capacity`, `max_weight`, `max_volume`, `count`, `prototype`). Example:
+
+```text
+> @create container "Leather Bag" capacity=8 max_weight=40
+You forge a Leather Bag, and it clatters to the ground in The Void.
+> @create stackable "Gold Coin" count=25
+You forge a Gold Coin, and it clatters to the ground in The Void.
+> put coin in bag
+You put the Gold Coin in your Leather Bag.
+```
 
 Example output:
 

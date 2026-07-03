@@ -4,18 +4,15 @@ use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
-    bootstrap_active_universe, create_at_location, package_module, parse_create_args,
-    persist_inventory_changes, reload_universe, soft_delete_object, take_from_location,
-    undelete_object,
+    bootstrap_active_universe, create_at_location, create_at_location_with_options, package_module,
+    parse_create_args, parse_create_options, persist_inventory_changes, reload_universe,
+    soft_delete_object, take_from_location, undelete_object,
 };
-use mudl::world::restore_session;
 use mudl::display::{
-    narrate_create, narrate_go, narrate_module_bundled,
-    narrate_module_reloaded, narrate_no_exit, narrate_no_location, narrate_no_location_builder,
-    narrate_loaded, narrate_not_in_cache, narrate_property_added, narrate_saved,
-    narrate_target_not_found,
-    narrate_verb_added, narrate_wizard_not_found, resolve_target, Describable, DisplayContext,
-    DisplayMode,
+    narrate_create, narrate_go, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
+    narrate_no_exit, narrate_no_location, narrate_no_location_builder, narrate_not_in_cache,
+    narrate_property_added, narrate_saved, narrate_target_not_found, narrate_verb_added,
+    narrate_wizard_not_found, resolve_target, Describable, DisplayContext, DisplayMode,
 };
 use mudl::inventory::{
     describe_inventory, drop_item, put_item, remove_item, wear_item, wield_item, InventoryContext,
@@ -23,6 +20,7 @@ use mudl::inventory::{
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
 use mudl::persistence::{Persistence, SqlitePersistence};
+use mudl::world::restore_session;
 use tracing::{error, info, warn};
 
 async fn load_all_objects(
@@ -232,9 +230,66 @@ async fn main() -> Result<()> {
                         println!(
                             "  module bundle <outdir>      - package module to output directory"
                         );
+                        println!(
+                            "  @create <type> <name...> [key=value...] - wizard create with roles"
+                        );
                         println!("  @delete <target>            - wizard: soft-delete an object");
-                        println!("  @undelete <id>              - wizard: restore soft-deleted object");
+                        println!(
+                            "  @undelete <id>              - wizard: restore soft-deleted object"
+                        );
                         println!("  exit                        - quit");
+                    }
+                    "@create" => {
+                        let rest = input.trim().strip_prefix("@create").unwrap_or("").trim();
+                        let segments: Vec<&str> = rest.split_whitespace().collect();
+                        if segments.len() < 2 {
+                            println!("Usage: @create <type> <name...> [capacity=N] [max_weight=N]");
+                            continue;
+                        }
+                        let type_name = segments[0].to_ascii_lowercase();
+                        let opt_start = segments.iter().position(|s| s.contains('='));
+                        let (name_tokens, opt_tokens) = if let Some(idx) = opt_start {
+                            (&segments[1..idx], &segments[idx..])
+                        } else {
+                            (&segments[1..], &[] as &[&str])
+                        };
+                        let display_name = if name_tokens.len() == 1 {
+                            name_tokens[0].trim_matches('"').to_string()
+                        } else {
+                            name_tokens.join(" ")
+                        };
+                        let options = parse_create_options(opt_tokens);
+                        match create_at_location_with_options(
+                            &factory,
+                            &type_name,
+                            &display_name,
+                            default_owner.clone(),
+                            current_location.as_ref(),
+                            &active_anatomy,
+                            options,
+                        )
+                        .await
+                        {
+                            Ok(obj) => {
+                                info!(
+                                    id = %obj.id,
+                                    name = %obj.name,
+                                    roles = ?obj.roles(),
+                                    "wizard object created"
+                                );
+                                let objects = load_all_objects(&persistence, &cache).await?;
+                                let loc = obj
+                                    .location
+                                    .as_ref()
+                                    .and_then(|id| location_object(id, &objects));
+                                println!("{}", narrate_create(&obj, loc));
+                                cache.insert(obj.id.clone(), obj);
+                            }
+                            Err(e) => {
+                                error!(error = %e, "wizard create failed");
+                                println!("Your conjuration fizzles.");
+                            }
+                        }
                     }
                     "create" => {
                         let (type_name, display_name) = match parse_create_args(&parts, input) {
@@ -317,7 +372,9 @@ async fn main() -> Result<()> {
                             }
                             Err(e) => {
                                 error!(error = %e, "look failed");
-                                println!("Something stirs in the void, but you cannot make sense of it.");
+                                println!(
+                                    "Something stirs in the void, but you cannot make sense of it."
+                                );
                             }
                         }
                     }
@@ -345,15 +402,21 @@ async fn main() -> Result<()> {
                                 } else if let Some(target) = parts.get(1) {
                                     println!("{}", narrate_target_not_found(target));
                                 } else {
-                                    println!("{}", narrate_no_location_builder(
-                                        "Try 'examine <target>' or 'examine here'."
-                                    ));
+                                    println!(
+                                        "{}",
+                                        narrate_no_location_builder(
+                                            "Try 'examine <target>' or 'examine here'."
+                                        )
+                                    );
                                 }
                             }
                             Ok(None) => {
-                                println!("{}", narrate_no_location_builder(
-                                    "Try 'examine <target>' or 'examine here'."
-                                ));
+                                println!(
+                                    "{}",
+                                    narrate_no_location_builder(
+                                        "Try 'examine <target>' or 'examine here'."
+                                    )
+                                );
                             }
                             Err(e) => {
                                 error!(error = %e, "examine failed");
@@ -378,15 +441,17 @@ async fn main() -> Result<()> {
                                 } else if let Some(target) = parts.get(1) {
                                     println!("{}", narrate_target_not_found(target));
                                 } else {
-                                    println!("{}", narrate_no_location_builder(
-                                        "Use '@dump <target>'."
-                                    ));
+                                    println!(
+                                        "{}",
+                                        narrate_no_location_builder("Use '@dump <target>'.")
+                                    );
                                 }
                             }
                             Ok(None) => {
-                                println!("{}", narrate_no_location_builder(
-                                    "Use '@dump <target>'."
-                                ));
+                                println!(
+                                    "{}",
+                                    narrate_no_location_builder("Use '@dump <target>'.")
+                                );
                             }
                             Err(e) => {
                                 error!(error = %e, "@dump failed");
@@ -407,14 +472,15 @@ async fn main() -> Result<()> {
                             Some(&default_owner),
                             &objects,
                         ) {
-                            Some(id) => match soft_delete_object(&persistence, &id, &mut cache).await
-                            {
-                                Ok(msg) => println!("{msg}"),
-                                Err(e) => {
-                                    error!(error = %e, "soft delete failed");
-                                    println!("The unraveling fails — something resists.");
+                            Some(id) => {
+                                match soft_delete_object(&persistence, &id, &mut cache).await {
+                                    Ok(msg) => println!("{msg}"),
+                                    Err(e) => {
+                                        error!(error = %e, "soft delete failed");
+                                        println!("The unraveling fails — something resists.");
+                                    }
                                 }
-                            },
+                            }
                             None => println!("{}", narrate_wizard_not_found()),
                         }
                     }
@@ -574,10 +640,13 @@ async fn main() -> Result<()> {
                                             sources = world.sources.len(),
                                             "module reloaded"
                                         );
-                                        println!("{}", narrate_module_reloaded(
-                                            &loaded_universe.name,
-                                            &world.name,
-                                        ));
+                                        println!(
+                                            "{}",
+                                            narrate_module_reloaded(
+                                                &loaded_universe.name,
+                                                &world.name,
+                                            )
+                                        );
                                     }
                                     Err(e) => {
                                         error!(error = %e, "module reload failed");
@@ -597,20 +666,22 @@ async fn main() -> Result<()> {
                                     out,
                                 ) {
                                     Ok(manifest) => {
-                                        let module_path = module_path
-                                            .to_str()
-                                            .unwrap_or("modules/default");
+                                        let module_path =
+                                            module_path.to_str().unwrap_or("modules/default");
                                         info!(
                                             module = %manifest.name,
                                             output = %out,
                                             files = manifest.files.len(),
                                             "module bundled"
                                         );
-                                        println!("{}", narrate_module_bundled(
-                                            module_path,
-                                            out,
-                                            manifest.files.len(),
-                                        ));
+                                        println!(
+                                            "{}",
+                                            narrate_module_bundled(
+                                                module_path,
+                                                out,
+                                                manifest.files.len(),
+                                            )
+                                        );
                                     }
                                     Err(e) => {
                                         error!(error = %e, "module bundle failed");
@@ -659,12 +730,16 @@ async fn main() -> Result<()> {
                                         o
                                     }
                                     Ok(None) => {
-                                        println!("The ground shifts beneath you — you are nowhere.");
+                                        println!(
+                                            "The ground shifts beneath you — you are nowhere."
+                                        );
                                         continue;
                                     }
                                     Err(e) => {
                                         error!(error = %e, "failed to load location");
-                                        println!("The ground shifts beneath you — you are nowhere.");
+                                        println!(
+                                            "The ground shifts beneath you — you are nowhere."
+                                        );
                                         continue;
                                     }
                                 }

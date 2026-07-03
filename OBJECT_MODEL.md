@@ -6,7 +6,8 @@ This document defines the core data structures and rules that power the MUDL wor
 
 ## Philosophy
 - **Everything is an Object** — rooms, items, players, NPCs, exits, abstract systems, even the world itself.
-- **Prototype-based inheritance** — objects inherit from a parent (like classic MOO or JavaScript prototypes).
+- **Composition over inheritance** — capabilities are **roles** (Container, Wearable, Creature, Stackable) stored as properties, composed at creation time via `ObjectFactory` or MUDL `MudlRoleProps`.
+- **Prototype-based inheritance** — objects inherit from a parent (like classic MOO or JavaScript prototypes) for shared defaults and stackable item templates.
 - **Runtime modifiable** — the world can add, change, or remove properties, verbs, and behaviors while running.
 - **Secure by default** — all mutations go through the API Gateway + RBAC checks.
 
@@ -205,17 +206,52 @@ Implementations:
 - **Player/Thing**: name + description, owner info in Builder mode
 - Default fallback to property-based rendering.
 
+## Composable Roles (Milestone 1)
+
+Roles are property bundles applied via `Object::apply_*_role()` or `MudlRoleProps::apply_to()`. An object may hold multiple roles (e.g. a wearable backpack that is also a container).
+
+| Role | Key properties | Factory helper |
+|------|----------------|----------------|
+| **Creature** | `creature`, `gender`, `body_slots` | `create_player` |
+| **Container** | `is_container`, `contents`, `capacity`, `max_weight`, `max_volume` | `create_container`, `create_container_with_spec` |
+| **Wearable** | `is_wearable`, `wear_slot`, `weight`, `volume` | `create_wearable` |
+| **Stackable** | `stackable`, `stack_count`, `max_stack` | `create_stackable_item` |
+| **Item (base)** | `weight`, `volume`, `is_pocketable`, `hand_slot` | `create_item` |
+
+**LocationRef** (`src/object/location.rs`) types where an object resides:
+
+```rust
+pub enum LocationRef {
+    Room(ObjectId),
+    Inventory(ObjectId),
+    Container(ObjectId, Option<String>),
+    BodySlot(ObjectId, String),
+    Nowhere,
+}
+```
+
+**MoveManager** (`src/world/move_manager.rs`) implements `move_object(src, dst, obj)` with capacity, weight, and volume checks. Inventory verbs delegate here. An `on_move` hook stub exists for future event triggers.
+
+**Dirty tracking**: `DirtyTracker` records mutated object IDs; `persist_dirty()` saves only those rows.
+
 ## Anatomy and Inventory
 
-Body plans are defined in MUDL (`anatomy/*.mudl`) and loaded into an `AnatomyRegistry`. Players reference a plan via `body_plan` and track occupancy in `body_slots` (a map of slot name → item ID).
+Body plans are defined in MUDL (`creatures.mudl`) and loaded into an `AnatomyRegistry`. Players reference a plan via `creature` / `body_plan` and track occupancy in `body_slots` (a map of slot name → item ID, including worn items).
 
 | Property | On | Type | Purpose |
 |----------|-----|------|---------|
-| `body_plan` | player | String | Loaded plan name (e.g. `human`) |
+| `creature` | player | String | Loaded plan name (e.g. `human`) |
 | `gender` | player | String | Description hint from player template |
-| `body_slots` | player | Map\<String, ObjectRef\> | Occupied anatomical slots |
+| `body_slots` | player | Map\<String, ObjectRef\> | Occupied anatomical slots (grasp + wear) |
 | `contents` | container | List\<ObjectRef\> | Items inside a container |
-| `capacity` | container | Int | Max items the container holds |
+| `capacity` | container | Int | Max discrete items the container holds |
+| `max_weight` | container | Int | Max total weight of contents (optional) |
+| `max_volume` | container | Int | Max total volume of contents (optional) |
+| `weight` | item | Int | Unit weight (× `stack_count` when stackable) |
+| `volume` | item | Int | Unit volume (× `stack_count` when stackable) |
+| `stackable` | item | Bool | Identical units collapse into one object |
+| `stack_count` | item | Int | Number of identical units in a stack |
+| `max_stack` | item | Int | Maximum stack size |
 | `carried_slot` | item | String | Body slot name when held/worn |
 | `is_wearable` | item | Bool | Can be worn on a `wear` slot |
 | `wear_slot` | item | String | Target slot (e.g. `torso`, `head`) |
@@ -224,7 +260,7 @@ Body plans are defined in MUDL (`anatomy/*.mudl`) and loaded into an `AnatomyReg
 
 Default naked humans have **no pockets** — only biological `grasp`, `wear`, and `limb` slots from the human body plan. Pockets will come from clothing in a follow-up.
 
-Factory helpers: `create_player` (uses anatomy template), `create_item`, `create_container`. Anatomy loader: `src/core/anatomy.rs`. Inventory operations: `src/core/inventory.rs`.
+Factory helpers: `create_player`, `create_item`, `create_container`, `create_wearable`, `create_stackable_item`, `create_item_instances`. MUDL integration: `MudlRoleProps` in `src/mudl/roles.rs`. Move operations: `src/world/move_manager.rs`. Inventory commands: `src/inventory/mod.rs`.
 
 ## Persistence Notes
 - Use ObjectFactory for creation.

@@ -55,10 +55,12 @@ The system emphasizes **separation of concerns**, extensibility, and safety (esp
 
 ### 1. Object Model (Fundamental)
 - Everything is an **Object** (rooms, items, players, NPCs, abstract concepts).
-- Properties: key-value data with optional behaviors.
+- **Composable roles** (not deep inheritance): `Container`, `Wearable`, `Creature`, `Stackable`, plus location types (`room`, `area`, …).
+- `LocationRef` enum models the object graph: `Room`, `Inventory`, `Container`, `BodySlot`, `Nowhere`.
+- Properties: key-value data with optional behaviors (`weight`, `volume`, `capacity`, `contents`, `body_slots`, …).
 - Verbs/Behaviors: executable code attached to objects.
-- Events/Hooks: `on_enter`, `on_say`, `on_use`, custom events.
-- Prototype/parent system for inheritance.
+- Events/Hooks: `on_enter`, `on_say`, `on_use`, custom events; `MoveManager` stubs `on_move` for future triggers.
+- Prototype/parent system for inheritance and stackable/identical items.
 
 ### 2. DSL Interpreter
 - Custom language ("MUDL") designed for MUD concepts.
@@ -110,12 +112,12 @@ The system emphasizes **separation of concerns**, extensibility, and safety (esp
 ```
 mudl/
 ├── src/                    # Rust engine only
-│   ├── object/             # Object model + ObjectFactory
-│   ├── mudl/               # MUDL parser, anatomy, @include loader
-│   ├── world/              # Module bootstrap + packaging
+│   ├── object/             # Object model, roles, LocationRef, ObjectFactory
+│   ├── mudl/               # MUDL parser, anatomy, role props, @include loader
+│   ├── world/              # Bootstrap, MoveManager, dirty tracking, session
 │   ├── command/            # Shared command/bootstrap helpers
 │   ├── display/            # Player/builder/debug presentation
-│   ├── inventory/          # Body-slot inventory operations
+│   ├── inventory/          # Body-slot inventory (delegates to MoveManager)
 │   ├── persistence/        # SQLite abstraction
 │   └── bin/repl.rs         # Development REPL
 ├── modules/                # MUDL game data (not Rust)
@@ -186,15 +188,23 @@ The object model's prototype/parent system (`prototype: Option<ObjectId>`) is th
 
 Command helpers live in `src/command/`; inventory slot logic in `src/inventory/`; presentation in `src/display/` and `Object::is_location()`.
 
+## Move Semantics
+
+`MoveManager` (`src/world/move_manager.rs`) is the single authority for relocating objects:
+
+- `move_object(src: LocationRef, dst: LocationRef, obj: ObjId)` validates source placement, checks destination capacity/weight/volume, updates holder lists (`contents`, `body_slots`), and fires `on_move` hooks.
+- Inventory commands (`take`, `drop`, `put`, `remove`, `wear`) delegate to `MoveManager` convenience wrappers.
+- `ObjectFactory::create_stackable_item` creates one instance with `stack_count`; `create_item_instances` spawns separate IDs for non-stacked duplicates.
+
 ## Persistence Strategy
 
-All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID counter table.
+All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID counter table. New role fields (`weight`, `volume`, `max_weight`, `stack_count`, etc.) live inside the JSON blob — no schema migration required.
 
 | When | What is saved |
 |------|----------------|
 | `ObjectFactory::create*` | New object immediately (`save_object`) |
-| `create` / `create_at_location` | Object + updated `location` |
-| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Full active object graph after mutation (`persist_all`) |
+| `create` / `create_at_location` / `@create` | Object + updated `location` |
+| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Full active object graph after mutation (`persist_all`); `DirtyTracker` + `persist_dirty` available for incremental saves |
 | `go` | Player `location` |
 | `add_prop`, `add_verb`, `save` | Target object |
 | Bootstrap | World areas, exits, default player (idempotent) |
