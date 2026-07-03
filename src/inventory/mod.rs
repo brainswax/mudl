@@ -781,10 +781,6 @@ pub fn describe_inventory(
         lines.extend(entries);
     }
 
-    if let Some(summary) = crate::display::format_carried_weight_summary(player, objects) {
-        lines.push(summary);
-    }
-
     lines.join("\n")
 }
 

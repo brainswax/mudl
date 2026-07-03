@@ -13,7 +13,7 @@ use mudl::display::{
     narrate_no_exit, narrate_no_location, narrate_no_location_builder, narrate_not_in_cache,
     narrate_property_added, narrate_saved, narrate_target_not_found, narrate_verb_added,
     narrate_wizard_not_found, resolve_object, resolve_target, Describable, DisplayContext,
-    DisplayMode, ResolveScope, TargetResolution,
+    DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
 use mudl::inventory::{
     describe_inventory, drop_item, parse_put_args, put_item, remove_item, wear_item, wield_item,
@@ -326,10 +326,13 @@ async fn main() -> Result<()> {
                         {
                             Ok(TargetResolution::Found(id)) => {
                                 let objects = load_all_objects(&persistence, &cache).await?;
-                                let ctx =
-                                    DisplayContext::new(default_owner.clone(), DisplayMode::Player)
-                                        .with_objects(objects)
-                                        .with_anatomy(active_anatomy.clone());
+                                let ctx = DisplayContext::new(
+                                    default_owner.clone(),
+                                    DisplayMode::Player,
+                                )
+                                .with_objects(objects)
+                                .with_anatomy(active_anatomy.clone())
+                                .with_flags(DisplayFlags::BRIEF);
                                 if let Some(obj) = cache.get(&id) {
                                     render_object(obj, &ctx, false, false);
                                 } else if let Some(target) = parts.get(1) {

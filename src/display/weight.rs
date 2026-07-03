@@ -72,7 +72,25 @@ pub fn format_weight_examine_builder(
     lines
 }
 
-/// Summary line for `look self` / inventory when the player is carrying weight.
+/// Light item-count summary for `look self` (no weight or per-slot detail).
+pub fn format_carried_items_brief(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> String {
+    let count = player
+        .carried_body_items()
+        .iter()
+        .filter(|id| objects.get(id).is_some_and(|obj| obj.is_active()))
+        .count();
+
+    match count {
+        0 => "You aren't carrying anything.".to_string(),
+        1 => "You are holding 1 item.".to_string(),
+        n => format!("You are holding {n} items."),
+    }
+}
+
+/// Summary line for `examine self` when the player is carrying weight.
 pub fn format_carried_weight_summary(
     player: &Object,
     objects: &HashMap<ObjectId, Object>,
@@ -133,6 +151,25 @@ mod tests {
 
         let line = format_weight_examine_player(&purse, &objects).unwrap();
         assert_eq!(line, "The purse weighs 2/10.");
+    }
+
+    #[test]
+    fn brief_carried_summary_counts_body_items() {
+        let mut player = bare("player:hero-001", "Hero");
+        let purse = bare("item:purse-001", "purse");
+        let sword = bare("item:sword-001", "sword");
+        player.set_body_slot("torso", Some(purse.id.clone()));
+        player.set_body_slot("right_hand", Some(sword.id.clone()));
+
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player.clone());
+        objects.insert(purse.id.clone(), purse);
+        objects.insert(sword.id.clone(), sword);
+
+        assert_eq!(
+            format_carried_items_brief(&player, &objects),
+            "You are holding 2 items."
+        );
     }
 
     #[test]

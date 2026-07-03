@@ -476,12 +476,15 @@ fn describe_room_player(obj: &Object, ctx: &DisplayContext) -> String {
 }
 
 fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
+    let brief = ctx.flags.contains(DisplayFlags::BRIEF);
     let mut lines = vec![crate::display::format_stackable_label(obj)];
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
     }
-    if let Some(weight) = crate::display::format_weight_examine_player(obj, &ctx.objects) {
-        lines.push(weight);
+    if !brief {
+        if let Some(weight) = crate::display::format_weight_examine_player(obj, &ctx.objects) {
+            lines.push(weight);
+        }
     }
     if obj.is_container() {
         let inside = crate::display::format_inside_container(obj, &ctx.objects);
@@ -490,15 +493,20 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
         }
     }
     if obj.object_type() == "player" && obj.id == ctx.observer {
-        let mut carried = describe_carried(obj, &ctx.objects, &ctx.anatomy);
-        if let Some(summary) =
-            crate::display::format_carried_weight_summary(obj, &ctx.objects)
-        {
-            if !carried.is_empty() {
-                carried.push('\n');
+        let carried = if brief {
+            crate::display::format_carried_items_brief(obj, &ctx.objects)
+        } else {
+            let mut detail = describe_carried(obj, &ctx.objects, &ctx.anatomy);
+            if let Some(summary) =
+                crate::display::format_carried_weight_summary(obj, &ctx.objects)
+            {
+                if !detail.is_empty() {
+                    detail.push('\n');
+                }
+                detail.push_str(&summary);
             }
-            carried.push_str(&summary);
-        }
+            detail
+        };
         lines.push(carried);
     }
     lines.join("\n")

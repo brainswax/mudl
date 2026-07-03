@@ -24,7 +24,8 @@ pub use resolve::{
     ResolveScope, ResolvedMatch, TargetResolution,
 };
 pub use weight::{
-    format_carried_weight_summary, format_weight_examine_builder, format_weight_examine_player,
+    format_carried_items_brief, format_carried_weight_summary, format_weight_examine_builder,
+    format_weight_examine_player,
 };
 
 /// How an object should be rendered for a given command/audience.
@@ -82,6 +83,11 @@ impl DisplayContext {
 
     pub fn with_anatomy(mut self, anatomy: AnatomyRegistry) -> Self {
         self.anatomy = anatomy;
+        self
+    }
+
+    pub fn with_flags(mut self, flags: DisplayFlags) -> Self {
+        self.flags = flags;
         self
     }
 
@@ -398,6 +404,68 @@ mod tests {
         assert!(!output.contains("ID:"));
         assert!(!output.contains("Properties:"));
         assert!(!output.contains("flip"));
+    }
+
+    #[test]
+    fn look_brief_hides_weight_and_shows_item_count() {
+        let owner = ObjectId::new("player:admin-001");
+        let mut purse = Object {
+            id: ObjectId::new("item:purse-001"),
+            name: "purse".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        purse.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 3,
+            max_weight: Some(10),
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+        });
+
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(purse.id.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.set_property_int("weight", 1);
+        coins.apply_stackable_role(&crate::object::StackableSpec {
+            count: 2,
+            max_stack: 99,
+        });
+        purse.set_property_list("contents", vec![coins.id.clone()]);
+
+        let mut objects = HashMap::new();
+        objects.insert(coins.id.clone(), coins);
+        objects.insert(purse.id.clone(), purse.clone());
+
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_objects(objects.clone())
+            .with_flags(DisplayFlags::BRIEF);
+        let look_out = purse.describe(&ctx);
+        assert!(!look_out.contains("weighs"));
+        assert!(look_out.contains("Inside the purse: 2 coins"));
+
+        let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let examine_out = purse.describe(&examine_ctx);
+        assert!(examine_out.contains("The purse weighs 2/10."));
     }
 
     #[test]
