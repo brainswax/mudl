@@ -635,7 +635,7 @@ fn grasp_held_items(
                     held.push(HeldInGrasp {
                         slot_name: slot.name.clone(),
                         slot: slot_display_name(&slot.name),
-                        item_name: obj.name.clone(),
+                        item_name: crate::display::format_stackable_label(obj),
                     });
                 }
             }
@@ -661,7 +661,10 @@ fn describe_grasp(
         if left_id == right_id {
             if let Some(obj) = objects.get(left_id) {
                 if obj.is_active() {
-                    return Some(format!("You are wielding {} with both hands.", obj.name));
+                    return Some(format!(
+                        "You are wielding {} with both hands.",
+                        crate::display::format_stackable_label(obj)
+                    ));
                 }
             }
         }
@@ -756,7 +759,8 @@ pub fn describe_inventory(
                 } else {
                     format!("in your {}", slot_display_name(slot))
                 };
-                entries.push(format!("  {} — {}", obj.name, placement));
+                let label = crate::display::format_stackable_label(obj);
+                entries.push(format!("  {label} — {placement}"));
 
                 if obj.is_container() {
                     for inner_id in obj.container_contents() {
@@ -1352,6 +1356,31 @@ mod tests {
         let purse = objects.get(&purse_id).unwrap();
         let stored = objects.get(&purse.container_contents()[0]).unwrap();
         assert_eq!(stored.stack_count(), 10);
+    }
+
+    #[tokio::test]
+    async fn look_self_shows_stackable_quantity_in_hand() {
+        let (factory, anatomy, player_id, _room_id, mut objects) = setup_world().await;
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.location = Some(player_id.clone());
+
+        let coins_id = coins.id.clone();
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(coins_id, coins);
+
+        let player = objects.get(&player_id).unwrap();
+        let carried = describe_carried(player, &objects, &anatomy);
+        assert!(carried.contains("20 coins"));
+        assert!(carried.contains("right hand"));
+
+        let inv = describe_inventory(player, &objects, &anatomy);
+        assert!(inv.contains("20 coins — in your right hand"));
     }
 
     #[tokio::test]

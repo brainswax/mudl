@@ -474,7 +474,7 @@ fn describe_room_player(obj: &Object, ctx: &DisplayContext) -> String {
 }
 
 fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![obj.name.clone()];
+    let mut lines = vec![crate::display::format_stackable_label(obj)];
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
     }
@@ -629,6 +629,43 @@ mod tests {
         let base = id_base_from_display_name("Purse");
         assert_eq!(base, "purse");
         assert!(base.len() <= ID_BASE_MAX_LEN);
+    }
+
+    #[test]
+    fn direct_look_stackable_shows_quantity() {
+        let owner = ObjectId::new("player:admin-001");
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(owner.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.apply_stackable_role(&StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        coins.add_property(Property {
+            name: "description".to_string(),
+            value: Value::String("Shiny gold coins.".to_string()),
+            permissions: PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(coins.id.clone(), coins.clone());
+
+        let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let output = coins.describe(&ctx);
+        assert!(output.starts_with("20 coins"));
+        assert!(output.contains("Shiny gold coins."));
     }
 
     #[test]

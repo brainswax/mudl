@@ -90,6 +90,16 @@ mod tests {
     }
 
     #[test]
+    fn stackable_label_singular_omits_count() {
+        let mut coin = bare("item:coin-001", "coin");
+        coin.apply_stackable_role(&crate::object::StackableSpec {
+            count: 1,
+            max_stack: 99,
+        });
+        assert_eq!(format_stackable_label(&coin), "coin");
+    }
+
+    #[test]
     fn inside_container_lists_stackables() {
         let mut purse = bare("item:purse-001", "purse");
         purse.apply_container_role(&crate::object::ContainerSpec {
