@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use crate::mudl::{AnatomyRegistry, BodyPlan};
 use crate::object::LocationRef;
 use crate::object::{Object, ObjectId};
+use crate::world::container_fit::{
+    compute_container_fit, fit_failure_reason, split_stack_id, ContainerFit,
+};
 use crate::world::dirty::DirtyTracker;
 
 /// Errors returned by move operations.
@@ -71,7 +74,10 @@ impl From<MoveError> for crate::inventory::InventoryError {
             MoveError::SelfContainment => {
                 Self::InvalidTarget("You can't put something inside itself.".into())
             }
-            MoveError::WeightExceeded | MoveError::VolumeExceeded => Self::ContainerFull,
+            MoveError::WeightExceeded => Self::InvalidTarget("That would be too heavy.".into()),
+            MoveError::VolumeExceeded => {
+                Self::InvalidTarget("That would take up too much space.".into())
+            }
         }
     }
 }
@@ -123,6 +129,8 @@ pub struct MoveResult {
     pub object_id: ObjectId,
     pub source: LocationRef,
     pub destination: LocationRef,
+    /// Units transferred when moving stackables (partial or full).
+    pub units_transferred: Option<u32>,
 }
 
 /// Resolve where an object currently resides.
@@ -178,34 +186,133 @@ fn grasp_slot_free(player: &Object, slot: &str) -> bool {
     player.body_slot_item(slot).is_none()
 }
 
-fn validate_container_acceptance(
-    container: &Object,
-    item: &Object,
-    objects: &HashMap<ObjectId, Object>,
+fn place_in_container(
+    ctx: &mut MoveContext<'_>,
+    item_id: &ObjectId,
+    container_id: &ObjectId,
+    src: &LocationRef,
+    fit: &ContainerFit,
+) -> Result<u32, MoveError> {
+    let item = ctx
+        .objects
+        .get(item_id)
+        .ok_or_else(|| MoveError::NotFound(item_id.to_string()))?
+        .clone();
+    let stack_count = if item.is_stackable() {
+        item.stack_count()
+    } else {
+        1
+    };
+    let units = fit.units.min(stack_count);
+    if units == 0 {
+        let container = ctx
+            .objects
+            .get(container_id)
+            .ok_or(MoveError::NotContainer)?
+            .clone();
+        return Err(fit_failure_reason(&container, &item, ctx.objects));
+    }
+
+    let consumes_source = units >= stack_count;
+
+    if let Some(ref merge_id) = fit.merge_target {
+        let target = ctx
+            .objects
+            .get(merge_id)
+            .ok_or_else(|| MoveError::NotFound(merge_id.to_string()))?
+            .clone();
+        let mut target = target;
+        target.set_stack_count(target.stack_count() + units);
+        ctx.objects.insert(merge_id.clone(), target);
+
+        if consumes_source {
+            detach_from_source(ctx, item_id, src, true)?;
+            ctx.objects.remove(item_id);
+        } else {
+            let mut source = item;
+            source.set_stack_count(stack_count - units);
+            ctx.objects.insert(item_id.clone(), source);
+        }
+        return Ok(units);
+    }
+
+    if consumes_source {
+        detach_from_source(ctx, item_id, src, true)?;
+
+        let mut container = ctx
+            .objects
+            .get(container_id)
+            .ok_or(MoveError::NotContainer)?
+            .clone();
+        container.add_to_list_property("contents", item_id.clone());
+        ctx.objects.insert(container_id.clone(), container);
+
+        let mut item = item;
+        item.location = Some(container_id.clone());
+        item.set_carried_slot(None);
+        ctx.objects.insert(item_id.clone(), item);
+        return Ok(units);
+    }
+
+    // Partial split: remainder stays at source (e.g. in hand), new stack in container.
+    let new_id = split_stack_id(item_id, ctx.objects);
+    let mut placed = item.clone();
+    placed.id = new_id.clone();
+    placed.set_stack_count(units);
+    placed.location = Some(container_id.clone());
+    placed.set_carried_slot(None);
+
+    let mut source = item;
+    source.set_stack_count(stack_count - units);
+    ctx.objects.insert(item_id.clone(), source);
+
+    let mut container = ctx
+        .objects
+        .get(container_id)
+        .ok_or(MoveError::NotContainer)?
+        .clone();
+    container.add_to_list_property("contents", new_id.clone());
+    ctx.objects.insert(container_id.clone(), container);
+    ctx.objects.insert(new_id, placed);
+
+    Ok(units)
+}
+
+/// Remove an item from its source location. `full_detach` clears body slots; partial keeps them.
+fn detach_from_source(
+    ctx: &mut MoveContext<'_>,
+    item_id: &ObjectId,
+    src: &LocationRef,
+    full_detach: bool,
 ) -> Result<(), MoveError> {
-    if !container.is_container() {
-        return Err(MoveError::NotContainer);
-    }
-
-    let capacity = container.container_capacity() as usize;
-    if container.container_contents().len() >= capacity {
-        return Err(MoveError::ContainerFull);
-    }
-
-    if let Some(max_w) = container.container_max_weight() {
-        let new_weight = container.contents_weight(objects) + item.weight();
-        if new_weight > max_w {
-            return Err(MoveError::WeightExceeded);
+    match src {
+        LocationRef::Container(container_id, _) => {
+            let mut container = ctx
+                .objects
+                .get(container_id)
+                .ok_or(MoveError::NotContainer)?
+                .clone();
+            container.remove_from_list_property("contents", item_id);
+            ctx.objects.insert(container_id.clone(), container);
         }
-    }
-
-    if let Some(max_v) = container.container_max_volume() {
-        let new_volume = container.contents_volume(objects) + item.volume();
-        if new_volume > max_v {
-            return Err(MoveError::VolumeExceeded);
+        LocationRef::BodySlot(holder, slot) if full_detach => {
+            let mut holder_obj = ctx
+                .objects
+                .get(holder)
+                .ok_or(MoveError::NotCarried)?
+                .clone();
+            holder_obj.set_body_slot(slot, None);
+            ctx.objects.insert(holder.clone(), holder_obj);
         }
+        LocationRef::Inventory(_) if full_detach => {
+            for obj in ctx.objects.values_mut() {
+                if obj.has_creature_role() {
+                    obj.clear_item_from_body_slots(item_id);
+                }
+            }
+        }
+        _ => {}
     }
-
     Ok(())
 }
 
@@ -339,26 +446,8 @@ fn apply_destination(
             Ok(())
         }
         LocationRef::Container(container_id, _) => {
-            let container = ctx
-                .objects
-                .get(container_id)
-                .ok_or(MoveError::NotContainer)?
-                .clone();
-            let item = ctx
-                .objects
-                .get(obj_id)
-                .ok_or_else(|| MoveError::NotFound(obj_id.to_string()))?
-                .clone();
-            validate_container_acceptance(&container, &item, ctx.objects)?;
-
-            let mut container = container;
-            container.add_to_list_property("contents", obj_id.clone());
-            ctx.objects.insert(container_id.clone(), container);
-
-            let mut item = item;
-            item.location = Some(container_id.clone());
-            item.set_carried_slot(None);
-            ctx.objects.insert(obj_id.clone(), item);
+            // Handled by `move_object` via `place_in_container`.
+            let _ = container_id;
             Ok(())
         }
         LocationRef::BodySlot(holder, slot) => {
@@ -463,14 +552,19 @@ pub fn move_object(
         .ok_or_else(|| MoveError::NotFound(obj_id.to_string()))?
         .clone();
 
-    if let LocationRef::Container(container_id, _) = &dst {
+    let units_transferred = if let LocationRef::Container(container_id, _) = &dst {
         let container = ctx
             .objects
             .get(container_id)
             .ok_or(MoveError::NotContainer)?
             .clone();
-        validate_container_acceptance(&container, &item, ctx.objects)?;
-    }
+        let fit = compute_container_fit(&container, &item, ctx.objects)?;
+        Some(place_in_container(ctx, obj_id, container_id, &src, &fit)?)
+    } else {
+        remove_from_source(ctx, obj_id, &src)?;
+        apply_destination(ctx, obj_id, &dst)?;
+        None
+    };
 
     let mut touched = vec![obj_id.clone()];
     if let Some(id) = src.holder_id() {
@@ -481,9 +575,11 @@ pub fn move_object(
             touched.push(id.clone());
         }
     }
-
-    remove_from_source(ctx, obj_id, &src)?;
-    apply_destination(ctx, obj_id, &dst)?;
+    for obj in ctx.objects.values() {
+        if obj.location.as_ref() == dst.holder_id() {
+            touched.push(obj.id.clone());
+        }
+    }
 
     let event = MoveEvent {
         object_id: obj_id.clone(),
@@ -497,6 +593,7 @@ pub fn move_object(
         object_id: obj_id.clone(),
         source: src,
         destination: dst,
+        units_transferred,
     })
 }
 
@@ -683,6 +780,70 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, MoveError::WeightExceeded);
+    }
+
+    #[tokio::test]
+    async fn partial_stack_put_respects_max_weight() {
+        let (anatomy, player_id, _, mut objects) = setup().await;
+
+        let mut purse = objects
+            .values()
+            .find(|o| o.name == "Backpack")
+            .unwrap()
+            .clone();
+        purse.name = "purse".to_string();
+        purse.set_property_int("capacity", 3);
+        purse.set_property_int("max_weight", 10);
+        purse.set_property_list("contents", vec![]);
+
+        let mut coins = objects
+            .values()
+            .find(|o| o.name == "Gold Coin")
+            .unwrap()
+            .clone();
+        coins.name = "coins".to_string();
+        coins.set_property_int("weight", 1);
+        coins.set_property_int("volume", 1);
+        coins.apply_stackable_role(&crate::object::StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        coins.location = Some(player_id.clone());
+
+        let purse_id = purse.id.clone();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        player.set_body_slot("torso", Some(purse_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(purse_id.clone(), purse);
+        objects.insert(coins_id.clone(), coins);
+
+        let mut ctx = MoveContext {
+            objects: &mut objects,
+            anatomy: Some(&anatomy),
+            hooks: MoveHooks::default(),
+            dirty: None,
+        };
+
+        let result = move_object(
+            &mut ctx,
+            &coins_id,
+            LocationRef::BodySlot(player_id.clone(), "right_hand".to_string()),
+            LocationRef::Container(purse_id.clone(), None),
+        )
+        .unwrap();
+
+        assert_eq!(result.units_transferred, Some(10));
+        let purse = objects.get(&purse_id).unwrap();
+        assert_eq!(purse.container_contents().len(), 1);
+        let in_purse = objects.get(&purse.container_contents()[0]).unwrap();
+        assert_eq!(in_purse.stack_count(), 10);
+
+        let remainder = objects.get(&coins_id).unwrap();
+        assert_eq!(remainder.stack_count(), 10);
+        assert_eq!(remainder.location.as_ref(), Some(&player_id));
     }
 
     #[tokio::test]

@@ -403,12 +403,24 @@ pub fn put_item(
     let item = ctx.objects.get(&item_id).unwrap().clone();
     let item_display = item.name.clone();
     let container_display = container.name.clone();
+    let total_count = if item.is_stackable() {
+        item.stack_count()
+    } else {
+        1
+    };
 
-    with_move_ctx(ctx, |mctx| move_to_container(mctx, &item_id, &container_id))?;
+    let result = with_move_ctx(ctx, |mctx| move_to_container(mctx, &item_id, &container_id))?;
 
-    Ok(format!(
-        "You put the {item_display} in your {container_display}."
-    ))
+    let transferred = result.units_transferred.unwrap_or(total_count);
+    if item.is_stackable() && (transferred < total_count || transferred > 1) {
+        Ok(format!(
+            "You put {transferred} {item_display} in your {container_display}."
+        ))
+    } else {
+        Ok(format!(
+            "You put the {item_display} in your {container_display}."
+        ))
+    }
 }
 
 pub fn remove_item(
@@ -1172,5 +1184,65 @@ mod tests {
             .unwrap()
             .container_contents()
             .contains(&coin_id));
+    }
+
+    #[tokio::test]
+    async fn put_coins_in_purse_partial_by_weight() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut purse = factory
+            .create_container_with_spec(
+                "purse",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 3,
+                    max_weight: Some(10),
+                    max_volume: None,
+                    wearable: true,
+                    wear_slot: Some("torso".to_string()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        purse.name = "purse".to_string();
+        purse.location = Some(room_id.clone());
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.set_property_int("weight", 1);
+        coins.set_property_int("volume", 1);
+        coins.location = Some(player_id.clone());
+
+        let purse_id = purse.id.clone();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(purse_id.clone()));
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(purse_id.clone(), purse);
+        objects.insert(coins_id.clone(), coins);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let msg = put_item(&mut ctx, "coins", "purse").unwrap();
+        assert!(msg.contains("10"));
+        assert!(msg.contains("purse"));
+
+        let purse = objects.get(&purse_id).unwrap();
+        assert_eq!(purse.container_contents().len(), 1);
+        let stored = objects.get(&purse.container_contents()[0]).unwrap();
+        assert_eq!(stored.stack_count(), 10);
+
+        let held = objects.get(&coins_id).unwrap();
+        assert_eq!(held.stack_count(), 10);
     }
 }

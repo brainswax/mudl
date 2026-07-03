@@ -233,7 +233,7 @@ pub enum LocationRef {
 }
 ```
 
-**MoveManager** (`src/world/move_manager.rs`) implements `move_object(src, dst, obj)` with capacity, weight, and volume checks. Inventory verbs delegate here. An `on_move` hook stub exists for future event triggers.
+**MoveManager** (`src/world/move_manager.rs`) implements `move_object(src, dst, obj)` with capacity, weight, and volume checks. **ContainerFit** (`src/world/container_fit.rs`) computes how many stackable units fit (by slot count, `max_weight`, and `max_volume` using `unit_weight * count`). Partial puts split stacks; compatible stacks merge by prototype or name. Inventory verbs delegate here. An `on_move` hook stub exists for future event triggers.
 
 **Dirty tracking**: `DirtyTracker` records mutated object IDs; `persist_dirty()` saves only those rows.
 

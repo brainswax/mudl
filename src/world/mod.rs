@@ -1,4 +1,5 @@
 pub mod bootstrap;
+pub mod container_fit;
 pub mod dirty;
 pub mod module;
 pub mod move_manager;
