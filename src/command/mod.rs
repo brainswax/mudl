@@ -1,5 +1,11 @@
 //! Command-layer helpers shared by REPL and future frontends.
 
+pub mod parse;
+
+pub use parse::{
+    has_wizard_permission, is_meta_command, parse_command_line, wizard_access_denied, CommandLine,
+};
+
 use std::collections::HashMap;
 
 use crate::inventory::{take_item, InventoryContext, InventoryError};
@@ -812,6 +818,67 @@ mod tests {
         assert!(bag.is_container());
         assert_eq!(bag.container_capacity(), 3);
         assert_eq!(bag.container_max_weight(), Some(25));
+    }
+
+    #[test]
+    fn examine_player_vs_meta_builder_output() {
+        use crate::display::{Describable, DisplayContext, DisplayMode};
+
+        let owner = ObjectId::new("player:hero-001");
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(ObjectId::new("room:test-001")),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.apply_stackable_role(&crate::object::StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        coins.add_property(crate::object::Property {
+            name: "description".to_string(),
+            value: crate::object::Value::String("Shiny.".to_string()),
+            permissions: crate::object::PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+        coins.add_verb(crate::object::Verb {
+            name: "flip".to_string(),
+            code: "say('flip')".to_string(),
+            permissions: crate::object::PermissionFlags::EVERYONE,
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(coins.id.clone(), coins.clone());
+
+        let player_ctx =
+            DisplayContext::new(owner.clone(), DisplayMode::Player).with_objects(objects.clone());
+        let player_out = coins.describe(&player_ctx);
+        assert!(player_out.contains("10 coins"));
+        assert!(!player_out.contains("ID:"));
+        assert!(!player_out.contains("Properties:"));
+
+        let builder_ctx =
+            DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
+        let builder_out = coins.describe_detailed(&builder_ctx);
+        assert!(builder_out.contains("ID: coins-001"));
+        assert!(builder_out.contains("Properties:"));
+        assert!(builder_out.contains("flip"));
+    }
+
+    #[test]
+    fn meta_command_parser_strips_at_prefix() {
+        let line = parse_command_line("@examine purse");
+        assert!(line.is_meta);
+        assert_eq!(line.verb, "examine");
+        assert_eq!(line.args, vec!["purse".to_string()]);
     }
 
     #[tokio::test]

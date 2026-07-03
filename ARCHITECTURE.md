@@ -185,7 +185,20 @@ The object model's prototype/parent system (`prototype: Option<ObjectId>`) is th
 - **`create <type> <name> [key=value...]`** — Creates an object via `ObjectFactory`. The display name is parsed separately from options (`capacity=3`, `max_weight=10`, etc.); options become properties, not part of `name` or the ID slug. ID base names are slugified and capped at 16 characters (`purse` → `item:purse-001`). When the player has a current location, the new object is placed there automatically.
 - **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate with short IDs. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
 - **`look`** — Locations (`room`, `area`, …) list ground items via `You see: …` with stack counts (`20 coins`). **`look self`** and **`inventory`** reflect held items using creature slot state.
-- **`examine`** — Builder view always shows the object's short ID (`ID: coins-042`) plus owner, location, properties, and verbs.
+- **`examine`** — In-game close inspection: name, description, container contents (same presentation rules as `look`). No internal IDs or property dumps.
+- **`@examine`** — Wizard meta-command: structured builder view with short ID, owner, location, properties, and verbs. Requires wizard permission (stubbed true in REPL for now).
+
+### Command conventions (`@` meta-commands)
+
+Player verbs have no prefix (`look`, `examine`, `take`, …). Wizard/builder meta-commands use a leading **`@`**:
+
+| Player | Wizard |
+|--------|--------|
+| `examine coins` | `@examine coins` |
+| `create sword …` | `@create container … capacity=3` |
+| — | `@dump`, `@delete`, `@undelete` |
+
+The parser (`src/command/parse.rs`) strips `@`, lowercases the verb, and routes to meta handlers after a permission check (`has_wizard_permission`, stubbed). Future meta-commands (`@set`, …) follow the same pattern.
 
 **Target resolution** (`src/display/resolve.rs`) is centralized for `look`, `examine`, `get`, `put`, and related verbs:
 

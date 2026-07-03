@@ -352,7 +352,52 @@ mod tests {
     }
 
     #[test]
-    fn player_describe_detailed_shows_builder_info() {
+    fn in_game_examine_hides_internal_fields() {
+        let owner = ObjectId::new("player:admin-001");
+        let mut item = Object {
+            id: generate_object_id("item", "coins", 1),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(ObjectId::new("room:void-001")),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        item.apply_stackable_role(&crate::object::StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        item.add_property(Property {
+            name: "description".to_string(),
+            value: Value::String("Gold coins glint in the light.".to_string()),
+            permissions: PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+        item.add_verb(Verb {
+            name: "flip".to_string(),
+            code: "say('tails')".to_string(),
+            permissions: PermissionFlags::EVERYONE,
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(item.id.clone(), item.clone());
+        let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let output = item.describe(&ctx);
+
+        assert!(output.contains("20 coins"));
+        assert!(output.contains("Gold coins glint"));
+        assert!(!output.contains("ID:"));
+        assert!(!output.contains("Properties:"));
+        assert!(!output.contains("flip"));
+    }
+
+    #[test]
+    fn meta_examine_shows_builder_info() {
         let owner = ObjectId::new("player:admin-001");
         let mut player = Object {
             id: generate_object_id("player", "admin", 1),

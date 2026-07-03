@@ -4,9 +4,9 @@ use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
-    bootstrap_active_universe, create_at_location_with_options, package_module,
-    parse_create_command, persist_inventory_changes, reload_universe, soft_delete_object,
-    take_from_location, undelete_object,
+    bootstrap_active_universe, create_at_location_with_options, has_wizard_permission,
+    package_module, parse_command_line, parse_create_command, persist_inventory_changes,
+    reload_universe, soft_delete_object, take_from_location, undelete_object, wizard_access_denied,
 };
 use mudl::display::{
     narrate_create, narrate_go, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
@@ -206,6 +206,12 @@ async fn main() -> Result<()> {
 
                 let _ = rl.add_history_entry(line.as_str());
 
+                let parsed = parse_command_line(input);
+                if parsed.is_meta && !has_wizard_permission(&default_owner) {
+                    println!("{}", wizard_access_denied());
+                    continue;
+                }
+
                 let parts: Vec<&str> = input.split_whitespace().collect();
                 let cmd = parts[0];
                 match cmd {
@@ -217,9 +223,12 @@ async fn main() -> Result<()> {
                             "  look [target]  (l)          - immersive view (current room if no target)"
                         );
                         println!(
-                            "  examine [target]  (x)       - builder view with IDs, properties, verbs"
+                            "  examine [target]  (x)       - in-game close look at a target"
                         );
-                        println!("  @dump [target]              - full JSON dump of an object");
+                        println!(
+                            "  @examine [target]           - wizard: IDs, properties, verbs"
+                        );
+                        println!("  @dump [target]              - wizard: full JSON dump of an object");
                         println!(
                             "  inventory  (i)              - show hands, pockets, and containers"
                         );
@@ -361,6 +370,48 @@ async fn main() -> Result<()> {
                         {
                             Ok(TargetResolution::Found(id)) => {
                                 let objects = load_all_objects(&persistence, &cache).await?;
+                                let ctx =
+                                    DisplayContext::new(default_owner.clone(), DisplayMode::Player)
+                                        .with_objects(objects)
+                                        .with_anatomy(active_anatomy.clone());
+                                if let Some(obj) = cache.get(&id) {
+                                    render_object(obj, &ctx, false, false);
+                                } else if let Some(target) = parts.get(1) {
+                                    println!("{}", narrate_target_not_found(target));
+                                } else {
+                                    println!("{}", narrate_no_location());
+                                }
+                            }
+                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+                            Ok(TargetResolution::NotFound) => {
+                                if parts.get(1).is_some() {
+                                    println!(
+                                        "{}",
+                                        narrate_target_not_found(parts.get(1).unwrap())
+                                    );
+                                } else {
+                                    println!("{}", narrate_no_location());
+                                }
+                            }
+                            Err(e) => {
+                                error!(error = %e, "examine failed");
+                                println!("You study it, but learn nothing new.");
+                            }
+                        }
+                    }
+                    "@examine" => {
+                        let target = parts.get(1).copied();
+                        match resolve_and_load(
+                            target,
+                            &current_location,
+                            &default_owner,
+                            &persistence,
+                            &mut cache,
+                        )
+                        .await
+                        {
+                            Ok(TargetResolution::Found(id)) => {
+                                let objects = load_all_objects(&persistence, &cache).await?;
                                 let ctx = DisplayContext::new(
                                     default_owner.clone(),
                                     DisplayMode::Builder,
@@ -375,7 +426,7 @@ async fn main() -> Result<()> {
                                     println!(
                                         "{}",
                                         narrate_no_location_builder(
-                                            "Try 'examine <target>' or 'examine here'."
+                                            "Try '@examine <target>' or '@examine here'."
                                         )
                                     );
                                 }
@@ -391,14 +442,14 @@ async fn main() -> Result<()> {
                                     println!(
                                         "{}",
                                         narrate_no_location_builder(
-                                            "Try 'examine <target>' or 'examine here'."
+                                            "Try '@examine <target>' or '@examine here'."
                                         )
                                     );
                                 }
                             }
                             Err(e) => {
-                                error!(error = %e, "examine failed");
-                                println!("The details elude you for now.");
+                                error!(error = %e, "@examine failed");
+                                println!("The internal details remain obscured.");
                             }
                         }
                     }
