@@ -4,14 +4,15 @@ use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
-    bootstrap_active_universe, create_at_location_with_options, has_wizard_permission,
-    package_module, parse_command_line, parse_create_command, persist_inventory_changes,
-    reload_universe, soft_delete_object, take_from_location, undelete_object, wizard_access_denied,
+    apply_set, apply_unset, bootstrap_active_universe, create_at_location_with_options,
+    has_wizard_permission, package_module, parse_command_line, parse_create_command,
+    parse_set_command, parse_unset_command, persist_inventory_changes, reload_universe,
+    soft_delete_object, take_from_location, undelete_object, wizard_access_denied,
 };
 use mudl::display::{
-    narrate_create, narrate_go, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
-    narrate_no_exit, narrate_no_location, narrate_no_location_builder, narrate_not_in_cache,
-    narrate_property_added, narrate_saved, narrate_target_not_found, narrate_verb_added,
+    narrate_create, narrate_field_set, narrate_field_unset, narrate_go, narrate_loaded,
+    narrate_module_bundled, narrate_module_reloaded, narrate_no_exit, narrate_no_location,
+    narrate_no_location_builder, narrate_not_in_cache, narrate_saved, narrate_target_not_found,
     narrate_wizard_not_found, resolve_object, resolve_target, Describable, DisplayContext,
     DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
@@ -20,7 +21,7 @@ use mudl::inventory::{
     InventoryContext,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
-use mudl::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value, Verb};
+use mudl::object::{Object, ObjectFactory, ObjectId};
 use mudl::persistence::{Persistence, SqlitePersistence};
 use mudl::world::restore_session;
 use tracing::{error, info, warn};
@@ -243,8 +244,10 @@ async fn main() -> Result<()> {
                         println!("  wield <item>                - hold/wield an item in your hand");
                         println!("  wear <item>                 - wear a container or garment");
                         println!("  go <dir>                    - move to another location (e.g. go north)");
-                        println!("  add_prop <id> <name> <value> - add string property");
-                        println!("  add_verb <id> <name> <code> - add verb with code");
+                        println!(
+                            "  @set <target> <key> <value>  - wizard: set property/state/verb"
+                        );
+                        println!("  @unset <target> <key>        - wizard: remove property/verb");
                         println!("  load <id>                   - load object from persistence");
                         println!("  save <id>                   - save object from cache");
                         println!("  module reload               - reload MUDL module from disk");
@@ -828,82 +831,133 @@ async fn main() -> Result<()> {
                             println!("{}", narrate_no_location());
                         }
                     }
-                    "add_prop" => {
-                        if parts.len() < 4 {
-                            println!("Usage: add_prop <id> <name> <value>");
-                            continue;
-                        }
-                        let id = ObjectId::new(parts[1]);
-                        let prop_name = parts[2].to_string();
-                        let value_str = parts[3..].join(" ");
-                        let mut obj = if let Some(o) = cache.remove(&id) {
-                            o
-                        } else {
-                            match persistence.load_object(&id).await {
-                                Ok(Some(o)) => o,
-                                Ok(None) => {
-                                    println!("{}", narrate_wizard_not_found());
-                                    continue;
-                                }
-                                Err(e) => {
-                                    error!(error = %e, id = %id, "add_prop load failed");
-                                    println!("You cannot reach that object to inscribe it.");
-                                    continue;
-                                }
+                    "@set" => {
+                        let set_cmd = match parse_set_command(&parsed.args) {
+                            Ok(cmd) => cmd,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
                             }
                         };
-                        let prop = Property {
-                            name: prop_name.clone(),
-                            value: Value::String(value_str),
-                            permissions: PermissionFlags::OWNER,
-                            behavior: None,
-                        };
-                        obj.add_property(prop);
-                        if let Err(e) = persistence.save_object(&obj).await {
-                            error!(error = %e, "add_prop save failed");
-                            println!("The inscription fades before it can take hold.");
-                        } else {
-                            println!("{}", narrate_property_added(&obj, &prop_name));
+                        match resolve_and_load(
+                            Some(&set_cmd.target),
+                            &current_location,
+                            &default_owner,
+                            &persistence,
+                            &mut cache,
+                        )
+                        .await
+                        {
+                            Ok(TargetResolution::Found(id)) => {
+                                let objects = load_all_objects(&persistence, &cache).await?;
+                                let mut obj = match cache.remove(&id).or_else(|| objects.get(&id).cloned()) {
+                                    Some(obj) => obj,
+                                    None => {
+                                        println!("{}", narrate_wizard_not_found());
+                                        continue;
+                                    }
+                                };
+                                match apply_set(
+                                    &mut obj,
+                                    &set_cmd.key,
+                                    &set_cmd.value,
+                                    &default_owner,
+                                    &objects,
+                                ) {
+                                    Ok(()) => {
+                                        info!(
+                                            target = %id,
+                                            key = %set_cmd.key,
+                                            "wizard @set applied"
+                                        );
+                                        if let Err(e) = persistence.save_object(&obj).await {
+                                            error!(error = %e, "@set save failed");
+                                            println!("The change fades before it can take hold.");
+                                        } else {
+                                            println!(
+                                                "{}",
+                                                narrate_field_set(&obj, &set_cmd.key)
+                                            );
+                                        }
+                                        cache.insert(id, obj);
+                                    }
+                                    Err(e) => println!("{e}"),
+                                }
+                            }
+                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+                            Ok(TargetResolution::NotFound) => {
+                                println!("{}", narrate_target_not_found(&set_cmd.target));
+                            }
+                            Err(e) => {
+                                error!(error = %e, "@set failed");
+                                println!("You cannot reach that object to change it.");
+                            }
                         }
-                        cache.insert(id, obj);
                     }
-                    "add_verb" => {
-                        if parts.len() < 4 {
-                            println!("Usage: add_verb <id> <name> <code...>");
-                            continue;
-                        }
-                        let id = ObjectId::new(parts[1]);
-                        let verb_name = parts[2].to_string();
-                        let code = parts[3..].join(" ");
-                        let mut obj = if let Some(o) = cache.remove(&id) {
-                            o
-                        } else {
-                            match persistence.load_object(&id).await {
-                                Ok(Some(o)) => o,
-                                Ok(None) => {
-                                    println!("{}", narrate_wizard_not_found());
-                                    continue;
-                                }
-                                Err(e) => {
-                                    error!(error = %e, id = %id, "add_verb load failed");
-                                    println!("You cannot reach that object to teach it.");
-                                    continue;
-                                }
+                    "@unset" => {
+                        let unset_cmd = match parse_unset_command(&parsed.args) {
+                            Ok(cmd) => cmd,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
                             }
                         };
-                        let verb = Verb {
-                            name: verb_name.clone(),
-                            code,
-                            permissions: PermissionFlags::OWNER,
-                        };
-                        obj.add_verb(verb);
-                        if let Err(e) = persistence.save_object(&obj).await {
-                            error!(error = %e, "add_verb save failed");
-                            println!("The lesson slips away before it sticks.");
-                        } else {
-                            println!("{}", narrate_verb_added(&obj, &verb_name));
+                        match resolve_and_load(
+                            Some(&unset_cmd.target),
+                            &current_location,
+                            &default_owner,
+                            &persistence,
+                            &mut cache,
+                        )
+                        .await
+                        {
+                            Ok(TargetResolution::Found(id)) => {
+                                let mut obj = if let Some(o) = cache.remove(&id) {
+                                    o
+                                } else {
+                                    match persistence.load_object(&id).await {
+                                        Ok(Some(o)) => o,
+                                        Ok(None) => {
+                                            println!("{}", narrate_wizard_not_found());
+                                            continue;
+                                        }
+                                        Err(e) => {
+                                            error!(error = %e, id = %id, "@unset load failed");
+                                            println!("You cannot reach that object to change it.");
+                                            continue;
+                                        }
+                                    }
+                                };
+                                match apply_unset(&mut obj, &unset_cmd.key) {
+                                    Ok(()) => {
+                                        info!(
+                                            target = %id,
+                                            key = %unset_cmd.key,
+                                            "wizard @unset applied"
+                                        );
+                                        if let Err(e) = persistence.save_object(&obj).await {
+                                            error!(error = %e, "@unset save failed");
+                                            println!("The change fades before it can take hold.");
+                                        } else {
+                                            println!(
+                                                "{}",
+                                                narrate_field_unset(&obj, &unset_cmd.key)
+                                            );
+                                        }
+                                        cache.insert(id, obj);
+                                    }
+                                    Err(e) => println!("{e}"),
+                                }
+                            }
+                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+                            Ok(TargetResolution::NotFound) => {
+                                println!("{}", narrate_target_not_found(&unset_cmd.target));
+                            }
+                            Err(e) => {
+                                error!(error = %e, "@unset failed");
+                                println!("You cannot reach that object to change it.");
+                            }
                         }
-                        cache.insert(id, obj);
                     }
                     "load" => {
                         if parts.len() < 2 {

@@ -1,4 +1,6 @@
+mod editor;
 mod factory;
+mod fields;
 mod location;
 mod roles;
 mod weight;
@@ -11,7 +13,9 @@ use bitflags::bitflags;
 use crate::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
 use crate::inventory::describe_carried;
 
+pub use editor::{parse_value_literal, resolve_object_ref, set_field, unset_field, EditError};
 pub use factory::ObjectFactory;
+pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS};
 pub use location::LocationRef;
 pub use roles::{ContainerSpec, ItemPhysSpec, ObjectRoles, RoleKind, StackableSpec, WearableSpec};
 pub use weight::{

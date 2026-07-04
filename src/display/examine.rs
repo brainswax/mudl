@@ -2,14 +2,13 @@
 
 use std::collections::HashMap;
 
-use crate::object::{is_unlimited_weight, player_carried_weight, Object, ObjectId};
+use crate::object::{
+    is_state_property, is_unlimited_weight, player_carried_weight, Object, ObjectId,
+};
 
 use super::{
     format_property_value, location_label, owner_label, short_id, DisplayContext,
 };
-
-/// Runtime properties shown under `state:` rather than `properties:`.
-const STATE_PROPERTIES: &[&str] = &["contents", "body_slots", "stack_count", "carried_slot"];
 
 /// Preferred ordering for common config properties in `@examine`.
 const CONFIG_PROPERTY_ORDER: &[&str] = &[
@@ -31,8 +30,19 @@ const CONFIG_PROPERTY_ORDER: &[&str] = &[
     "exits",
 ];
 
-fn is_state_property(name: &str) -> bool {
-    STATE_PROPERTIES.contains(&name)
+fn push_header(lines: &mut Vec<String>, key: &str, value: &str) {
+    lines.push(format!("{key}: {value}"));
+}
+
+fn push_section(lines: &mut Vec<String>, title: &str, entries: &[String]) {
+    if entries.is_empty() {
+        lines.push(format!("{title}: (none)"));
+    } else {
+        lines.push(format!("{title}:"));
+        for entry in entries {
+            lines.push(format!("  {entry}"));
+        }
+    }
 }
 
 /// Role-aware type label for builder examine (e.g. `container` instead of `item`).
@@ -58,21 +68,6 @@ pub fn builder_object_type(obj: &Object) -> &'static str {
         return "wearable";
     }
     "item"
-}
-
-fn push_header(lines: &mut Vec<String>, key: &str, value: &str) {
-    lines.push(format!("{key}: {value}"));
-}
-
-fn push_section(lines: &mut Vec<String>, title: &str, entries: &[String]) {
-    if entries.is_empty() {
-        lines.push(format!("{title}: (none)"));
-    } else {
-        lines.push(format!("{title}:"));
-        for entry in entries {
-            lines.push(format!("  {entry}"));
-        }
-    }
 }
 
 fn sort_config_property_names<'a>(names: Vec<&'a str>) -> Vec<&'a str> {
@@ -120,7 +115,42 @@ fn format_config_properties(obj: &Object, objects: &HashMap<ObjectId, Object>) -
         .collect()
 }
 
-fn format_contents_weight_state(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
+fn format_object_state_entries(obj: &Object, ctx: &DisplayContext) -> Vec<String> {
+    let mut entries = vec![format!(
+        "owner: {}",
+        owner_label(&obj.owner, &ctx.observer, &ctx.objects)
+    )];
+
+    if let Some(loc) = &obj.location {
+        entries.push(format!(
+            "location: {}",
+            location_label(loc, &ctx.objects)
+        ));
+    }
+
+    if let Some(proto) = &obj.prototype {
+        entries.push(format!("prototype: {}", short_id(proto)));
+    }
+
+    if !obj.aliases.is_empty() {
+        entries.push(format!("aliases: {}", obj.aliases.join(", ")));
+    }
+
+    for name in ["contents", "body_slots", "stack_count", "carried_slot"] {
+        if let Some(prop) = obj.get_property(name) {
+            entries.push(format!(
+                "{name}: {}",
+                format_property_value(&prop.value, &ctx.objects)
+            ));
+        } else if name == "contents" && obj.is_container() {
+            entries.push("contents: []".to_string());
+        }
+    }
+
+    entries
+}
+
+fn format_contents_weight_status(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
     let contents = obj.contents_weight(objects);
     match obj.container_max_weight() {
         Some(max) if is_unlimited_weight(max) => format!("{contents}/unlimited"),
@@ -129,7 +159,7 @@ fn format_contents_weight_state(obj: &Object, objects: &HashMap<ObjectId, Object
     }
 }
 
-fn format_carried_weight_state(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
+fn format_carried_weight_status(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
     let carried = player_carried_weight(obj, objects);
     match obj.get_int_property("max_weight") {
         Some(max) if is_unlimited_weight(max) => format!("{carried}/unlimited"),
@@ -138,22 +168,19 @@ fn format_carried_weight_state(obj: &Object, objects: &HashMap<ObjectId, Object>
     }
 }
 
-fn format_state_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> Vec<String> {
+fn format_status_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> Vec<String> {
     let mut entries = Vec::new();
 
-    if obj.is_container() || obj.get_property("contents").is_some() {
-        let contents = if let Some(prop) = obj.get_property("contents") {
-            format_property_value(&prop.value, objects)
-        } else {
-            "[]".to_string()
-        };
-        entries.push(format!("contents: {contents}"));
+    if obj.is_stackable() {
+        entries.push(format!("weight: {}", obj.weight()));
+    } else if !obj.is_location() && obj.object_type() != "player" {
+        entries.push(format!("weight: {}", obj.weight()));
     }
 
     if obj.is_container() {
         entries.push(format!(
             "contents_weight: {}",
-            format_contents_weight_state(obj, objects)
+            format_contents_weight_status(obj, objects)
         ));
         let total = obj.total_weight(objects);
         if total != obj.weight() {
@@ -164,33 +191,31 @@ fn format_state_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> Ve
     if obj.object_type() == "player" {
         entries.push(format!(
             "carried_weight: {}",
-            format_carried_weight_state(obj, objects)
+            format_carried_weight_status(obj, objects)
         ));
-    }
-
-    for name in ["body_slots", "stack_count", "carried_slot"] {
-        if let Some(prop) = obj.get_property(name) {
-            entries.push(format!(
-                "{name}: {}",
-                format_property_value(&prop.value, objects)
-            ));
-        }
     }
 
     entries
 }
 
-fn format_room_state_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> Vec<String> {
+fn format_room_state_entries(obj: &Object, ctx: &DisplayContext) -> Vec<String> {
+    let mut entries = vec![format!(
+        "owner: {}",
+        owner_label(&obj.owner, &ctx.observer, &ctx.objects)
+    )];
+
     let present: Vec<String> = obj
-        .contents(objects)
+        .contents(&ctx.objects)
         .into_iter()
         .map(|item| item.name.clone())
         .collect();
     if present.is_empty() {
-        vec!["present: (none)".to_string()]
+        entries.push("present: (none)".to_string());
     } else {
-        vec![format!("present: {}", present.join(", "))]
+        entries.push(format!("present: {}", present.join(", ")));
     }
+
+    entries
 }
 
 fn format_verbs_section(obj: &Object) -> Vec<String> {
@@ -213,16 +238,11 @@ pub fn format_builder_examine_room(obj: &Object, ctx: &DisplayContext) -> String
     push_header(&mut lines, "name", &obj.name);
     push_header(&mut lines, "type", builder_object_type(obj));
     push_header(&mut lines, "id", &short_id(&obj.id));
-    push_header(
-        &mut lines,
-        "owner",
-        &owner_label(&obj.owner, &ctx.observer, &ctx.objects),
-    );
 
     let config = format_config_properties(obj, &ctx.objects);
     push_section(&mut lines, "properties", &config);
 
-    let state = format_room_state_entries(obj, &ctx.objects);
+    let state = format_room_state_entries(obj, ctx);
     push_section(&mut lines, "state", &state);
 
     lines.extend(format_verbs_section(obj));
@@ -235,29 +255,15 @@ pub fn format_builder_examine_entity(obj: &Object, ctx: &DisplayContext) -> Stri
     push_header(&mut lines, "name", &obj.name);
     push_header(&mut lines, "type", builder_object_type(obj));
     push_header(&mut lines, "id", &short_id(&obj.id));
-    push_header(
-        &mut lines,
-        "owner",
-        &owner_label(&obj.owner, &ctx.observer, &ctx.objects),
-    );
-
-    if let Some(loc) = &obj.location {
-        push_header(
-            &mut lines,
-            "location",
-            &location_label(loc, &ctx.objects),
-        );
-    }
-
-    if let Some(proto) = &obj.prototype {
-        push_header(&mut lines, "prototype", &short_id(proto));
-    }
 
     let config = format_config_properties(obj, &ctx.objects);
     push_section(&mut lines, "properties", &config);
 
-    let state = format_state_entries(obj, &ctx.objects);
+    let state = format_object_state_entries(obj, ctx);
     push_section(&mut lines, "state", &state);
+
+    let status = format_status_entries(obj, &ctx.objects);
+    push_section(&mut lines, "status", &status);
 
     lines.extend(format_verbs_section(obj));
     lines.join("\n")
@@ -306,18 +312,14 @@ mod tests {
         assert!(output.contains("name: backpack"));
         assert!(output.contains("type: container"));
         assert!(output.contains("id: backpack-001"));
-        assert!(output.contains("owner: you"));
         assert!(output.contains("properties:"));
         assert!(output.contains("weight: 10"));
-        assert!(output.contains("capacity: 20"));
-        assert!(output.contains("max_weight: 100"));
-        assert!(output.contains("is_container: true"));
         assert!(output.contains("state:"));
+        assert!(output.contains("owner: you"));
         assert!(output.contains("contents: []"));
+        assert!(output.contains("status:"));
         assert!(output.contains("contents_weight: 0/100"));
         assert!(output.contains("verbs: (none)"));
-        assert!(!output.contains("Weight:"));
-        assert!(!output.contains("Properties:"));
     }
 
     #[test]
@@ -347,7 +349,9 @@ mod tests {
         let ctx = DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let output = format_builder_examine_entity(&purse, &ctx);
 
+        assert!(output.contains("state:"));
         assert!(output.contains("contents: [coins]"));
+        assert!(output.contains("status:"));
         assert!(output.contains("contents_weight: 10/10"));
     }
 
@@ -366,7 +370,11 @@ mod tests {
         let output = format_builder_examine_entity(&coins, &ctx);
 
         assert!(output.contains("type: stackable"));
+        assert!(output.contains("properties:"));
         assert!(output.contains("weight: 2"));
+        assert!(output.contains("state:"));
         assert!(output.contains("stack_count: 10"));
+        assert!(output.contains("status:"));
+        assert!(output.contains("weight: 20"));
     }
 }

@@ -21,7 +21,8 @@ pub use examine::{
 pub use narrative::{
     format_property_value, location_label, narrate_create, narrate_create_builder, narrate_go,
     narrate_loaded, narrate_module_bundled, narrate_module_reloaded, narrate_no_exit,
-    narrate_no_location, narrate_no_location_builder, narrate_not_in_cache, narrate_property_added,
+    narrate_field_set, narrate_field_unset, narrate_no_location, narrate_no_location_builder,
+    narrate_not_in_cache, narrate_property_added,
     narrate_restore, narrate_saved, narrate_soft_delete, narrate_target_not_found,
     narrate_verb_added, narrate_wizard_not_found, object_name, owner_label,
 };
@@ -283,6 +284,7 @@ mod tests {
 
         assert!(output.contains("name: South Garden"));
         assert!(output.contains("type: room"));
+        assert!(output.contains("state:"));
         assert!(output.contains("owner: you"));
         assert!(!output.contains("room:garden-001"));
         assert!(!output.contains("player:admin-001"));
@@ -686,6 +688,7 @@ mod tests {
 
         let ctx = DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let output = purse.describe_detailed(&ctx);
+        assert!(output.contains("status:"));
         assert!(output.contains("contents_weight: 0/10"));
         assert!(output.contains("weight: 1"));
     }
@@ -721,6 +724,7 @@ mod tests {
         assert!(output.contains("name: Admin"));
         assert!(output.contains("type: player"));
         assert!(output.contains("id: admin-001"));
+        assert!(output.contains("state:"));
         assert!(output.contains("owner: you"));
         assert!(output.contains("wave"));
         assert!(!output.contains("player:admin-001"));

@@ -1,7 +1,12 @@
 //! Command-layer helpers shared by REPL and future frontends.
 
+pub mod editor;
 pub mod parse;
 
+pub use editor::{
+    apply_set, apply_unset, parse_set_command, parse_unset_command, ParsedSetCommand,
+    ParsedUnsetCommand,
+};
 pub use parse::{
     has_wizard_permission, is_meta_command, parse_command_line, wizard_access_denied, CommandLine,
 };
@@ -415,6 +420,7 @@ pub async fn undelete_object<P: Persistence>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::editor::{apply_set, apply_unset};
     use crate::display::{narrate_create, Describable, DisplayContext, DisplayMode};
     use crate::inventory::describe_carried;
     use crate::object::{id_base_from_display_name, slugify_display_name};
@@ -845,7 +851,10 @@ mod tests {
         let builder_ctx =
             DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let examine_out = backpack.describe_detailed(&builder_ctx);
+        assert!(examine_out.contains("properties:"));
         assert!(examine_out.contains("weight: 10"));
+        assert!(examine_out.contains("state:"));
+        assert!(examine_out.contains("status:"));
         assert!(examine_out.contains("contents_weight: 0/100"));
         assert!(examine_out.contains("type: container"));
     }
@@ -991,6 +1000,68 @@ mod tests {
 
         assert!(coins.is_stackable());
         assert_eq!(coins.stack_count(), 42);
+    }
+
+    #[tokio::test]
+    async fn wizard_set_unset_property_and_verb() {
+        let factory = test_factory().await;
+        let owner = ObjectId::new("player:hero-001");
+
+        let mut backpack = factory
+            .create_container_with_spec(
+                "backpack",
+                owner.clone(),
+                ContainerSpec {
+                    capacity: 20,
+                    max_weight: Some(100),
+                    max_volume: None,
+                    wearable: true,
+                    wear_slot: Some("torso".to_string()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut objects = HashMap::new();
+        objects.insert(backpack.id.clone(), backpack.clone());
+        objects.insert(owner.clone(), bare_player(&owner));
+
+        apply_set(&mut backpack, "weight", "10", &owner, &objects).unwrap();
+        apply_set(
+            &mut backpack,
+            "verb.polish",
+            "say('You polish it.')",
+            &owner,
+            &objects,
+        )
+        .unwrap();
+
+        assert_eq!(backpack.weight(), 10);
+        assert!(backpack.verbs.contains_key("polish"));
+
+        apply_unset(&mut backpack, "verb.polish").unwrap();
+        apply_unset(&mut backpack, "weight").unwrap();
+
+        assert!(!backpack.verbs.contains_key("polish"));
+        assert!(backpack.get_int_property("weight").is_none());
+    }
+
+    fn bare_player(id: &ObjectId) -> Object {
+        Object {
+            id: id.clone(),
+            name: "Hero".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        }
     }
 
     #[tokio::test]

@@ -180,6 +180,10 @@ Builders/DMs can fork `modules/default/` to create custom universe packs:
 
 The object model's prototype/parent system (`prototype: Option<ObjectId>`) is the runtime foundation for this — MUDL modules define the authoritative data; the engine resolves inheritance when spawning and displaying objects.
 
+## Builder & Wizard Tools
+
+See **[BUILDER.md](BUILDER.md)** for the builder/wizard command design: `@set` / `@unset`, the Properties / State / Status model, permissions, and `@examine` format.
+
 ## Player Commands (REPL / MVP)
 
 See **[COMMANDS.md](COMMANDS.md)** for the full command reference.

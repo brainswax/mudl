@@ -134,6 +134,16 @@ pub fn narrate_no_exit(direction: &str) -> String {
     format!("You can't go {direction} from here.")
 }
 
+/// Builder: field set on an object via `@set`.
+pub fn narrate_field_set(obj: &Object, key: &str) -> String {
+    format!("You set {key} on {}.", obj.name)
+}
+
+/// Builder: field removed from an object via `@unset`.
+pub fn narrate_field_unset(obj: &Object, key: &str) -> String {
+    format!("You clear {key} from {}.", obj.name)
+}
+
 /// Builder: property added to an object.
 pub fn narrate_property_added(obj: &Object, prop_name: &str) -> String {
     format!("You inscribe \"{prop_name}\" upon {}.", obj.name)
