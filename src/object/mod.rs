@@ -450,16 +450,7 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
 
     if obj.object_type() == "player" && obj.id == ctx.observer {
         if brief {
-            let mut lines = vec![obj.name.clone()];
-            if let Some(desc) = obj.get_description() {
-                lines.push(desc);
-            }
-            lines.push(crate::display::format_look_self_summary(
-                obj,
-                &ctx.objects,
-                &ctx.anatomy,
-            ));
-            return lines.join("\n");
+            return crate::display::format_look_self_summary(obj, &ctx.objects, &ctx.anatomy);
         }
         return crate::display::format_examine_self(obj, &ctx.objects, &ctx.anatomy);
     }

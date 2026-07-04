@@ -12,12 +12,10 @@ Command reference for the MUDL REPL (MVP). Player verbs use plain names; wizard/
 |--------|--------|
 | *(none)* | Current room: name, description, exits, ground items |
 | `<object>` | Short name, description; containers also list direct contents (`Inside the purse: 20 coins`) |
-| `self` | Player name/description plus brief gear summary |
+| `self` | One-sentence gear summary (held and worn items) |
 
 **`look self` example:**
 ```
-Admin
-A weary adventurer.
 You are holding a Rusty Sword and Wooden Sword and wearing a backpack.
 ```
 

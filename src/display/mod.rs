@@ -373,8 +373,8 @@ mod tests {
             .with_flags(DisplayFlags::BRIEF);
         let output = player.describe(&ctx);
 
-        assert!(output.contains("Admin"));
-        assert!(output.contains("weary adventurer"));
+        assert!(!output.contains("Admin"));
+        assert!(!output.contains("weary adventurer"));
         assert!(output.contains("aren't holding or wearing anything"));
         assert!(!output.contains("player:admin-001"));
     }

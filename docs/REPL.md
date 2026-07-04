@@ -150,7 +150,6 @@ You see: Rusty Sword
 > take rusty sword
 You pick up the Rusty Sword.
 > look self
-Admin
 You are holding a Rusty Sword.
 > inventory
 You are completely naked.
@@ -219,7 +218,6 @@ Builder `examine` resolves exit targets and owners to display names — no raw I
 
 ```
 > look self
-Admin
 You aren't holding or wearing anything.
 > inventory
 You are completely naked.
@@ -238,7 +236,6 @@ You inscribe "hand_slot" upon sword.
 > take sword
 You pick up the sword.
 > look self
-Admin
 You are holding a sword.
 ```
 
