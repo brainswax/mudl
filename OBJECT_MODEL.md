@@ -238,7 +238,7 @@ pub enum LocationRef {
 
 **Dirty tracking**: `DirtyTracker` records mutated object IDs; `persist_dirty()` saves only those rows.
 
-**Look / examine**: Stackables show quantity everywhere — direct look (`look coins` → `20 coins`), room ground (`You see: 20 coins`), container look (`Inside the purse: 20 coins`), `look self` / inventory listings. Singular stacks (`stack_count == 1`) show the bare name (`coin`, not `1 coin`). In-game `examine` uses the same player presentation as `look`. Wizard `@examine` shows the short ID (`ID: coins-042`), properties, verbs, and `Contents: 20 coins, …`.
+**Look / examine**: In-character commands use natural sentences without a leading object name. Container look: `The purse contains 20 coins.` Container examine adds capacity/weight in one short paragraph. Stackables show quantity in content lists (`20 coins`). `@look` / `@examine` show structured builder fields.
 
 **Target resolution** (`src/display/resolve.rs`): verbs resolve names with possession-first priority (body slots → BFS through carried containers → room ground → global). Duplicate matches prompt disambiguation with short IDs and container hints (`coins-042 (in purse)`). Inventory verbs map to scoped lookups (`PossessionOnly`, `RoomOnly`, `PossessionOrRoom`).
 

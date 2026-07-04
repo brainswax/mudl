@@ -6,6 +6,8 @@ use crate::object::{
     format_weight_amount, is_unlimited_weight, Object, ObjectId,
 };
 
+use super::grammar::join_natural_list;
+
 /// Player-facing label for an item, with stack count when stackable.
 pub fn format_stackable_label(item: &Object) -> String {
     if item.is_stackable() && item.stack_count() > 1 {
@@ -33,14 +35,27 @@ pub fn container_content_labels(
     labels
 }
 
-/// Player-mode line for container contents (e.g. "Inside the purse: 20 coins").
-pub fn format_inside_container(container: &Object, objects: &HashMap<ObjectId, Object>) -> String {
+/// In-character `look` at a container (contents only, no stats).
+///
+/// Example: `The backpack contains 20 coins.`
+pub fn format_look_container_player(
+    container: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> String {
     let labels = container_content_labels(container, objects);
     let name = container.name.to_lowercase();
     if labels.is_empty() {
         return format!("The {name} is empty.");
     }
-    format!("Inside the {name}: {}", labels.join(", "))
+    format!(
+        "The {name} contains {}.",
+        join_natural_list(&labels)
+    )
+}
+
+/// Legacy alias — prefer [`format_look_container_player`].
+pub fn format_inside_container(container: &Object, objects: &HashMap<ObjectId, Object>) -> String {
+    format_look_container_player(container, objects)
 }
 
 fn container_used_slots(container: &Object, objects: &HashMap<ObjectId, Object>) -> u32 {
@@ -51,50 +66,54 @@ fn container_used_slots(container: &Object, objects: &HashMap<ObjectId, Object>)
         .count() as u32
 }
 
-fn format_container_capacity_summary(
-    container: &Object,
-    objects: &HashMap<ObjectId, Object>,
-) -> String {
-    let name = container.name.to_lowercase();
-    let used = container_used_slots(container, objects);
-    let max_slots = container.container_capacity();
-    let capacity_part = format!("a capacity of {used}/{max_slots}");
-    let contents_w = container.contents_weight(objects);
-
-    let weight_part = match container.container_max_weight() {
-        Some(max) if is_unlimited_weight(max) => format!(
-            "is carrying {}/unlimited weight",
-            format_weight_amount(contents_w)
-        ),
-        Some(max) => format!(
-            "is carrying {}/{} weight",
-            format_weight_amount(contents_w),
-            format_weight_amount(max as f64)
-        ),
-        None if contents_w > 0.0 => format!(
-            "is carrying {} weight",
-            format_weight_amount(contents_w)
-        ),
-        None => String::new(),
-    };
-
-    if weight_part.is_empty() {
-        format!("The {name} has {capacity_part}.")
-    } else {
-        format!("The {name} has {capacity_part} and {weight_part}.")
-    }
-}
-
-/// Player `examine` output for a container: contents first, then capacity/weight.
+/// In-character `examine` at a container — one short paragraph, IRC-friendly.
+///
+/// Example: `The backpack contains 20 coins and has a capacity of 1/20. It is carrying 13/100 weight.`
 pub fn format_examine_container_player(
     container: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> String {
-    vec![
-        format_inside_container(container, objects),
-        format_container_capacity_summary(container, objects),
-    ]
-    .join("\n")
+    let name = container.name.to_lowercase();
+    let labels = container_content_labels(container, objects);
+    let used = container_used_slots(container, objects);
+    let max_slots = container.container_capacity();
+    let contents_w = container.contents_weight(objects);
+
+    let opener = if labels.is_empty() {
+        format!("The {name} is empty")
+    } else {
+        format!(
+            "The {name} contains {}",
+            join_natural_list(&labels)
+        )
+    };
+
+    let mut text = format!("{opener} and has a capacity of {used}/{max_slots}.");
+
+    if let Some(max) = container.container_max_weight() {
+        let weight_line = if is_unlimited_weight(max) {
+            format!(
+                "It is carrying {}/unlimited weight.",
+                format_weight_amount(contents_w)
+            )
+        } else {
+            format!(
+                "It is carrying {}/{} weight.",
+                format_weight_amount(contents_w),
+                format_weight_amount(max as f64)
+            )
+        };
+        text.push(' ');
+        text.push_str(&weight_line);
+    } else if contents_w > 0.0 {
+        text.push(' ');
+        text.push_str(&format!(
+            "It is carrying {} weight.",
+            format_weight_amount(contents_w)
+        ));
+    }
+
+    text
 }
 
 /// Builder-mode summary of container contents.
@@ -163,12 +182,38 @@ mod tests {
             wear_slot: Some("torso".to_string()),
         });
 
-        let line = format_inside_container(&backpack, &HashMap::new());
+        let line = format_look_container_player(&backpack, &HashMap::new());
         assert_eq!(line, "The backpack is empty.");
     }
 
     #[test]
-    fn examine_container_shows_contents_then_capacity() {
+    fn look_container_uses_contains_phrasing() {
+        let mut purse = bare("item:purse-001", "purse");
+        purse.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 3,
+            max_weight: Some(10),
+            max_volume: None,
+            wearable: true,
+            wear_slot: Some("torso".to_string()),
+        });
+        let mut coins = bare("item:coins-001", "coins");
+        coins.apply_stackable_role(&crate::object::StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        purse.set_property_list("contents", vec![coins.id.clone()]);
+
+        let mut objects = HashMap::new();
+        objects.insert(coins.id.clone(), coins);
+
+        assert_eq!(
+            format_look_container_player(&purse, &objects),
+            "The purse contains 20 coins."
+        );
+    }
+
+    #[test]
+    fn examine_container_natural_paragraph() {
         let mut backpack = bare("item:backpack-001", "backpack");
         backpack.apply_container_role(&crate::object::ContainerSpec {
             capacity: 20,
@@ -191,32 +236,7 @@ mod tests {
         let output = format_examine_container_player(&backpack, &objects);
         assert_eq!(
             output,
-            "Inside the backpack: 20 coins\n\
-             The backpack has a capacity of 1/20 and is carrying 20/100 weight."
+            "The backpack contains 20 coins and has a capacity of 1/20. It is carrying 20/100 weight."
         );
-    }
-
-    #[test]
-    fn inside_container_lists_stackables() {
-        let mut purse = bare("item:purse-001", "purse");
-        purse.apply_container_role(&crate::object::ContainerSpec {
-            capacity: 3,
-            max_weight: Some(10),
-            max_volume: None,
-            wearable: true,
-            wear_slot: Some("torso".to_string()),
-        });
-        let mut coins = bare("item:coins-001", "coins");
-        coins.apply_stackable_role(&crate::object::StackableSpec {
-            count: 20,
-            max_stack: 99,
-        });
-        purse.set_property_list("contents", vec![coins.id.clone()]);
-
-        let mut objects = HashMap::new();
-        objects.insert(coins.id.clone(), coins);
-
-        let line = format_inside_container(&purse, &objects);
-        assert_eq!(line, "Inside the purse: 20 coins");
     }
 }

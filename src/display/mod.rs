@@ -9,15 +9,18 @@ pub mod carried;
 pub mod container;
 pub mod examine;
 pub mod examine_target;
+pub mod grammar;
 pub mod narrative;
+pub mod object_look;
 pub mod resolve;
 pub mod self_examine;
 pub mod weight;
 pub use carried::format_look_self_summary;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_examine_container_player,
-    format_inside_container, format_stackable_label,
+    format_inside_container, format_look_container_player, format_stackable_label,
 };
+pub use object_look::{format_look_item_player, format_look_object_player};
 pub use weight::format_examine_item_player;
 pub use body_plan::{creature_definition, format_body_detail_player};
 pub use examine::{
@@ -511,6 +514,7 @@ mod tests {
         let output = player.describe(&ctx);
 
         assert!(output.contains("You are holding a purse and wearing a backpack."));
+        assert!(!output.starts_with("Admin"));
         assert!(!output.contains("right hand"));
         assert!(!output.contains("weighs"));
     }
@@ -547,9 +551,72 @@ mod tests {
             .with_objects(objects)
             .with_flags(DisplayFlags::BRIEF);
         let look_out = backpack.describe(&ctx);
-        assert!(look_out.contains("backpack"));
-        assert!(look_out.contains("The backpack is empty."));
-        assert!(!look_out.contains("Inside the"));
+        assert_eq!(look_out, "The backpack is empty.");
+    }
+
+    #[test]
+    fn look_object_has_no_leading_name_line() {
+        let owner = ObjectId::new("player:admin-001");
+        let mut backpack = Object {
+            id: ObjectId::new("item:backpack-001"),
+            name: "backpack".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        backpack.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 20,
+            max_weight: Some(100),
+            max_volume: None,
+            wearable: true,
+            wear_slot: Some("torso".to_string()),
+        });
+
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(backpack.id.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.set_property_int("weight", 1);
+        coins.apply_stackable_role(&crate::object::StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        backpack.set_property_list("contents", vec![coins.id.clone()]);
+
+        let mut objects = HashMap::new();
+        objects.insert(coins.id.clone(), coins);
+        objects.insert(backpack.id.clone(), backpack.clone());
+
+        let look_ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_objects(objects.clone())
+            .with_flags(DisplayFlags::BRIEF);
+        let look_out = backpack.describe(&look_ctx);
+        assert_eq!(look_out, "The backpack contains 20 coins.");
+        assert!(!look_out.starts_with("backpack"));
+
+        let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let examine_out = backpack.describe(&examine_ctx);
+        assert_eq!(
+            examine_out,
+            "The backpack contains 20 coins and has a capacity of 1/20. It is carrying 20/100 weight."
+        );
     }
 
     #[test]
@@ -607,14 +674,14 @@ mod tests {
             .with_flags(DisplayFlags::BRIEF);
         let look_out = purse.describe(&ctx);
         assert!(!look_out.contains("weighs"));
-        assert!(look_out.contains("Inside the purse: 2 coins"));
+        assert_eq!(look_out, "The purse contains 2 coins.");
 
         let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let examine_out = purse.describe(&examine_ctx);
-        assert!(examine_out.contains("Inside the purse: 2 coins"));
-        assert!(examine_out.contains("a capacity of 1/3"));
-        assert!(examine_out.contains("is carrying 2/10 weight"));
-        assert!(!examine_out.starts_with("purse"));
+        assert_eq!(
+            examine_out,
+            "The purse contains 2 coins and has a capacity of 1/3. It is carrying 2/10 weight."
+        );
     }
 
     #[test]
@@ -671,7 +738,7 @@ mod tests {
         let output = purse.describe(&ctx);
         assert_eq!(
             output,
-            "Inside the purse: 2 coins\nThe purse has a capacity of 1/3 and is carrying 2/10 weight."
+            "The purse contains 2 coins and has a capacity of 1/3. It is carrying 2/10 weight."
         );
     }
 

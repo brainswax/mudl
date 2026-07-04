@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::display::grammar::indefinite_article;
 use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
 
@@ -19,13 +20,6 @@ fn look_item_name(obj: &Object) -> String {
         format!("{} {}", obj.stack_count(), obj.name)
     } else {
         obj.name.clone()
-    }
-}
-
-fn indefinite_article(word: &str) -> &'static str {
-    match word.chars().next().map(|c| c.to_ascii_lowercase()) {
-        Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
-        _ => "a",
     }
 }
 

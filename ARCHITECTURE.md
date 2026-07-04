@@ -190,17 +190,18 @@ See **[COMMANDS.md](COMMANDS.md)** for the full command reference.
 
 - **`create <type> <name> [key=value...]`** — Creates an object via `ObjectFactory`. The display name is parsed separately from options (`capacity=3`, `max_weight=10`, etc.); options become properties, not part of `name` or the ID slug. ID base names are slugified and capped at 16 characters (`purse` → `item:purse-001`). When the player has a current location, the new object is placed there automatically.
 - **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate with short IDs. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
-- **`look`** — Short immersive view (`DisplayFlags::BRIEF`): name, description, container contents, room exits. **`look self`** → `You are holding a Rusty Sword and Wooden Sword and wearing a backpack.` (no hand slots, weights, or nested contents).
-- **`examine`** — In-game detail: weight, capacity, full grasp/worn summary on self.
-- **`@examine`** / **`@dump`** — Wizard structured view / raw JSON.
+- **`look`** / **`examine`** — In-character, IRC-friendly natural language (`DisplayFlags::BRIEF` for look). No leading object name on items. Containers: `The backpack contains 20 coins.` Self: one equipment sentence. Examine adds capacity/weight in short prose.
+- **`@look`** / **`@examine`** — Out-of-character builder views (`DisplayMode::Builder`): structured properties, state, status.
+- **`@dump`** — Raw JSON debug dump.
 - **`inventory`** — Full slot-by-slot listing (use `examine self` for weight totals).
 
 ### Command conventions (`@` meta-commands)
 
 Player verbs have no prefix (`look`, `examine`, `take`, …). Wizard/builder meta-commands use a leading **`@`**:
 
-| Player | Wizard |
+| Player (in-character) | Wizard (out-of-character) |
 |--------|--------|
+| `look backpack` | `@look backpack` |
 | `examine coins` | `@examine coins` |
 | `create sword …` | `@create container … capacity=3` |
 | — | `@dump`, `@delete`, `@undelete` |
@@ -226,7 +227,7 @@ Command helpers live in `src/command/`; inventory slot logic in `src/inventory/`
 - Inventory commands (`take`, `drop`, `put`, `remove`, `wear`) delegate to `MoveManager` convenience wrappers.
 - `ObjectFactory::create_stackable_item` creates one instance with `stack_count`; `create_item_instances` spawns separate IDs for non-stacked duplicates.
 - `put [count] <item> in <container>` transfers a specific stack quantity; omitting count moves as many units as fit (weight/volume/slots). Remainder stays carried with feedback (`5 won't fit.`).
-- `look <container>` shows `Inside the purse: 20 coins` using stack-aware labels (`src/display/container.rs`).
+- `look <container>` shows `The purse contains 20 coins.` using stack-aware labels (`src/display/container.rs`).
 
 ## Persistence Strategy
 

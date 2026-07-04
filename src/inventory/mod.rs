@@ -1637,6 +1637,6 @@ mod tests {
             .with_anatomy(anatomy);
 
         let output = purse.describe(&ctx);
-        assert!(output.contains("Inside the purse: 20 coins"));
+        assert!(output.contains("The purse contains 20 coins"));
     }
 }

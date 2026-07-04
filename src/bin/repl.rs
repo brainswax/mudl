@@ -110,6 +110,74 @@ fn render_object(obj: &Object, ctx: &DisplayContext, detailed: bool, debug: bool
     println!("{output}");
 }
 
+async fn run_look_command(
+    target: Option<&str>,
+    builder: bool,
+    current_location: &Option<ObjectId>,
+    observer: &ObjectId,
+    anatomy: &mudl::mudl::AnatomyRegistry,
+    persistence: &SqlitePersistence,
+    cache: &mut HashMap<ObjectId, Object>,
+) -> Result<(), anyhow::Error> {
+    match resolve_and_load(target, current_location, observer, persistence, cache).await {
+        Ok(TargetResolution::Found(id)) => {
+            let objects = load_all_objects(persistence, cache).await?;
+            let mode = if builder {
+                DisplayMode::Builder
+            } else {
+                DisplayMode::Player
+            };
+            let mut ctx = DisplayContext::new(observer.clone(), mode)
+                .with_objects(objects)
+                .with_anatomy(anatomy.clone());
+            if !builder {
+                ctx = ctx.with_flags(DisplayFlags::BRIEF);
+            }
+            if let Some(obj) = cache.get(&id) {
+                render_object(obj, &ctx, builder, false);
+            } else if let Some(target) = target {
+                println!("{}", narrate_target_not_found(target));
+            } else {
+                println!(
+                    "{}",
+                    if builder {
+                        narrate_no_location_builder("Try '@look <target>' or '@look here'.")
+                    } else {
+                        narrate_no_location()
+                    }
+                );
+            }
+        }
+        Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+        Ok(TargetResolution::NotFound) => {
+            if target.is_some() {
+                println!("{}", narrate_target_not_found(target.unwrap()));
+            } else {
+                println!(
+                    "{}",
+                    if builder {
+                        narrate_no_location_builder("Try '@look <target>' or '@look here'.")
+                    } else {
+                        narrate_no_location()
+                    }
+                );
+            }
+        }
+        Err(e) => {
+            error!(error = %e, "look failed");
+            println!(
+                "{}",
+                if builder {
+                    "The builder view remains obscured."
+                } else {
+                    "Something stirs in the void, but you cannot make sense of it."
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn run_examine_command(
     args: &[&str],
     mode: DisplayMode,
@@ -287,10 +355,13 @@ async fn main() -> Result<()> {
                         println!("  create <type> <name...>     - e.g. create sword Rusty Sword");
                         println!("  list                        - list objects in session cache");
                         println!(
-                            "  look [target]  (l)          - immersive view (current room if no target)"
+                            "  look [target]  (l)          - in-character brief view"
                         );
                         println!(
-                            "  examine [target]  (x)       - close look (self, .body, .parent)"
+                            "  @look [target]              - wizard: structured builder view"
+                        );
+                        println!(
+                            "  examine [target]  (x)       - in-character detail (self, .body)"
                         );
                         println!(
                             "  @examine [target] [parent]  - wizard: properties, anatomy, prototype"
@@ -383,50 +454,35 @@ async fn main() -> Result<()> {
                         }
                     }
                     "look" | "l" => {
-                        let target = parts.get(1).copied();
-                        match resolve_and_load(
-                            target,
+                        if let Err(e) = run_look_command(
+                            parts.get(1).copied(),
+                            false,
                             &current_location,
                             &default_owner,
+                            &active_anatomy,
                             &persistence,
                             &mut cache,
                         )
                         .await
                         {
-                            Ok(TargetResolution::Found(id)) => {
-                                let objects = load_all_objects(&persistence, &cache).await?;
-                                let ctx = DisplayContext::new(
-                                    default_owner.clone(),
-                                    DisplayMode::Player,
-                                )
-                                .with_objects(objects)
-                                .with_anatomy(active_anatomy.clone())
-                                .with_flags(DisplayFlags::BRIEF);
-                                if let Some(obj) = cache.get(&id) {
-                                    render_object(obj, &ctx, false, false);
-                                } else if let Some(target) = parts.get(1) {
-                                    println!("{}", narrate_target_not_found(target));
-                                } else {
-                                    println!("{}", narrate_no_location());
-                                }
-                            }
-                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
-                            Ok(TargetResolution::NotFound) => {
-                                if parts.get(1).is_some() {
-                                    println!(
-                                        "{}",
-                                        narrate_target_not_found(parts.get(1).unwrap())
-                                    );
-                                } else {
-                                    println!("{}", narrate_no_location());
-                                }
-                            }
-                            Err(e) => {
-                                error!(error = %e, "look failed");
-                                println!(
-                                    "Something stirs in the void, but you cannot make sense of it."
-                                );
-                            }
+                            error!(error = %e, "look failed");
+                            println!("Something stirs in the void, but you cannot make sense of it.");
+                        }
+                    }
+                    "@look" => {
+                        if let Err(e) = run_look_command(
+                            parts.get(1).copied(),
+                            true,
+                            &current_location,
+                            &default_owner,
+                            &active_anatomy,
+                            &persistence,
+                            &mut cache,
+                        )
+                        .await
+                        {
+                            error!(error = %e, "@look failed");
+                            println!("The builder view remains obscured.");
                         }
                     }
                     "examine" | "x" => {

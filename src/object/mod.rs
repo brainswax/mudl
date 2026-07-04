@@ -455,6 +455,7 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
         return crate::display::format_examine_self(obj, &ctx.objects, &ctx.anatomy);
     }
 
+    // In-character `examine`: natural sentences, no leading name, stats when relevant.
     if !brief {
         if obj.is_container() {
             return crate::display::format_examine_container_player(obj, &ctx.objects);
@@ -462,17 +463,8 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
         return crate::display::format_examine_item_player(obj);
     }
 
-    let mut lines = vec![crate::display::format_stackable_label(obj)];
-    if let Some(desc) = obj.get_description() {
-        lines.push(desc);
-    }
-    if obj.is_container() {
-        let inside = crate::display::format_inside_container(obj, &ctx.objects);
-        if !inside.is_empty() {
-            lines.push(inside);
-        }
-    }
-    lines.join("\n")
+    // In-character `look`: short natural prose, no leading name (IRC-friendly).
+    crate::display::format_look_object_player(obj, &ctx.objects)
 }
 
 fn describe_room_builder(obj: &Object, ctx: &DisplayContext) -> String {
@@ -578,8 +570,7 @@ mod tests {
             .with_objects(objects.clone())
             .with_flags(DisplayFlags::BRIEF);
         let look_out = coins.describe(&look_ctx);
-        assert!(look_out.starts_with("20 coins"));
-        assert!(look_out.contains("Shiny gold coins."));
+        assert_eq!(look_out, "Shiny gold coins.");
 
         let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let examine_out = coins.describe(&examine_ctx);

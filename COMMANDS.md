@@ -1,41 +1,55 @@
 # Player and Wizard Commands
 
-Command reference for the MUDL REPL (MVP). Player verbs use plain names; wizard/builder meta-commands use a leading `@` prefix.
+Command reference for the MUDL REPL (MVP).
+
+## In-character vs out-of-character
+
+| Layer | Commands | Voice | IRC notes |
+|-------|----------|-------|-----------|
+| **In-character** | `look`, `examine` | Short natural English sentences | No leading object name; one line when possible; use `examine self body` etc. for detail |
+| **Out-of-character** | `@look`, `@examine`, `@dump` | Structured builder fields / JSON | Technical data for builders; not sent as in-character emote text |
+
+Player verbs have no `@` prefix. Wizard/builder meta-commands use `@` and require builder permission.
 
 ## Inspection
 
 ### `look` / `l [target]`
 
-**Purpose:** Quick, immersive snapshot of the world.
+**Purpose:** Quick, immersive snapshot (in-character).
 
 | Target | Shows |
 |--------|--------|
 | *(none)* | Current room: name, description, exits, ground items |
-| `<object>` | Short name, description; containers also list direct contents (`Inside the purse: 20 coins`) |
+| `<object>` | Description or a natural sentence; containers list direct contents only |
 | `self` | One-sentence gear summary (held and worn items) |
 
-**`look self` example:**
+**Examples:**
 ```
+> look backpack
+The backpack contains 20 coins.
+
+> look self
 You are holding a Rusty Sword and Wooden Sword and wearing a backpack.
 ```
 
-Does **not** show: weight, capacity, hand slots, or properties/IDs. Containers list direct contents only.
+Does **not** show: weight, capacity, hand slots, properties, or IDs.
 
-**`examine backpack` example:**
-```
-Inside the backpack: 20 coins
-The backpack has a capacity of 1/20 and is carrying 20/100 weight.
-```
+### `@look [target]`
 
-Item examine leads with description and weight when present — no redundant name line.
+**Purpose:** Out-of-character builder view (same structured output as `@examine` for rooms/objects).
 
-Uses `DisplayFlags::BRIEF` internally.
+Uses `DisplayMode::Builder` — properties, state, status, anatomy sections.
 
 ### `examine` / `x [target]`
 
 **Purpose:** Closer in-game inspection with physical stats.
 
 Includes everything `look` shows, plus weight and capacity for items and containers.
+
+**`examine backpack` example:**
+```
+The backpack contains 20 coins and has a capacity of 1/20. It is carrying 13/100 weight.
+```
 
 **`examine self`** — concise equipment summary (MOO-style, no property dump):
 
