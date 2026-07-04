@@ -12,6 +12,12 @@ use crate::world::move_manager::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InventoryError {
     NotFound(String),
+    /// Item exists on the ground but must be carried for this command (put, drop, etc.).
+    NotCarriedButOnGround(String),
+    /// Item is already in the player's possession (take/get).
+    AlreadyHolding(String),
+    /// Container is on the ground but must be worn/carried (put in).
+    ContainerNotCarriedButOnGround(String),
     NotInRoom,
     NotCarried,
     HandsFull,
@@ -31,6 +37,15 @@ impl fmt::Display for InventoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound(name) => write!(f, "You don't see any {name} here."),
+            Self::NotCarriedButOnGround(name) => write!(
+                f,
+                "You aren't holding any {name}, but there are {name} on the ground. Try: get {name}"
+            ),
+            Self::AlreadyHolding(name) => write!(f, "You're already holding {name}."),
+            Self::ContainerNotCarriedButOnGround(name) => write!(
+                f,
+                "You aren't carrying the {name}, but it's here on the ground. Try: get {name}"
+            ),
             Self::NotInRoom => write!(f, "That isn't here."),
             Self::NotCarried => write!(f, "You aren't carrying that."),
             Self::HandsFull => write!(f, "Your hands are full."),
@@ -128,6 +143,114 @@ fn resolve_inventory_target(
     }
 }
 
+fn target_visible_on_ground(
+    name: &str,
+    room_id: &ObjectId,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> bool {
+    matches!(
+        resolve_object(
+            name,
+            player_id,
+            Some(room_id),
+            objects,
+            LookupScope::RoomOnly,
+        ),
+        TargetResolution::Found(_) | TargetResolution::Ambiguous(_)
+    )
+}
+
+fn target_carried_by_player(
+    name: &str,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> bool {
+    matches!(
+        resolve_object(
+            name,
+            player_id,
+            None,
+            objects,
+            LookupScope::PossessionOnly,
+        ),
+        TargetResolution::Found(_)
+    )
+}
+
+fn resolve_carried_item(
+    ctx: &InventoryContext<'_>,
+    item_name: &str,
+) -> Result<ObjectId, InventoryError> {
+    match resolve_inventory_target(
+        item_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    ) {
+        Ok(id) => Ok(id),
+        Err(InventoryError::NotFound(_)) => {
+            if let Some(room_id) = ctx.room_id {
+                if target_visible_on_ground(item_name, room_id, ctx.player_id, ctx.objects) {
+                    return Err(InventoryError::NotCarriedButOnGround(item_name.to_string()));
+                }
+            }
+            Err(InventoryError::NotFound(item_name.to_string()))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn resolve_carried_container(
+    ctx: &InventoryContext<'_>,
+    container_name: &str,
+) -> Result<ObjectId, InventoryError> {
+    match resolve_inventory_target(
+        container_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    ) {
+        Ok(id) => Ok(id),
+        Err(InventoryError::NotFound(_)) => {
+            if let Some(room_id) = ctx.room_id {
+                if target_visible_on_ground(container_name, room_id, ctx.player_id, ctx.objects) {
+                    return Err(InventoryError::ContainerNotCarriedButOnGround(
+                        container_name.to_string(),
+                    ));
+                }
+            }
+            Err(InventoryError::NotFound(container_name.to_string()))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn resolve_ground_item(
+    ctx: &InventoryContext<'_>,
+    item_name: &str,
+    room_id: &ObjectId,
+) -> Result<ObjectId, InventoryError> {
+    match resolve_inventory_target(
+        item_name,
+        Some(room_id),
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Ground,
+    ) {
+        Ok(id) => Ok(id),
+        Err(InventoryError::NotFound(_)) => {
+            if target_carried_by_player(item_name, ctx.player_id, ctx.objects) {
+                return Err(InventoryError::AlreadyHolding(item_name.to_string()));
+            }
+            Err(InventoryError::NotFound(item_name.to_string()))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 pub fn is_carried_by(
     player_id: &ObjectId,
     item_id: &ObjectId,
@@ -219,13 +342,7 @@ pub fn take_item(
     item_name: &str,
 ) -> Result<String, InventoryError> {
     let room_id = ctx.room_id.ok_or(InventoryError::NoRoom)?.clone();
-    let item_id = resolve_inventory_target(
-        item_name,
-        Some(&room_id),
-        ctx.player_id,
-        ctx.objects,
-        ResolveScope::Ground,
-    )?;
+    let item_id = resolve_ground_item(ctx, item_name, &room_id)?;
 
     let item = ctx
         .objects
@@ -366,20 +483,8 @@ pub fn put_item(
     container_name: &str,
     quantity: Option<u32>,
 ) -> Result<String, InventoryError> {
-    let item_id = resolve_inventory_target(
-        item_name,
-        None,
-        ctx.player_id,
-        ctx.objects,
-        ResolveScope::Carried,
-    )?;
-    let container_id = resolve_inventory_target(
-        container_name,
-        None,
-        ctx.player_id,
-        ctx.objects,
-        ResolveScope::Carried,
-    )?;
+    let item_id = resolve_carried_item(ctx, item_name)?;
+    let container_id = resolve_carried_container(ctx, container_name)?;
 
     if item_id == container_id {
         return Err(InventoryError::InvalidTarget(
@@ -1305,6 +1410,113 @@ mod tests {
     fn format_put_message_exact_quantity() {
         let msg = format_put_message("coins", "purse", 10, 20, Some(10));
         assert_eq!(msg, "You put 10 coins in your purse.");
+    }
+
+    #[tokio::test]
+    async fn put_item_on_ground_hints_to_get_first() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut backpack = factory
+            .create_container("backpack", player_id.clone(), 5, true)
+            .await
+            .unwrap();
+        backpack.name = "backpack".to_string();
+        let backpack_id = backpack.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(backpack_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(backpack_id, backpack);
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 10)
+            .await
+            .unwrap();
+        coins.name = "coins".to_string();
+        coins.location = Some(room_id.clone());
+        objects.insert(coins.id.clone(), coins);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let err = put_item(&mut ctx, "coins", "backpack", None).unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::NotCarriedButOnGround("coins".to_string())
+        );
+        assert!(err.to_string().contains("on the ground"));
+        assert!(err.to_string().contains("get coins"));
+    }
+
+    #[tokio::test]
+    async fn put_item_container_on_ground_hints_to_get_first() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 5)
+            .await
+            .unwrap();
+        coins.name = "coins".to_string();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(coins_id, coins);
+
+        let mut backpack = factory
+            .create_container("backpack", player_id.clone(), 5, true)
+            .await
+            .unwrap();
+        backpack.name = "backpack".to_string();
+        backpack.location = Some(room_id.clone());
+        objects.insert(backpack.id.clone(), backpack);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let err = put_item(&mut ctx, "coins", "backpack", None).unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::ContainerNotCarriedButOnGround("backpack".to_string())
+        );
+        assert!(err.to_string().contains("get backpack"));
+    }
+
+    #[tokio::test]
+    async fn take_item_already_held_hints_instead_of_not_found() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 10)
+            .await
+            .unwrap();
+        coins.name = "coins".to_string();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(coins_id, coins);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let err = take_item(&mut ctx, "coins").unwrap_err();
+        assert_eq!(err, InventoryError::AlreadyHolding("coins".to_string()));
+        assert!(err.to_string().contains("already holding"));
     }
 
     #[tokio::test]
