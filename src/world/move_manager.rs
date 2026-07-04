@@ -2,9 +2,12 @@
 
 use std::collections::HashMap;
 
+use crate::display::is_in_player_possession;
 use crate::mudl::{AnatomyRegistry, BodyPlan};
 use crate::object::LocationRef;
-use crate::object::{Object, ObjectId};
+use crate::object::{
+    transfer_weight, player_weight_bearer, would_exceed_player_max_weight, Object, ObjectId,
+};
 use crate::world::container_fit::{
     compute_container_fit, fit_failure_reason, split_stack_id, ContainerFit,
 };
@@ -21,6 +24,8 @@ pub enum MoveError {
     SlotFull(String),
     ContainerFull,
     WeightExceeded,
+    /// Item would exceed a player's `max_weight` carry limit.
+    TooHeavy(String),
     VolumeExceeded,
     NotContainer,
     NotWearable,
@@ -46,6 +51,7 @@ impl std::fmt::Display for MoveError {
             }
             Self::ContainerFull => write!(f, "That won't fit — it's full."),
             Self::WeightExceeded => write!(f, "That would be too heavy."),
+            Self::TooHeavy(name) => write!(f, "The {name} is too heavy for you to carry."),
             Self::VolumeExceeded => write!(f, "That would take up too much space."),
             Self::NotContainer => write!(f, "That isn't a container."),
             Self::NotWearable => write!(f, "You can't wear that."),
@@ -75,6 +81,7 @@ impl From<MoveError> for crate::inventory::InventoryError {
                 Self::InvalidTarget("You can't put something inside itself.".into())
             }
             MoveError::WeightExceeded => Self::InvalidTarget("That would be too heavy.".into()),
+            MoveError::TooHeavy(name) => Self::TooHeavy(name),
             MoveError::VolumeExceeded => {
                 Self::InvalidTarget("That would take up too much space.".into())
             }
@@ -498,6 +505,29 @@ fn apply_destination(
     }
 }
 
+fn validate_player_carry_weight(
+    item: &Object,
+    item_id: &ObjectId,
+    dst: &LocationRef,
+    units: u32,
+    objects: &HashMap<ObjectId, Object>,
+) -> Result<(), MoveError> {
+    let Some(player_id) = player_weight_bearer(dst, objects) else {
+        return Ok(());
+    };
+    if is_in_player_possession(&player_id, item_id, objects) {
+        return Ok(());
+    }
+    let Some(player) = objects.get(&player_id) else {
+        return Ok(());
+    };
+    let added = transfer_weight(item, objects, units);
+    if would_exceed_player_max_weight(player, objects, added) {
+        return Err(MoveError::TooHeavy(item.name.clone()));
+    }
+    Ok(())
+}
+
 fn verify_at_source(
     obj_id: &ObjectId,
     src: &LocationRef,
@@ -559,8 +589,18 @@ pub fn move_object(
             .ok_or(MoveError::NotContainer)?
             .clone();
         let fit = compute_container_fit(&container, &item, ctx.objects, None)?;
+        if fit.units == 0 {
+            return Err(fit_failure_reason(&container, &item, ctx.objects));
+        }
+        validate_player_carry_weight(&item, obj_id, &dst, fit.units, ctx.objects)?;
         Some(place_in_container(ctx, obj_id, container_id, &src, &fit)?)
     } else {
+        let units = if item.is_stackable() {
+            item.stack_count()
+        } else {
+            1
+        };
+        validate_player_carry_weight(&item, obj_id, &dst, units, ctx.objects)?;
         remove_from_source(ctx, obj_id, &src)?;
         apply_destination(ctx, obj_id, &dst)?;
         None
@@ -658,6 +698,14 @@ pub fn move_to_container(
     if fit.units == 0 {
         return Err(fit_failure_reason(&container, &item, ctx.objects));
     }
+
+    validate_player_carry_weight(
+        &item,
+        obj_id,
+        &LocationRef::Container(container_id.clone(), None),
+        fit.units,
+        ctx.objects,
+    )?;
 
     let units = place_in_container(ctx, obj_id, container_id, &src, &fit)?;
 
@@ -789,6 +837,43 @@ mod tests {
                 || player.body_slot_item("right_hand").is_some()
         );
         assert!(!dirty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn move_rejects_item_heavier_than_player_max_weight() {
+        let (anatomy, player_id, room_id, mut objects) = setup().await;
+
+        let mut boulder = objects
+            .values()
+            .find(|o| o.name == "Anvil")
+            .unwrap()
+            .clone();
+        boulder.id = ObjectId::new("item:boulder-001");
+        boulder.name = "boulder".to_string();
+        boulder.set_property_int("weight", 200);
+        boulder.location = Some(room_id.clone());
+        objects.insert(boulder.id.clone(), boulder.clone());
+
+        let mut ctx = MoveContext {
+            objects: &mut objects,
+            anatomy: Some(&anatomy),
+            hooks: MoveHooks::default(),
+            dirty: None,
+        };
+
+        let err = move_object(
+            &mut ctx,
+            &boulder.id,
+            LocationRef::Room(room_id.clone()),
+            LocationRef::Inventory(player_id.clone()),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, MoveError::TooHeavy("boulder".to_string()));
+        assert_eq!(
+            objects.get(&boulder.id).unwrap().location.as_ref(),
+            Some(&room_id)
+        );
     }
 
     #[tokio::test]

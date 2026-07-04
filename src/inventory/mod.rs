@@ -32,6 +32,7 @@ pub enum InventoryError {
     ContainerNotCarried,
     NoRoom,
     NoBodyPlan,
+    TooHeavy(String),
     InvalidTarget(String),
 }
 
@@ -62,6 +63,7 @@ impl fmt::Display for InventoryError {
             Self::ContainerNotCarried => write!(f, "You aren't carrying that container."),
             Self::NoRoom => write!(f, "You aren't anywhere."),
             Self::NoBodyPlan => write!(f, "You have no body plan."),
+            Self::TooHeavy(name) => write!(f, "The {name} is too heavy for you to carry."),
             Self::InvalidTarget(msg) => write!(f, "{msg}"),
         }
     }
@@ -981,6 +983,151 @@ mod tests {
         assert_eq!(
             player.get_int_property("max_weight"),
             Some(crate::object::DEFAULT_PLAYER_MAX_WEIGHT)
+        );
+    }
+
+    #[tokio::test]
+    async fn take_rejects_item_heavier_than_max_weight() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut boulder = Object {
+            id: ObjectId::new("item:boulder-001"),
+            name: "boulder".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        boulder.set_property_int("weight", 200);
+        objects.insert(boulder.id.clone(), boulder.clone());
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let err = take_item(&mut ctx, "boulder").unwrap_err();
+        assert_eq!(err, InventoryError::TooHeavy("boulder".to_string()));
+        assert_eq!(
+            objects.get(&boulder.id).unwrap().location.as_ref(),
+            Some(&room_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn take_rejects_when_carrying_would_exceed_max_weight() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut heavy = Object {
+            id: ObjectId::new("item:heavy-001"),
+            name: "iron ingot".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        heavy.set_property_int("weight", 60);
+
+        let mut boulder = Object {
+            id: ObjectId::new("item:boulder-001"),
+            name: "boulder".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        boulder.set_property_int("weight", 50);
+        objects.insert(heavy.id.clone(), heavy);
+        objects.insert(boulder.id.clone(), boulder);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, "iron ingot").unwrap();
+        let err = take_item(&mut ctx, "boulder").unwrap_err();
+        assert_eq!(err, InventoryError::TooHeavy("boulder".to_string()));
+    }
+
+    #[tokio::test]
+    async fn take_allows_item_within_max_weight() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, "coin").unwrap();
+        let player = objects.get(&player_id).unwrap();
+        assert!(
+            player.body_slot_item("left_hand").is_some()
+                || player.body_slot_item("right_hand").is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn take_allows_heavy_item_when_max_weight_unlimited() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        if let Some(player) = objects.get_mut(&player_id) {
+            player.set_property_int("max_weight", crate::object::UNLIMITED_WEIGHT);
+        }
+
+        let mut boulder = Object {
+            id: ObjectId::new("item:boulder-001"),
+            name: "boulder".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        boulder.set_property_int("weight", 200);
+        objects.insert(boulder.id.clone(), boulder);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, "boulder").unwrap();
+        let player = objects.get(&player_id).unwrap();
+        assert!(
+            player.body_slot_item("left_hand").is_some()
+                || player.body_slot_item("right_hand").is_some()
         );
     }
 

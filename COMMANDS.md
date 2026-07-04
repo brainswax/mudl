@@ -19,7 +19,7 @@ Player verbs have no `@` prefix. Wizard/builder meta-commands use `@` and requir
 - **Articles:** Use `a` / `an` when introducing items (`You pick up a Rusty Sword.`). Stack counts stay bare (`20 coins`).
 - **One line when possible:** Prefer a single IRC-friendly sentence; use sub-targets for detail (`examine self body`, `examine coins.parent`).
 - **Stats on examine only:** Weight, slot occupancy, and capacity appear on `examine`, not `look`.
-- **Self examine:** Creature type + gear in prose, then slot use (`carry capacity of 2/10`) and weight (`are carrying 13/100 weight`).
+- **Self examine:** Creature type + gear in prose, then slot use (`carry capacity of 2/10`) and weight (`are carrying 13 of 100 weight`).
 
 ## Inspection
 
@@ -68,7 +68,7 @@ The backpack contains 20 coins and has a capacity of 1/20. It is carrying 13/100
 **`examine self`** — creature identity, gear, slot use, and weight (no property dump):
 
 ```text
-You're a human carrying a Rusty Sword and wearing a backpack. You have a carry capacity of 2/10 and are carrying 13/100 weight.
+You're a human carrying a Rusty Sword and wearing a backpack. You have a carry capacity of 2/10 and are carrying 13 of 100 weight.
 ```
 
 `carry capacity` is occupied body slots / total anatomy slots (not weight limit).

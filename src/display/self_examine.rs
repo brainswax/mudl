@@ -52,7 +52,7 @@ fn format_weight_clause(player: &Object, objects: &HashMap<ObjectId, Object>) ->
             format_weight_amount(carried)
         ),
         Some(max) => format!(
-            "are carrying {}/{} weight.",
+            "are carrying {} of {} weight.",
             format_weight_amount(carried),
             format_weight_amount(max as f64)
         ),
@@ -77,7 +77,7 @@ fn format_capacity_and_weight(
 ///
 /// Example:
 /// ```text
-/// You're a human carrying a Rusty Sword and wearing a backpack. You have a carry capacity of 2/10 and are carrying 13/100 weight.
+/// You're a human carrying a Rusty Sword and wearing a backpack. You have a carry capacity of 2/10 and are carrying 13 of 100 weight.
 /// ```
 pub fn format_examine_self(
     player: &Object,
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(
             output,
             "You're a human carrying a Rusty Sword and Wooden Sword and wearing a backpack. \
-             You have a carry capacity of 3/10 and are carrying 3/100 weight."
+             You have a carry capacity of 3/10 and are carrying 3 of 100 weight."
         );
         assert!(!output.contains("Admin"));
     }
@@ -182,7 +182,7 @@ mod tests {
         let output = format_examine_self(&player, &HashMap::new(), &anatomy);
         assert_eq!(
             output,
-            "You're a human. You have a carry capacity of 0/10 and are carrying 0/100 weight."
+            "You're a human. You have a carry capacity of 0/10 and are carrying 0 of 100 weight."
         );
     }
 }

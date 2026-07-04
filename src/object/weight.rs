@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::object::{Object, ObjectId};
+use crate::object::{LocationRef, Object, ObjectId};
 
 /// Format a weight for display: whole numbers without decimals, fractions to one decimal.
 pub fn format_weight_amount(w: f64) -> String {
@@ -31,6 +31,66 @@ pub fn is_unlimited_weight(limit: i64) -> bool {
 /// Whether a stored weight limit should be enforced or displayed as a cap.
 pub fn weight_limit_applies(limit: Option<i64>) -> bool {
     limit.is_some_and(|l| !is_unlimited_weight(l))
+}
+
+/// Weight of `units` being transferred (stackables scale by unit weight).
+pub fn transfer_weight(item: &Object, objects: &HashMap<ObjectId, Object>, units: u32) -> f64 {
+    if item.is_stackable() {
+        item.unit_weight() * f64::from(units)
+    } else {
+        item.total_weight(objects)
+    }
+}
+
+/// Player who bears carry weight when an item moves to `loc` (inventory, body slot, or worn container).
+pub fn player_weight_bearer(
+    loc: &LocationRef,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<ObjectId> {
+    match loc {
+        LocationRef::Inventory(id) | LocationRef::BodySlot(id, _) => Some(id.clone()),
+        LocationRef::Container(container_id, _) => owner_player_of_container(container_id, objects),
+        _ => None,
+    }
+}
+
+/// Walk container parent chain to the creature wearing or holding it.
+pub fn owner_player_of_container(
+    container_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<ObjectId> {
+    let mut current = container_id;
+    let mut visited = HashSet::new();
+    while visited.insert(current.clone()) {
+        let obj = objects.get(current)?;
+        let parent_id = obj.location.as_ref()?;
+        let parent = objects.get(parent_id)?;
+        if parent.has_creature_role() {
+            return Some(parent_id.clone());
+        }
+        if parent.is_container() {
+            current = parent_id;
+            continue;
+        }
+        return None;
+    }
+    None
+}
+
+/// Whether adding `additional` weight would exceed the player's `max_weight` (skips unlimited).
+pub fn would_exceed_player_max_weight(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    additional: f64,
+) -> bool {
+    let Some(max) = player.get_int_property("max_weight") else {
+        return false;
+    };
+    if is_unlimited_weight(max) {
+        return false;
+    }
+    let after = player_carried_weight(player, objects) + additional;
+    after > max as f64 + 1e-9
 }
 
 impl Object {
@@ -218,6 +278,54 @@ mod tests {
         let w = a.total_weight(&objects);
         assert!(w >= 1.0);
         assert!(w < 1000.0);
+    }
+
+    #[test]
+    fn would_exceed_player_max_weight_detects_overflow() {
+        let mut player = bare("player:hero-001");
+        player.set_property_int("max_weight", 100);
+        let objects = HashMap::new();
+        assert!(!would_exceed_player_max_weight(&player, &objects, 50.0));
+        assert!(would_exceed_player_max_weight(&player, &objects, 101.0));
+    }
+
+    #[test]
+    fn unlimited_max_weight_never_exceeds() {
+        let mut player = bare("player:hero-001");
+        player.set_property_int("max_weight", UNLIMITED_WEIGHT);
+        let objects = HashMap::new();
+        assert!(!would_exceed_player_max_weight(&player, &objects, 10_000.0));
+    }
+
+    #[test]
+    fn owner_player_of_worn_container() {
+        let player_id = ObjectId::new("player:hero-001");
+        let mut player = bare("player:hero-001");
+        player.id = player_id.clone();
+
+        let mut backpack = bare("item:backpack-001");
+        backpack.name = "backpack".to_string();
+        backpack.location = Some(player_id.clone());
+        backpack.apply_container_role(&ContainerSpec {
+            capacity: 5,
+            max_weight: None,
+            max_volume: None,
+            wearable: true,
+            wear_slot: Some("torso".to_string()),
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player);
+        objects.insert(backpack.id.clone(), backpack.clone());
+
+        assert_eq!(
+            owner_player_of_container(&backpack.id, &objects),
+            Some(player_id.clone())
+        );
+        assert_eq!(
+            player_weight_bearer(&LocationRef::Container(backpack.id, None), &objects),
+            Some(player_id)
+        );
     }
 
     #[test]

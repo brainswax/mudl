@@ -151,7 +151,7 @@ You pick up a Rusty Sword.
 > look self
 You are holding a Rusty Sword.
 > examine self
-You're a human carrying a Rusty Sword. You have a carry capacity of 1/10 and are carrying 1/100 weight.
+You're a human carrying a Rusty Sword. You have a carry capacity of 1/10 and are carrying 1 of 100 weight.
 > inventory
 You are completely naked.
 You are carrying:

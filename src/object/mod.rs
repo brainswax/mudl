@@ -17,7 +17,8 @@ pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS
 pub use location::LocationRef;
 pub use roles::{ContainerSpec, ItemPhysSpec, ObjectRoles, RoleKind, StackableSpec, WearableSpec};
 pub use weight::{
-    format_weight_amount, is_unlimited_weight, player_carried_weight, weight_limit_applies,
+    format_weight_amount, is_unlimited_weight, owner_player_of_container, player_carried_weight,
+    player_weight_bearer, transfer_weight, weight_limit_applies, would_exceed_player_max_weight,
     DEFAULT_PLAYER_MAX_WEIGHT, UNLIMITED_WEIGHT,
 };
 

@@ -813,7 +813,7 @@ mod tests {
 
         assert!(output.starts_with("You're a human."));
         assert!(output.contains("carry capacity of 0/10"));
-        assert!(output.contains("are carrying 0/100 weight."));
+        assert!(output.contains("are carrying 0 of 100 weight."));
         assert!(!output.contains("Admin"));
         assert!(!output.contains("Equipped:"));
         assert!(!output.contains("completely naked"));
