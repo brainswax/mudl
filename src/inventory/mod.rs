@@ -1534,6 +1534,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn take_by_short_id_after_split_stack_disambiguation() {
+        use crate::display::short_id;
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        // Nearly-full ground stack: dropping 15 merges 9 and leaves 6 as a split pile.
+        let mut main_stack = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 90)
+            .await
+            .unwrap();
+        main_stack.name = "gold bar".to_string();
+        main_stack.location = Some(room_id.clone());
+        let main_id = main_stack.id.clone();
+        let shared_proto = main_stack.prototype.clone();
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), shared_proto, 15)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        let held_id = held.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(main_id.clone(), main_stack);
+        objects.insert(held_id.clone(), held);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        drop_item(&mut ctx, "gold bars").unwrap();
+
+        // Drop can leave room-location items referenced in grasp slots; clear those so
+        // ground lookup sees every pile the player can reach.
+        let mut player = ctx.objects.get(&player_id).unwrap().clone();
+        for slot in ["right_hand", "left_hand"] {
+            if let Some(id) = player.body_slot_item(slot) {
+                if ctx.objects.get(&id).is_some_and(|o| o.location.as_ref() == Some(&room_id)) {
+                    player.set_body_slot(slot, None);
+                }
+            }
+        }
+        ctx.objects.insert(player_id.clone(), player);
+
+        let ground_piles: Vec<_> = ctx
+            .objects
+            .values()
+            .filter(|o| {
+                o.name == "gold bar"
+                    && o.location.as_ref() == Some(&room_id)
+                    && !is_carried_by(ctx.player_id, &o.id, ctx.objects)
+            })
+            .collect();
+        assert_eq!(ground_piles.len(), 2, "drop should leave two ground piles");
+        let split_id = ground_piles
+            .iter()
+            .find(|o| o.id != main_id)
+            .unwrap()
+            .id
+            .clone();
+
+        let main = ctx.objects.get(&main_id).unwrap();
+        assert_eq!(main.stack_count(), 99);
+        let split = ctx.objects.get(&split_id).unwrap();
+        assert_eq!(split.stack_count(), 6);
+
+        let err = take_item(&mut ctx, "gold bars").unwrap_err();
+        match err {
+            InventoryError::InvalidTarget(msg) => {
+                assert!(msg.contains("Which gold bar do you mean?"));
+                assert!(msg.contains(&short_id(&main_id)));
+                assert!(msg.contains(&short_id(&split_id)));
+            }
+            other => panic!("expected ambiguous InvalidTarget, got {other:?}"),
+        }
+
+        let by_main = take_item(&mut ctx, &short_id(&main_id)).unwrap();
+        assert!(by_main.contains("gold bar"));
+
+        let main = ctx.objects.get(&main_id).unwrap();
+        assert_eq!(main.stack_count(), 98);
+        assert_eq!(main.location.as_ref(), Some(&room_id));
+        assert_eq!(ctx.objects.get(&split_id).unwrap().location.as_ref(), Some(&room_id));
+
+        take_item(&mut ctx, &format!("6 {}", short_id(&split_id))).unwrap();
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert!(
+            player.body_slot_item("right_hand").is_some()
+                || player.body_slot_item("left_hand").is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn take_fails_hands_full_only_when_no_merge_and_no_slot() {
         let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 

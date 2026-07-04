@@ -11,6 +11,8 @@ use std::collections::{HashMap, VecDeque};
 use crate::mudl::slot_display_name;
 use crate::object::{Object, ObjectId};
 
+use super::stackable::stack_quantity_phrase;
+
 /// Result of resolving a player-typed object name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetResolution {
@@ -45,6 +47,110 @@ pub fn short_id(id: &ObjectId) -> String {
         .split_once(':')
         .map(|(_, rest)| rest.to_string())
         .unwrap_or_else(|| id.as_str().to_string())
+}
+
+/// Whether typed input is intended as an object id reference (not a plain name).
+pub fn looks_like_id_reference(name: &str) -> bool {
+    if name.contains(':') {
+        return true;
+    }
+    name.contains('-') && name.chars().any(|c| c.is_ascii_digit())
+}
+
+/// Candidate object ids for a player-typed reference (`gold-bar-001` → `item:gold-bar-001`).
+pub fn id_lookup_candidates(name: &str) -> Vec<ObjectId> {
+    let mut out = vec![ObjectId::new(name)];
+    if !name.contains(':') {
+        for prefix in ["item", "player", "room", "area", "creature", "prototype"] {
+            out.push(ObjectId::new(format!("{prefix}:{name}")));
+        }
+    }
+    out
+}
+
+fn object_visible_in_scope(
+    id: &ObjectId,
+    player_id: &ObjectId,
+    room_id: Option<&ObjectId>,
+    objects: &HashMap<ObjectId, Object>,
+    scope: ResolveScope,
+) -> bool {
+    id_in_scope(id, player_id, room_id, objects, scope) || scope == ResolveScope::General
+}
+
+fn location_hint_for_object(
+    obj: &Object,
+    obj_id: &ObjectId,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+    room_id: Option<&ObjectId>,
+) -> String {
+    if let Some(player) = objects.get(player_id) {
+        if let Some(hint) = direct_carry_hint(player, obj_id) {
+            if obj.is_stackable() && obj.stack_count() > 1 {
+                return format!("{}, {hint}", stack_quantity_phrase(obj));
+            }
+            return hint;
+        }
+    }
+    if room_id.is_some_and(|room| obj.location.as_ref() == Some(room)) {
+        if obj.is_stackable() && obj.stack_count() > 1 {
+            return format!("{}, here", stack_quantity_phrase(obj));
+        }
+        return "here".to_string();
+    }
+    if obj.is_stackable() && obj.stack_count() > 1 {
+        return stack_quantity_phrase(obj);
+    }
+    short_id(obj_id)
+}
+
+fn resolve_by_object_id(
+    name: &str,
+    player_id: &ObjectId,
+    room_id: Option<&ObjectId>,
+    objects: &HashMap<ObjectId, Object>,
+    scope: ResolveScope,
+) -> Option<TargetResolution> {
+    for candidate in id_lookup_candidates(name) {
+        if !objects.contains_key(&candidate) {
+            continue;
+        }
+        if object_visible_in_scope(&candidate, player_id, room_id, objects, scope) {
+            return Some(TargetResolution::Found(candidate));
+        }
+        if looks_like_id_reference(name) {
+            return Some(TargetResolution::NotFound);
+        }
+    }
+
+    if !looks_like_id_reference(name) {
+        return None;
+    }
+
+    let needle = name.to_ascii_lowercase();
+    let mut matches: Vec<ResolvedMatch> = objects
+        .iter()
+        .filter(|(id, obj)| {
+            obj.is_active()
+                && object_visible_in_scope(id, player_id, room_id, objects, scope)
+                && short_id(id).eq_ignore_ascii_case(&needle)
+        })
+        .map(|(id, obj)| ResolvedMatch {
+            id: id.clone(),
+            location_hint: Some(location_hint_for_object(
+                obj, id, player_id, objects, room_id,
+            )),
+        })
+        .collect();
+
+    matches.sort_by(|a, b| short_id(&a.id).cmp(&short_id(&b.id)));
+
+    Some(match matches.len() {
+        0 => TargetResolution::NotFound,
+        1 => TargetResolution::Found(matches[0].id.clone()),
+        _ => TargetResolution::Ambiguous(format_disambiguation(name, &matches)),
+    })
 }
 
 /// Whether a typed name matches an object's display name or aliases.
@@ -215,9 +321,14 @@ fn collect_room_matches(
         if !is_on_ground_in_room(obj, obj_id, room_id, player_id, objects) {
             continue;
         }
+        let hint = if obj.is_stackable() && obj.stack_count() > 1 {
+            format!("{}, here", stack_quantity_phrase(obj))
+        } else {
+            "here".to_string()
+        };
         let m = ResolvedMatch {
             id: obj_id.clone(),
-            location_hint: Some("here".to_string()),
+            location_hint: Some(hint),
         };
         if obj.owner == *player_id {
             player_owned.push(m);
@@ -364,14 +475,10 @@ pub fn resolve_object(
             .unwrap_or(TargetResolution::NotFound);
     }
 
-    let id = ObjectId::new(name);
-    if objects.contains_key(&id) {
-        if id_in_scope(&id, player_id, room_id, objects, scope) {
-            return TargetResolution::Found(id);
-        }
-        if scope == ResolveScope::General {
-            return TargetResolution::Found(id);
-        }
+    if let Some(result) =
+        resolve_by_object_id(name, player_id, room_id, objects, scope)
+    {
+        return result;
     }
 
     resolve_by_name(&needle, player_id, room_id, objects, scope)
@@ -458,6 +565,108 @@ mod tests {
     #[test]
     fn short_id_strips_type_prefix() {
         assert_eq!(short_id(&ObjectId::new("item:coins-042")), "coins-042");
+    }
+
+    #[test]
+    fn looks_like_id_reference_detects_short_ids() {
+        assert!(looks_like_id_reference("gold-bar-001"));
+        assert!(looks_like_id_reference("gold-bar-001-s001"));
+        assert!(looks_like_id_reference("item:coins-042"));
+        assert!(!looks_like_id_reference("gold bar"));
+        assert!(!looks_like_id_reference("gold bars"));
+    }
+
+    #[test]
+    fn resolve_by_short_id_on_ground() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("room:test-001");
+
+        let mut stack = bare("item:gold-bar-001", "gold bar", &player_id);
+        stack.location = Some(room_id.clone());
+        stack.apply_stackable_role(&StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+
+        let mut split = stack.clone();
+        split.id = ObjectId::new("item:gold-bar-001-s001");
+        split.set_stack_count(1);
+
+        let mut objects = HashMap::new();
+        objects.insert(room_id.clone(), bare("room:test-001", "Test", &player_id));
+        objects.insert(stack.id.clone(), stack);
+        objects.insert(split.id.clone(), split.clone());
+
+        let ambiguous = resolve_object(
+            "gold bar",
+            &player_id,
+            Some(&room_id),
+            &objects,
+            ResolveScope::RoomOnly,
+        );
+        assert!(matches!(ambiguous, TargetResolution::Ambiguous(_)));
+
+        let by_id = resolve_object(
+            "gold-bar-001",
+            &player_id,
+            Some(&room_id),
+            &objects,
+            ResolveScope::RoomOnly,
+        );
+        assert_eq!(
+            by_id,
+            TargetResolution::Found(ObjectId::new("item:gold-bar-001"))
+        );
+
+        let by_split = resolve_object(
+            "gold-bar-001-s001",
+            &player_id,
+            Some(&room_id),
+            &objects,
+            ResolveScope::RoomOnly,
+        );
+        assert_eq!(by_split, TargetResolution::Found(split.id));
+    }
+
+    #[test]
+    fn disambiguation_lists_short_ids_with_stack_counts() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("room:test-001");
+
+        let mut stack = bare("item:gold-bar-001", "gold bar", &player_id);
+        stack.location = Some(room_id.clone());
+        stack.apply_stackable_role(&StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+
+        let mut split = bare("item:gold-bar-001-s001", "gold bar", &player_id);
+        split.location = Some(room_id.clone());
+        split.apply_stackable_role(&StackableSpec {
+            count: 1,
+            max_stack: 99,
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(room_id.clone(), bare("room:test-001", "Test", &player_id));
+        objects.insert(stack.id.clone(), stack);
+        objects.insert(split.id.clone(), split);
+
+        let result = resolve_object(
+            "gold bar",
+            &player_id,
+            Some(&room_id),
+            &objects,
+            ResolveScope::RoomOnly,
+        );
+        match result {
+            TargetResolution::Ambiguous(msg) => {
+                assert!(msg.contains("gold-bar-001"));
+                assert!(msg.contains("gold-bar-001-s001"));
+                assert!(msg.contains("10 gold bars"));
+            }
+            other => panic!("expected ambiguous, got {other:?}"),
+        }
     }
 
     #[test]
