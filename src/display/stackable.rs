@@ -157,17 +157,65 @@ pub fn format_examine_stack_weight(obj: &Object) -> Option<String> {
     None
 }
 
-/// Natural message for take/drop of `units` (`pick up`, `drop`, …).
-pub fn format_stack_transfer_message(verb: &str, item: &Object, units: u32) -> String {
+/// Where leftover units remain after a partial stack transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StackRemainderLocation {
+    OnGround,
+    InHand,
+}
+
+/// Core clause for take/drop/put feedback (`You pick up 6 gold bars`).
+pub fn stack_transfer_clause(verb: &str, item: &Object, units: u32) -> String {
     if units == 1 {
         let label = display_name_for_single_unit(&item.name);
-        return format!("You {verb} {} {label}.", indefinite_article(&label));
+        format!("You {verb} {} {label}", indefinite_article(&label))
+    } else {
+        let mut snap = item.clone();
+        if item.is_stackable() {
+            snap.set_stack_count(units);
+        }
+        format!("You {verb} {}", stack_quantity_phrase(&snap))
     }
-    let mut snap = item.clone();
-    if item.is_stackable() {
-        snap.set_stack_count(units);
+}
+
+fn remainder_location_phrase(location: StackRemainderLocation) -> &'static str {
+    match location {
+        StackRemainderLocation::OnGround => "on the ground",
+        StackRemainderLocation::InHand => "in your hand",
     }
-    format!("You {verb} {}.", stack_quantity_phrase(&snap))
+}
+
+fn remainder_leave_phrase(item: &Object, count: u32, location: StackRemainderLocation) -> String {
+    let where_ = remainder_location_phrase(location);
+    if count == 1 {
+        let label = display_name_for_single_unit(&item.name);
+        format!(
+            "but leave {} {label} {where_}",
+            indefinite_article(&label)
+        )
+    } else {
+        format!("but leave {count} {where_}")
+    }
+}
+
+/// Natural message for take/drop of `units`, with optional partial-success remainder.
+pub fn format_stack_transfer_message(
+    verb: &str,
+    item: &Object,
+    units: u32,
+    remainder: Option<(u32, StackRemainderLocation)>,
+) -> String {
+    let base = stack_transfer_clause(verb, item, units);
+    if let Some((count, location)) = remainder {
+        if count > 0 {
+            return format!(
+                "{}, {}.",
+                base,
+                remainder_leave_phrase(item, count, location)
+            );
+        }
+    }
+    format!("{base}.")
 }
 
 /// Examine fallback when there is no description or weight line.
@@ -200,6 +248,37 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         }
+    }
+
+    #[test]
+    fn transfer_message_with_ground_remainder() {
+        let mut bar = bare("item:bar-001", "gold bar");
+        bar.apply_stackable_role(&StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        assert_eq!(
+            format_stack_transfer_message(
+                "pick up",
+                &bar,
+                6,
+                Some((2, StackRemainderLocation::OnGround)),
+            ),
+            "You pick up 6 gold bars, but leave 2 on the ground."
+        );
+    }
+
+    #[test]
+    fn transfer_message_without_remainder() {
+        let mut bar = bare("item:bar-001", "gold bar");
+        bar.apply_stackable_role(&StackableSpec {
+            count: 1,
+            max_stack: 99,
+        });
+        assert_eq!(
+            format_stack_transfer_message("pick up", &bar, 1, None),
+            "You pick up a gold bar."
+        );
     }
 
     #[test]

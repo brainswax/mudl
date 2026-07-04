@@ -4,7 +4,7 @@ use std::fmt;
 use crate::display::{
     display_name_for_single_unit, format_stack_transfer_message, item_lookup_variants,
     name_looks_plural, resolve_object, stack_quantity_phrase, ResolveScope as LookupScope,
-    TargetResolution,
+    StackRemainderLocation, TargetResolution,
 };
 use crate::display::grammar::indefinite_article;
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
@@ -490,14 +490,30 @@ pub fn take_item(
         move_object(
             mctx,
             &item_id,
-            LocationRef::Room(room_id),
+            LocationRef::Room(room_id.clone()),
             LocationRef::Inventory(player_id),
             move_units,
         )
     })?;
 
     let transferred = result.units_transferred.unwrap_or(units);
-    Ok(format_stack_transfer_message("pick up", &item, transferred))
+    let remainder_on_ground = ctx
+        .objects
+        .get(&item_id)
+        .filter(|o| o.location.as_ref() == Some(&room_id))
+        .map(|o| o.stack_count())
+        .unwrap_or(0);
+    let remainder = if transferred < units && remainder_on_ground > 0 {
+        Some((remainder_on_ground, StackRemainderLocation::OnGround))
+    } else {
+        None
+    };
+    Ok(format_stack_transfer_message(
+        "pick up",
+        &item,
+        transferred,
+        remainder,
+    ))
 }
 
 pub fn drop_item(
@@ -528,7 +544,23 @@ pub fn drop_item(
 
     let result = with_move_ctx(ctx, |mctx| move_to_room(mctx, &item_id, &room_id, move_units))?;
     let transferred = result.units_transferred.unwrap_or(units);
-    Ok(format_stack_transfer_message("drop", &item, transferred))
+    let remainder_in_hand = ctx
+        .objects
+        .get(&item_id)
+        .filter(|_| is_carried_by(ctx.player_id, &item_id, ctx.objects))
+        .map(|o| o.stack_count())
+        .unwrap_or(0);
+    let remainder = if transferred < units && remainder_in_hand > 0 {
+        Some((remainder_in_hand, StackRemainderLocation::InHand))
+    } else {
+        None
+    };
+    Ok(format_stack_transfer_message(
+        "drop",
+        &item,
+        transferred,
+        remainder,
+    ))
 }
 
 /// Parsed `put [count] <item> in <container>` command.
@@ -579,22 +611,45 @@ pub fn format_put_message(
 
     let base = if transferred == 1 && quantity.is_none() && total_held == 1 {
         format!(
-            "You put {} {item_label} in your {container_display}.",
+            "You put {} {item_label} in your {container_display}",
             indefinite_article(&item_label)
         )
     } else {
-        format!("You put {item_label} in your {container_display}.")
+        format!("You put {item_label} in your {container_display}")
     };
 
     if let Some(req) = quantity {
         if transferred < req {
-            return format!("{base} {} won't fit.", req.saturating_sub(transferred));
+            return format!(
+                "{base}, {}.",
+                format_remainder_in_hand_clause(item, req.saturating_sub(transferred))
+            );
         }
-        base
+        format!("{base}.")
     } else if remainder_in_hand > 0 {
-        format!("{base} {remainder_in_hand} won't fit.")
+        format!(
+            "{base}, {}.",
+            format_remainder_in_hand_clause(item, remainder_in_hand)
+        )
     } else {
-        base
+        format!("{base}.")
+    }
+}
+
+fn format_remainder_in_hand_clause(item: &Object, count: u32) -> String {
+    if count == 1 {
+        let label = display_name_for_single_unit(&item.name);
+        format!(
+            "but {} remains in your hand",
+            indefinite_article(&label)
+        )
+    } else {
+        let mut snap = item.clone();
+        snap.set_stack_count(count);
+        format!(
+            "but {} remain in your hand",
+            stack_quantity_phrase(&snap)
+        )
     }
 }
 
@@ -1365,7 +1420,10 @@ mod tests {
         };
 
         let msg = take_item(&mut ctx, "10 gold bars").unwrap();
-        assert_eq!(msg, "You pick up 5 gold bars.");
+        assert_eq!(
+            msg,
+            "You pick up 5 gold bars, but leave 5 on the ground."
+        );
 
         let ground = objects.get(&ObjectId::new("item:bars-001")).unwrap();
         assert_eq!(ground.stack_count(), 5);
@@ -1960,7 +2018,7 @@ mod tests {
 
         let msg = put_item(&mut ctx, "coins", "purse", None).unwrap();
         assert!(msg.contains("10"));
-        assert!(msg.contains("won't fit"));
+        assert!(msg.contains("remain in your hand"));
         assert!(msg.contains("purse"));
 
         let purse = objects.get(&purse_id).unwrap();
@@ -2008,7 +2066,10 @@ mod tests {
             max_stack: 99,
         });
         let msg = format_put_message(&coins, "purse", 15, 20, None);
-        assert_eq!(msg, "You put 15 coins in your purse. 5 won't fit.");
+        assert_eq!(
+            msg,
+            "You put 15 coins in your purse, but 5 coins remain in your hand."
+        );
     }
 
     #[test]
