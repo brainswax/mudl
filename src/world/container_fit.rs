@@ -58,8 +58,8 @@ pub fn compute_container_fit(
 
     let merge_target = find_mergeable_stack(container, item, objects);
     let stack_count = effective_stack_count(item);
-    let unit_w = item.unit_weight().max(0);
-    let unit_v = item.unit_volume().max(0);
+    let unit_w = item.unit_weight().max(0.0);
+    let unit_v = item.unit_volume().max(0.0);
 
     let mut max_units = stack_count;
 
@@ -84,21 +84,21 @@ pub fn compute_container_fit(
 
     if let Some(max_w) = container.container_max_weight() {
         if crate::object::weight_limit_applies(Some(max_w)) {
-            let room = max_w.saturating_sub(container.contents_weight(objects));
-            if unit_w > 0 {
-                max_units = max_units.min((room / unit_w) as u32);
+            let room = max_w as f64 - container.contents_weight(objects);
+            if unit_w > 0.0 {
+                max_units = max_units.min((room / unit_w).floor() as u32);
             }
         }
-    } else if unit_w < 0 {
+    } else if unit_w < 0.0 {
         max_units = 0;
     }
 
     if let Some(max_v) = container.container_max_volume() {
-        let room = max_v.saturating_sub(container.contents_volume(objects));
-        if unit_v > 0 {
-            max_units = max_units.min((room / unit_v) as u32);
+        let room = max_v as f64 - container.contents_volume(objects);
+        if unit_v > 0.0 {
+            max_units = max_units.min((room / unit_v).floor() as u32);
         }
-    } else if unit_v < 0 {
+    } else if unit_v < 0.0 {
         max_units = 0;
     }
 
@@ -133,12 +133,12 @@ pub fn fit_failure_reason(
         return MoveError::ContainerFull;
     }
 
-    let unit_w = item.unit_weight().max(1);
-    let unit_v = item.unit_volume().max(1);
+    let unit_w = item.unit_weight().max(1.0);
+    let unit_v = item.unit_volume().max(1.0);
 
     if let Some(max_w) = container.container_max_weight() {
         if crate::object::weight_limit_applies(Some(max_w)) {
-            let room = max_w.saturating_sub(container.contents_weight(objects));
+            let room = max_w as f64 - container.contents_weight(objects);
             if room < unit_w {
                 return MoveError::WeightExceeded;
             }
@@ -146,7 +146,7 @@ pub fn fit_failure_reason(
     }
 
     if let Some(max_v) = container.container_max_volume() {
-        let room = max_v.saturating_sub(container.contents_volume(objects));
+        let room = max_v as f64 - container.contents_volume(objects);
         if room < unit_v {
             return MoveError::VolumeExceeded;
         }

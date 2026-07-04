@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::object::{is_unlimited_weight, player_carried_weight, Object, ObjectId};
+use crate::object::{
+    format_weight_amount, is_unlimited_weight, player_carried_weight, Object, ObjectId,
+};
 
 fn player_capacity_message(max: i64) -> String {
     if is_unlimited_weight(max) {
@@ -25,7 +27,7 @@ pub fn format_weight_examine_player(obj: &Object, objects: &HashMap<ObjectId, Ob
     if obj.object_type() == "player" {
         let mut parts = Vec::new();
         let carried = player_carried_weight(obj, objects);
-        if carried > 0 {
+        if carried > 0.0 {
             parts.push(format!("You are carrying {carried} weight."));
         }
         if let Some(max) = obj.get_int_property("max_weight") {
@@ -42,8 +44,11 @@ pub fn format_weight_examine_player(obj: &Object, objects: &HashMap<ObjectId, Ob
         let current = obj.contents_weight(objects);
         let name = obj.name.to_lowercase();
         let mut parts = Vec::new();
-        if current > 0 || obj.container_max_weight().is_some() {
-            parts.push(format!("The {name} holds {current} weight."));
+        if current > 0.0 || obj.container_max_weight().is_some() {
+            parts.push(format!(
+                "The {name} holds {} weight.",
+                format_weight_amount(current)
+            ));
         }
         if let Some(max) = obj.container_max_weight() {
             parts.push(container_capacity_message(&name, max));
@@ -56,12 +61,12 @@ pub fn format_weight_examine_player(obj: &Object, objects: &HashMap<ObjectId, Ob
     }
 
     if obj.is_stackable() && obj.stack_count() > 1 {
-        return Some(format!("They weigh {}.", obj.weight()));
+        return Some(format!("They weigh {}.", format_weight_amount(obj.weight())));
     }
 
     let w = obj.weight();
-    if w > 1 || (w > 0 && obj.get_int_property("weight").is_some()) {
-        return Some(format!("It weighs {w}."));
+    if w > 1.0 || (w > 0.0 && obj.get_numeric_property("weight").is_some()) {
+        return Some(format!("It weighs {}.", format_weight_amount(w)));
     }
 
     None

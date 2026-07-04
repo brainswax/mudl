@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use crate::object::{
-    is_state_property, is_unlimited_weight, player_carried_weight, Object, ObjectId,
+    format_weight_amount, is_state_property, is_unlimited_weight, player_carried_weight, Object,
+    ObjectId,
 };
 
 use super::{
@@ -104,11 +105,11 @@ fn format_config_properties(obj: &Object, objects: &HashMap<ObjectId, Object>) -
         .into_iter()
         .map(|name| {
             let value = if name == "weight" && !obj.properties.contains_key("weight") {
-                obj.unit_weight().to_string()
+                format_weight_amount(obj.unit_weight())
             } else if let Some(prop) = obj.get_property(name) {
                 format_property_value(&prop.value, objects)
             } else {
-                obj.unit_weight().to_string()
+                format_weight_amount(obj.unit_weight())
             };
             format!("{name}: {value}")
         })
@@ -151,20 +152,20 @@ fn format_object_state_entries(obj: &Object, ctx: &DisplayContext) -> Vec<String
 }
 
 fn format_contents_weight_status(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let contents = obj.contents_weight(objects);
+    let contents = format_weight_amount(obj.contents_weight(objects));
     match obj.container_max_weight() {
         Some(max) if is_unlimited_weight(max) => format!("{contents}/unlimited"),
         Some(max) => format!("{contents}/{max}"),
-        None => contents.to_string(),
+        None => contents,
     }
 }
 
 fn format_carried_weight_status(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let carried = player_carried_weight(obj, objects);
+    let carried = format_weight_amount(player_carried_weight(obj, objects));
     match obj.get_int_property("max_weight") {
         Some(max) if is_unlimited_weight(max) => format!("{carried}/unlimited"),
         Some(max) => format!("{carried}/{max}"),
-        None => carried.to_string(),
+        None => carried,
     }
 }
 
@@ -172,9 +173,9 @@ fn format_status_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> V
     let mut entries = Vec::new();
 
     if obj.is_stackable() {
-        entries.push(format!("weight: {}", obj.weight()));
+        entries.push(format!("weight: {}", format_weight_amount(obj.weight())));
     } else if !obj.is_location() && obj.object_type() != "player" {
-        entries.push(format!("weight: {}", obj.weight()));
+        entries.push(format!("weight: {}", format_weight_amount(obj.weight())));
     }
 
     if obj.is_container() {
@@ -183,8 +184,8 @@ fn format_status_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> V
             format_contents_weight_status(obj, objects)
         ));
         let total = obj.total_weight(objects);
-        if total != obj.weight() {
-            entries.push(format!("total_weight: {total}"));
+        if (total - obj.weight()).abs() > 1e-9 {
+            entries.push(format!("total_weight: {}", format_weight_amount(total)));
         }
     }
 

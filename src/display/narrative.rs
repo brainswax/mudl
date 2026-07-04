@@ -20,6 +20,7 @@ fn format_value_narrative(value: &Value, objects: &HashMap<ObjectId, Object>) ->
     match value {
         Value::String(s) => s.clone(),
         Value::Int(n) => n.to_string(),
+        Value::Float(f) => crate::object::format_weight_amount(*f),
         Value::Bool(b) => b.to_string(),
         Value::ObjectRef(id) => object_name(id, objects),
         Value::List(items) => format!(

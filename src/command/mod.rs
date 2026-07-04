@@ -177,8 +177,8 @@ pub struct CreateOptions {
     pub capacity: Option<u32>,
     pub max_weight: Option<i64>,
     pub max_volume: Option<i64>,
-    pub weight: Option<i64>,
-    pub volume: Option<i64>,
+    pub weight: Option<f64>,
+    pub volume: Option<f64>,
     pub wearable: Option<bool>,
     pub wear_slot: Option<String>,
     pub stack_count: Option<u32>,
@@ -197,8 +197,8 @@ pub fn parse_create_options(tokens: &[&str]) -> CreateOptions {
                 "capacity" => opts.capacity = value.parse().ok(),
                 "max_weight" | "weight_limit" => opts.max_weight = value.parse().ok(),
                 "max_volume" | "volume_limit" => opts.max_volume = value.parse().ok(),
-                "weight" => opts.weight = parse_create_int(value),
-                "volume" => opts.volume = parse_create_int(value),
+                "weight" => opts.weight = parse_create_number(value),
+                "volume" => opts.volume = parse_create_number(value),
                 "wearable" => opts.wearable = Some(value == "true"),
                 "wear_slot" => opts.wear_slot = Some(value.to_string()),
                 "count" | "stack_count" => opts.stack_count = value.parse().ok(),
@@ -213,18 +213,19 @@ pub fn parse_create_options(tokens: &[&str]) -> CreateOptions {
     opts
 }
 
-/// Parse a signed integer for create overrides; rejects non-numeric values.
-fn parse_create_int(value: &str) -> Option<i64> {
-    value.trim().parse().ok()
+/// Parse an integer or decimal for create overrides (`weight=0.1`, `capacity=3`).
+pub fn parse_create_number(value: &str) -> Option<f64> {
+    let v = value.trim();
+    v.parse::<f64>().ok().filter(|n| n.is_finite())
 }
 
 /// Apply scalar create overrides (weight, volume, hand_slot, etc.) onto a new object.
 pub fn apply_create_property_overrides(obj: &mut Object, options: &CreateOptions) {
     if let Some(w) = options.weight {
-        obj.set_property_int("weight", w);
+        obj.set_property_numeric("weight", w);
     }
     if let Some(v) = options.volume {
-        obj.set_property_int("volume", v);
+        obj.set_property_numeric("volume", v);
     }
     options.mudl_props.apply_scalar_overrides(obj);
 }
@@ -293,8 +294,16 @@ pub async fn create_at_location_with_options<P: Persistence>(
                             .wear_slot
                             .clone()
                             .unwrap_or_else(|| "torso".to_string()),
-                        weight: options.max_weight.unwrap_or(1),
-                        volume: options.max_volume.unwrap_or(1),
+                        weight: options
+                            .max_weight
+                            .map(|w| w as f64)
+                            .or(options.weight)
+                            .unwrap_or(1.0),
+                        volume: options
+                            .max_volume
+                            .map(|v| v as f64)
+                            .or(options.volume)
+                            .unwrap_or(1.0),
                     },
                     options.prototype.clone(),
                 )
@@ -810,14 +819,56 @@ mod tests {
         assert_eq!(parsed.display_name, "backpack");
         assert_eq!(parsed.options.capacity, Some(20));
         assert_eq!(parsed.options.max_weight, Some(100));
-        assert_eq!(parsed.options.weight, Some(10));
+        assert_eq!(parsed.options.weight, Some(10.0));
     }
 
     #[test]
-    fn parse_create_int_rejects_non_numeric() {
-        assert_eq!(parse_create_int("10"), Some(10));
-        assert_eq!(parse_create_int("abc"), None);
-        assert_eq!(parse_create_int(""), None);
+    fn parse_create_number_parses_int_and_decimal() {
+        assert_eq!(parse_create_number("10"), Some(10.0));
+        assert_eq!(parse_create_number("0.1"), Some(0.1));
+        assert_eq!(parse_create_number("abc"), None);
+        assert_eq!(parse_create_number(""), None);
+    }
+
+    #[test]
+    fn parse_create_command_parses_decimal_weight() {
+        let parsed =
+            parse_create_command("create stackable coins weight=0.1 stack_count=21").unwrap();
+        assert_eq!(parsed.type_name, "stackable");
+        assert_eq!(parsed.options.weight, Some(0.1));
+        assert_eq!(parsed.options.stack_count, Some(21));
+    }
+
+    #[tokio::test]
+    async fn create_stackable_decimal_weight_and_examine_status() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+
+        let parsed =
+            parse_create_command("create stackable coins weight=0.1 stack_count=21").unwrap();
+        let coins = create_at_location_with_options(
+            &factory,
+            &parsed.type_name,
+            &parsed.display_name,
+            owner.clone(),
+            None,
+            &anatomy,
+            parsed.options,
+        )
+        .await
+        .unwrap();
+
+        assert!((coins.unit_weight() - 0.1).abs() < f64::EPSILON);
+        assert!((coins.weight() - 2.1).abs() < f64::EPSILON);
+
+        let mut objects = HashMap::new();
+        objects.insert(coins.id.clone(), coins.clone());
+        let builder_ctx =
+            DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
+        let examine_out = coins.describe_detailed(&builder_ctx);
+        assert!(examine_out.contains("weight: 0.1"));
+        assert!(examine_out.contains("weight: 2.1"));
     }
 
     #[tokio::test]
@@ -842,7 +893,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(backpack.weight(), 10);
+        assert!((backpack.weight() - 10.0).abs() < f64::EPSILON);
         assert_eq!(backpack.container_capacity(), 20);
         assert_eq!(backpack.container_max_weight(), Some(100));
 
@@ -1037,14 +1088,14 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(backpack.weight(), 10);
+        assert!((backpack.weight() - 10.0).abs() < f64::EPSILON);
         assert!(backpack.verbs.contains_key("polish"));
 
         apply_unset(&mut backpack, "verb.polish").unwrap();
         apply_unset(&mut backpack, "weight").unwrap();
 
         assert!(!backpack.verbs.contains_key("polish"));
-        assert!(backpack.get_int_property("weight").is_none());
+        assert!(backpack.get_numeric_property("weight").is_none());
     }
 
     fn bare_player(id: &ObjectId) -> Object {

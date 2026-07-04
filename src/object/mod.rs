@@ -19,8 +19,8 @@ pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS
 pub use location::LocationRef;
 pub use roles::{ContainerSpec, ItemPhysSpec, ObjectRoles, RoleKind, StackableSpec, WearableSpec};
 pub use weight::{
-    is_unlimited_weight, player_carried_weight, weight_limit_applies, DEFAULT_PLAYER_MAX_WEIGHT,
-    UNLIMITED_WEIGHT,
+    format_weight_amount, is_unlimited_weight, player_carried_weight, weight_limit_applies,
+    DEFAULT_PLAYER_MAX_WEIGHT, UNLIMITED_WEIGHT,
 };
 
 bitflags! {
@@ -79,6 +79,7 @@ pub struct Verb {
 pub enum Value {
     String(String),
     Int(i64),
+    Float(f64),
     Bool(bool),
     List(Vec<Value>),
     ObjectRef(ObjectId),

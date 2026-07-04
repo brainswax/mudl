@@ -51,23 +51,23 @@ impl Default for ContainerSpec {
 #[derive(Debug, Clone)]
 pub struct WearableSpec {
     pub wear_slot: String,
-    pub weight: i64,
-    pub volume: i64,
+    pub weight: f64,
+    pub volume: f64,
 }
 
 /// Physical attributes for a generic item.
 #[derive(Debug, Clone)]
 pub struct ItemPhysSpec {
-    pub weight: i64,
-    pub volume: i64,
+    pub weight: f64,
+    pub volume: f64,
     pub pocketable: bool,
 }
 
 impl Default for ItemPhysSpec {
     fn default() -> Self {
         Self {
-            weight: 1,
-            volume: 1,
+            weight: 1.0,
+            volume: 1.0,
             pocketable: true,
         }
     }
@@ -117,30 +117,30 @@ impl Object {
         self.get_bool_property("stackable").unwrap_or(false)
     }
 
-    pub fn weight(&self) -> i64 {
-        let unit = self.get_int_property("weight").unwrap_or(1);
+    pub fn weight(&self) -> f64 {
+        let unit = self.unit_weight();
         if self.is_stackable() {
-            unit.saturating_mul(i64::from(self.stack_count()))
+            unit * f64::from(self.stack_count())
         } else {
             unit
         }
     }
 
-    pub fn unit_weight(&self) -> i64 {
-        self.get_int_property("weight").unwrap_or(1)
+    pub fn unit_weight(&self) -> f64 {
+        self.get_numeric_property("weight").unwrap_or(1.0)
     }
 
-    pub fn volume(&self) -> i64 {
-        let unit = self.get_int_property("volume").unwrap_or(1);
+    pub fn volume(&self) -> f64 {
+        let unit = self.unit_volume();
         if self.is_stackable() {
-            unit.saturating_mul(i64::from(self.stack_count()))
+            unit * f64::from(self.stack_count())
         } else {
             unit
         }
     }
 
-    pub fn unit_volume(&self) -> i64 {
-        self.get_int_property("volume").unwrap_or(1)
+    pub fn unit_volume(&self) -> f64 {
+        self.get_numeric_property("volume").unwrap_or(1.0)
     }
 
     pub fn stack_count(&self) -> u32 {
@@ -192,24 +192,24 @@ impl Object {
             self.set_property_string("wear_slot", slot);
         }
         self.set_property_bool("is_pocketable", false);
-        if self.get_int_property("weight").is_none() {
-            self.set_property_int("weight", 1);
+        if self.get_numeric_property("weight").is_none() {
+            self.set_property_numeric("weight", 1.0);
         }
-        if self.get_int_property("volume").is_none() {
-            self.set_property_int("volume", 1);
+        if self.get_numeric_property("volume").is_none() {
+            self.set_property_numeric("volume", 1.0);
         }
     }
 
     pub fn apply_wearable_role(&mut self, spec: &WearableSpec) {
         self.set_property_bool("is_wearable", true);
         self.set_property_string("wear_slot", &spec.wear_slot);
-        self.set_property_int("weight", spec.weight);
-        self.set_property_int("volume", spec.volume);
+        self.set_property_numeric("weight", spec.weight);
+        self.set_property_numeric("volume", spec.volume);
     }
 
     pub fn apply_item_phys(&mut self, spec: &ItemPhysSpec) {
-        self.set_property_int("weight", spec.weight);
-        self.set_property_int("volume", spec.volume);
+        self.set_property_numeric("weight", spec.weight);
+        self.set_property_numeric("volume", spec.volume);
         self.set_property_bool("is_pocketable", spec.pocketable);
         if !self.has_container_role() {
             self.set_property_bool("is_container", false);
@@ -254,8 +254,8 @@ impl Object {
     /// Default item properties (backward-compatible with pre-M1 objects).
     pub fn init_item_defaults(&mut self, pocketable: bool) {
         self.apply_item_phys(&ItemPhysSpec {
-            weight: 1,
-            volume: 1,
+            weight: 1.0,
+            volume: 1.0,
             pocketable,
         });
     }
@@ -329,6 +329,31 @@ impl Object {
                 None
             }
         })
+    }
+
+    pub fn get_numeric_property(&self, name: &str) -> Option<f64> {
+        self.get_property(name).and_then(|p| match &p.value {
+            Value::Int(n) => Some(*n as f64),
+            Value::Float(f) => Some(*f),
+            _ => None,
+        })
+    }
+
+    pub fn set_property_numeric(&mut self, name: &str, value: f64) {
+        let stored = if value.fract().abs() < 1e-9
+            && value >= i64::MIN as f64
+            && value <= i64::MAX as f64
+        {
+            Value::Int(value.round() as i64)
+        } else {
+            Value::Float(value)
+        };
+        self.add_property(Property {
+            name: name.to_string(),
+            value: stored,
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
     }
 
     pub fn get_string_property(&self, name: &str) -> Option<String> {
@@ -410,7 +435,7 @@ impl Object {
     }
 
     /// Sum volume of all objects inside this container.
-    pub fn contents_volume(&self, objects: &HashMap<ObjectId, Object>) -> i64 {
+    pub fn contents_volume(&self, objects: &HashMap<ObjectId, Object>) -> f64 {
         self.container_contents()
             .iter()
             .filter_map(|id| objects.get(id))
@@ -467,8 +492,8 @@ mod tests {
             count: 10,
             max_stack: 99,
         });
-        assert_eq!(obj.weight(), 20);
-        assert_eq!(obj.unit_weight(), 2);
+        assert!((obj.weight() - 20.0).abs() < f64::EPSILON);
+        assert!((obj.unit_weight() - 2.0).abs() < f64::EPSILON);
     }
 
     #[test]

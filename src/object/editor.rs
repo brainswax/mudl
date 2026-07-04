@@ -40,6 +40,11 @@ pub fn parse_value_literal(input: &str) -> Result<Value, EditError> {
     if let Ok(n) = trimmed.parse::<i64>() {
         return Ok(Value::Int(n));
     }
+    if let Ok(f) = trimmed.parse::<f64>() {
+        if f.is_finite() {
+            return Ok(Value::Float(f));
+        }
+    }
     if (trimmed.starts_with('"') && trimmed.ends_with('"'))
         || (trimmed.starts_with('\'') && trimmed.ends_with('\''))
     {
@@ -180,8 +185,12 @@ fn resolve_value_refs(
 
 fn validate_config_value(key: &str, value: &Value) -> Result<(), EditError> {
     match key {
-        "weight" | "volume" | "capacity" | "max_weight" | "max_volume" | "stack_count"
-        | "max_stack" => {
+        "weight" | "volume" => {
+            if !matches!(value, Value::Int(_) | Value::Float(_)) {
+                return Err(EditError::InvalidValue(format!("{key} requires a number")));
+            }
+        }
+        "capacity" | "max_weight" | "max_volume" | "stack_count" | "max_stack" => {
             if !matches!(value, Value::Int(_)) {
                 return Err(EditError::InvalidValue(format!("{key} requires an integer")));
             }
@@ -360,7 +369,7 @@ mod tests {
         let observer = ObjectId::new("player:admin-001");
 
         set_field(&mut backpack, "weight", "10", &observer, &objects).unwrap();
-        assert_eq!(backpack.get_int_property("weight"), Some(10));
+        assert!((backpack.get_numeric_property("weight").unwrap() - 10.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -417,7 +426,7 @@ mod tests {
         unset_field(&mut backpack, "weight").unwrap();
         unset_field(&mut backpack, "location").unwrap();
 
-        assert!(backpack.get_int_property("weight").is_none());
+        assert!(backpack.get_numeric_property("weight").is_none());
         assert!(backpack.location.is_none());
     }
 
@@ -437,6 +446,10 @@ mod tests {
     #[test]
     fn parse_value_literals() {
         assert!(matches!(parse_value_literal("10").unwrap(), Value::Int(10)));
+        assert!(matches!(
+            parse_value_literal("0.1").unwrap(),
+            Value::Float(f) if (f - 0.1).abs() < f64::EPSILON
+        ));
         assert!(matches!(
             parse_value_literal("true").unwrap(),
             Value::Bool(true)

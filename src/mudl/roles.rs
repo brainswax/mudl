@@ -11,8 +11,8 @@ pub struct MudlRoleProps {
     pub max_volume: Option<i64>,
     pub is_wearable: Option<bool>,
     pub wear_slot: Option<String>,
-    pub weight: Option<i64>,
-    pub volume: Option<i64>,
+    pub weight: Option<f64>,
+    pub volume: Option<f64>,
     pub pocketable: Option<bool>,
     pub stackable: Option<bool>,
     pub stack_count: Option<u32>,
@@ -32,8 +32,8 @@ impl MudlRoleProps {
                 "max_volume" => props.max_volume = value.parse().ok(),
                 "is_wearable" => props.is_wearable = Some(*value == "true"),
                 "wear_slot" => props.wear_slot = Some(value.to_string()),
-                "weight" => props.weight = value.parse().ok(),
-                "volume" => props.volume = value.parse().ok(),
+                "weight" => props.weight = value.parse::<f64>().ok().filter(|n| n.is_finite()),
+                "volume" => props.volume = value.parse::<f64>().ok().filter(|n| n.is_finite()),
                 "pocketable" | "is_pocketable" => props.pocketable = Some(*value == "true"),
                 "stackable" => props.stackable = Some(*value == "true"),
                 "stack_count" => props.stack_count = value.parse().ok(),
@@ -56,10 +56,10 @@ impl MudlRoleProps {
     /// Apply scalar overrides without re-applying role composition.
     pub fn apply_scalar_overrides(&self, obj: &mut Object) {
         if let Some(w) = self.weight {
-            obj.set_property_int("weight", w);
+            obj.set_property_numeric("weight", w);
         }
         if let Some(v) = self.volume {
-            obj.set_property_int("volume", v);
+            obj.set_property_numeric("volume", v);
         }
         if let Some(p) = self.pocketable {
             obj.set_property_bool("is_pocketable", p);
@@ -87,8 +87,8 @@ impl MudlRoleProps {
             });
         } else if self.weight.is_some() || self.volume.is_some() {
             obj.apply_item_phys(&ItemPhysSpec {
-                weight: self.weight.unwrap_or(1),
-                volume: self.volume.unwrap_or(1),
+                weight: self.weight.unwrap_or(1.0),
+                volume: self.volume.unwrap_or(1.0),
                 pocketable: self.pocketable.unwrap_or(true),
             });
         }
@@ -99,8 +99,8 @@ impl MudlRoleProps {
                     .wear_slot
                     .clone()
                     .unwrap_or_else(|| "torso".to_string()),
-                weight: self.weight.unwrap_or(1),
-                volume: self.volume.unwrap_or(1),
+                weight: self.weight.unwrap_or(1.0),
+                volume: self.volume.unwrap_or(1.0),
             });
         }
 
