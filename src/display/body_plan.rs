@@ -1,94 +1,50 @@
 //! Body plan (creature anatomy) formatting for examine and look.
 
-use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, BodySlotDef, SlotType};
-use crate::object::{format_weight_amount, Object};
+use crate::mudl::{AnatomyRegistry, BodyPlan, SlotType};
+use crate::object::Object;
 
-/// Compact player-facing summary of a body plan.
+use super::self_examine::equipment_placement_label;
+
+/// Ordered friendly slot names for body detail views.
+pub fn format_available_slots(plan: &BodyPlan) -> String {
+    let names: Vec<String> = plan
+        .slots
+        .iter()
+        .map(|s| equipment_placement_label(&s.name))
+        .collect();
+    names.join(", ")
+}
+
+/// Detailed body anatomy (`examine self body`, `examine human`).
 ///
-/// Example: `Body (human): 2 grasp slots (left hand, right hand); wear: head, torso; carry up to 100 weight.`
-pub fn format_body_plan_summary(plan: &BodyPlan, carry_capacity: Option<f64>) -> String {
-    let mut parts = Vec::new();
-
-    let grasp = plan.grasp_slots();
-    if !grasp.is_empty() {
-        let names: Vec<String> = grasp
-            .iter()
-            .map(|s| slot_display_name(&s.name))
-            .collect();
-        let label = if grasp.len() == 1 {
-            "1 grasp slot".to_string()
-        } else {
-            format!("{} grasp slots", grasp.len())
-        };
-        parts.push(format!("{label} ({})", names.join(", ")));
+/// Example: `You are human. Available slots: head, back, right hand, left hand, ...`
+pub fn format_body_detail_player(plan: &BodyPlan, addressing_self: bool) -> String {
+    let slots = format_available_slots(plan);
+    if addressing_self {
+        format!(
+            "You are {}. Available slots: {}.",
+            plan.name, slots
+        )
+    } else {
+        format!(
+            "{} anatomy. Available slots: {}.",
+            capitalize_first(&plan.name),
+            slots
+        )
     }
-
-    let wear: Vec<String> = plan
-        .wear_slots()
-        .iter()
-        .map(|s| slot_display_name(&s.name))
-        .collect();
-    if !wear.is_empty() {
-        parts.push(format!("wear: {}", wear.join(", ")));
-    }
-
-    let limbs: Vec<String> = plan
-        .slots_of_type(SlotType::Limb)
-        .iter()
-        .map(|s| slot_display_name(&s.name))
-        .collect();
-    if !limbs.is_empty() {
-        parts.push(format!("limbs: {}", limbs.join(", ")));
-    }
-
-    let mut summary = format!("Body ({}): {}", plan.name, parts.join("; "));
-    if let Some(cap) = carry_capacity {
-        summary.push_str(&format!("; carry up to {} weight", format_weight_amount(cap)));
-    }
-    summary.push('.');
-    summary
 }
 
-/// Player-facing examine output for a creature definition (e.g. `examine human`).
-pub fn format_body_plan_examine_player(plan: &BodyPlan, carry_capacity: Option<f64>) -> String {
-    let mut lines = vec![plan.name.clone()];
-    lines.push(format_slot_group_player("Grasp", plan.grasp_slots()));
-    lines.push(format_slot_group_player(
-        "Wear",
-        plan.wear_slots().into_iter().collect(),
-    ));
-    let limbs = plan.slots_of_type(SlotType::Limb);
-    if !limbs.is_empty() {
-        lines.push(format_slot_group_player("Limbs", limbs));
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
     }
-    if let Some(cap) = carry_capacity {
-        lines.push(format!(
-            "Carry capacity: {} weight.",
-            format_weight_amount(cap)
-        ));
-    }
-    lines.join("\n")
 }
 
-fn format_slot_group_player(label: &str, slots: Vec<&BodySlotDef>) -> String {
-    if slots.is_empty() {
-        return format!("{label}: (none)");
-    }
-    let entries: Vec<String> = slots
-        .iter()
-        .map(|s| {
-            if s.capacity > 1 {
-                format!(
-                    "{} (capacity {})",
-                    slot_display_name(&s.name),
-                    s.capacity
-                )
-            } else {
-                slot_display_name(&s.name)
-            }
-        })
-        .collect();
-    format!("{label}: {}", entries.join(", "))
+/// Player-facing examine output for a creature definition by name (`examine human`).
+pub fn format_body_plan_examine_player(plan: &BodyPlan, _carry_capacity: Option<f64>) -> String {
+    format_body_detail_player(plan, false)
 }
 
 /// Builder `@examine` section listing slot definitions and occupancy.
@@ -172,25 +128,22 @@ mod tests {
     }
 
     #[test]
-    fn body_plan_summary_lists_grasp_and_wear_slots() {
+    fn body_detail_lists_available_slots() {
         let plan = human_plan();
-        let summary = format_body_plan_summary(&plan, Some(100.0));
-        assert!(summary.contains("Body (human)"));
-        assert!(summary.contains("grasp"));
-        assert!(summary.contains("left hand"));
-        assert!(summary.contains("right hand"));
-        assert!(summary.contains("wear: head, torso"));
-        assert!(summary.contains("carry up to 100 weight"));
+        let output = format_body_detail_player(&plan, true);
+        assert!(output.starts_with("You are human."));
+        assert!(output.contains("Available slots:"));
+        assert!(output.contains("right hand"));
+        assert!(output.contains("left hand"));
+        assert!(output.contains("back"));
     }
 
     #[test]
-    fn body_plan_examine_player_lists_slot_groups() {
+    fn body_plan_examine_creature_uses_anatomy_heading() {
         let plan = human_plan();
         let output = format_body_plan_examine_player(&plan, None);
-        assert!(output.starts_with("human"));
-        assert!(output.contains("Grasp: left hand, right hand"));
-        assert!(output.contains("Wear: head, torso"));
-        assert!(output.contains("Limbs: left arm, right arm"));
+        assert!(output.starts_with("Human anatomy."));
+        assert!(output.contains("Available slots:"));
     }
 
     #[test]

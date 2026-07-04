@@ -2,13 +2,12 @@
 
 use std::collections::HashMap;
 
-use crate::mudl::BodyPlan;
 use crate::object::{
     format_weight_amount, is_state_property, is_unlimited_weight, player_carried_weight, Object,
     ObjectId,
 };
 
-use super::body_plan::{format_anatomy_section, format_body_plan_summary};
+use super::body_plan::format_anatomy_section;
 use super::{format_property_value, location_label, owner_label, short_id, DisplayContext};
 
 /// Config properties copied from a prototype at object creation.
@@ -350,14 +349,6 @@ pub fn format_prototype_examine_builder(
 
     lines.extend(format_verbs_section(prototype));
     lines.join("\n")
-}
-
-/// Player-facing body plan line for `examine self` (appended after carried summary).
-pub fn format_player_body_plan_line(player: &Object, plan: &BodyPlan) -> String {
-    let capacity = player
-        .get_int_property("max_weight")
-        .map(|v| v as f64);
-    format_body_plan_summary(plan, capacity)
 }
 
 /// Categorized builder examine for items, players, and other entities.

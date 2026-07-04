@@ -65,7 +65,7 @@ Type `help` at the prompt to see the list of commands at any time.
 | `create <type> <name...>` | Create a new object at your current location  | `create sword Rusty Sword`           |
 | `list`                   | Builder: names in session working memory         | `list`                               |
 | `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
-| `examine [target]` (`x`) | In-game detail: weight, body plan, parent view   | `examine self`, `examine human`, `examine coins.parent` |
+| `examine [target]` (`x`) | In-game detail; `self` shows equipment + weight  | `examine self`, `examine self body`, `examine coins.parent` |
 | `@examine [target] [parent]` | Wizard: properties, anatomy, prototype chain | `@examine self`, `@examine coins parent` |
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
 | `@create <type> <name...> [key=value...]` | Wizard create with role options | `@create container "Leather Bag" capacity=8 max_weight=40` |

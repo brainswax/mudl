@@ -6,7 +6,8 @@ use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
 
 use super::body_plan::{
-    creature_definition, format_body_plan_examine_builder, format_body_plan_examine_player,
+    creature_definition, format_body_detail_player, format_body_plan_examine_builder,
+    format_body_plan_examine_player,
 };
 use super::examine::{
     format_prototype_examine_builder, format_prototype_examine_player, PROTOTYPE_PROPERTY_KEYS,
@@ -22,6 +23,8 @@ pub enum ExamineTarget {
     Object(String),
     /// Prototype/parent of an object (`coins.parent`, `@examine coins parent`, `#parent`).
     PrototypeOf(String),
+    /// Body anatomy of a player or creature (`self.body`, `examine self body`).
+    BodyOf(String),
 }
 
 /// Parsed examine request from command arguments (everything after the verb).
@@ -43,7 +46,13 @@ pub enum ExamineResolution {
         instance_id: ObjectId,
         prototype_id: ObjectId,
     },
+    /// Creature definition by name (`examine human`).
     BodyPlan(String),
+    /// Body anatomy tied to a resolved player/self (`examine self body`).
+    BodyOf {
+        object_id: ObjectId,
+        plan_name: String,
+    },
 }
 
 /// Failure modes specific to examine resolution.
@@ -70,12 +79,20 @@ pub fn parse_examine_request(args: &[&str]) -> ExamineRequest {
                 return ExamineRequest::Target(ExamineTarget::PrototypeOf(base.to_string()));
             }
         }
+        if let Some(base) = token.strip_suffix(".body") {
+            if !base.is_empty() {
+                return ExamineRequest::Target(ExamineTarget::BodyOf(base.to_string()));
+            }
+        }
         return ExamineRequest::Target(ExamineTarget::Object(token.to_string()));
     }
 
     let aspect = args[1].to_ascii_lowercase();
     if aspect == "parent" || aspect == "#parent" {
         return ExamineRequest::Target(ExamineTarget::PrototypeOf(args[0].to_string()));
+    }
+    if aspect == "body" || aspect == ".body" {
+        return ExamineRequest::Target(ExamineTarget::BodyOf(args[0].to_string()));
     }
 
     ExamineRequest::Target(ExamineTarget::Object(args.join(" ")))
@@ -143,6 +160,32 @@ pub fn resolve_examine_request(
                 TargetResolution::NotFound => Err(ExamineError::NotFound),
             }
         }
+        ExamineRequest::Target(ExamineTarget::BodyOf(name)) => {
+            let lookup_name = if name.eq_ignore_ascii_case("self") || name.eq_ignore_ascii_case("me") {
+                "self"
+            } else {
+                name.as_str()
+            };
+            let object_id = match resolve_object(
+                lookup_name,
+                observer,
+                current_location,
+                objects,
+                ResolveScope::General,
+            ) {
+                TargetResolution::Found(id) => id,
+                TargetResolution::Ambiguous(msg) => return Err(ExamineError::Ambiguous(msg)),
+                TargetResolution::NotFound => return Err(ExamineError::NotFound),
+            };
+            let obj = objects.get(&object_id).ok_or(ExamineError::NotFound)?;
+            let plan_name = obj
+                .creature_name()
+                .unwrap_or_else(|| name.to_lowercase());
+            Ok(ExamineResolution::BodyOf {
+                object_id,
+                plan_name,
+            })
+        }
         ExamineRequest::Target(ExamineTarget::PrototypeOf(name)) => {
             let lookup_name = if name.eq_ignore_ascii_case("self") || name.eq_ignore_ascii_case("me")
             {
@@ -206,14 +249,17 @@ pub fn format_examine_output(
         }
         ExamineResolution::BodyPlan(name) => {
             let plan = ctx.anatomy.body_plan(name)?;
-            let carry = ctx
-                .objects
-                .get(&ctx.observer)
-                .and_then(|p| p.get_int_property("max_weight"))
-                .map(|v| v as f64);
             Some(match ctx.mode {
                 DisplayMode::Builder => format_body_plan_examine_builder(plan),
-                _ => format_body_plan_examine_player(plan, carry),
+                _ => format_body_plan_examine_player(plan, None),
+            })
+        }
+        ExamineResolution::BodyOf { object_id, plan_name } => {
+            let plan = ctx.anatomy.body_plan(plan_name)?;
+            let addressing_self = *object_id == ctx.observer;
+            Some(match ctx.mode {
+                DisplayMode::Builder => format_body_plan_examine_builder(plan),
+                _ => format_body_detail_player(plan, addressing_self),
             })
         }
     }
@@ -223,11 +269,8 @@ pub fn format_examine_output(
 pub fn format_no_parent_message(instance: &Object) -> String {
     if instance.object_type() == "player" {
         format!(
-            "{} has no prototype object. Try: examine {}",
-            instance.name,
-            instance
-                .creature_name()
-                .unwrap_or_else(|| "human".to_string())
+            "{} has no prototype object. Try: examine self body",
+            instance.name
         )
     } else {
         format!("The {} has no parent prototype.", instance.name.to_lowercase())
@@ -253,6 +296,62 @@ mod tests {
             .unwrap()
             .anatomy
             .clone()
+    }
+
+    #[test]
+    fn parse_examine_body_forms() {
+        assert_eq!(
+            parse_examine_request(&["self.body"]),
+            ExamineRequest::Target(ExamineTarget::BodyOf("self".into()))
+        );
+        assert_eq!(
+            parse_examine_request(&["self", "body"]),
+            ExamineRequest::Target(ExamineTarget::BodyOf("self".into()))
+        );
+    }
+
+    #[test]
+    fn resolve_examine_self_body() {
+        let anatomy = test_anatomy();
+        let observer = ObjectId::new("player:admin-001");
+        let mut player = Object {
+            id: observer.clone(),
+            name: "Admin".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: observer.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        player.add_property(Property {
+            name: "creature".to_string(),
+            value: Value::String("human".to_string()),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+
+        let objects = HashMap::from([(observer.clone(), player)]);
+        let request = parse_examine_request(&["self", "body"]);
+        let resolution = resolve_examine_request(
+            &request,
+            &anatomy,
+            &observer,
+            None,
+            &objects,
+        )
+        .unwrap();
+        assert_eq!(
+            resolution,
+            ExamineResolution::BodyOf {
+                object_id: observer,
+                plan_name: "human".into(),
+            }
+        );
     }
 
     #[test]

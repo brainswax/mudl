@@ -142,11 +142,14 @@ Inherited keys match those copied at creation (`weight`, `volume`, role flags, `
 
 Creature definitions live in MUDL (`@creature human` in `creatures.mudl`), loaded into `AnatomyRegistry`. Players store the plan name in the `creature` property (set from `@player-template` at spawn).
 
+Player `examine self` stays concise (name, equipped gear with slot, carry weight). Full slot lists are opt-in:
+
 | Command | Shows |
 |---------|--------|
-| `examine human` | Player-facing slot groups (grasp, wear, limbs) and carry capacity |
-| `examine self` | Carried summary + body plan line (`Body (human): 2 grasp slots …`) |
-| `@examine human` | `type: body_plan` with per-slot `type`, `capacity`, `hands` |
+| `examine self` | `Admin (human)` + `Equipped:` + `Carrying: N/M weight.` |
+| `examine self body` / `examine self.body` | `You are human. Available slots: …` |
+| `examine human` | `Human anatomy. Available slots: …` (when no object named human) |
+| `@examine human` / `@examine self body` | `type: body_plan` with per-slot `type`, `capacity`, `hands` |
 | `@examine <player>` | Adds `anatomy:` section with slot occupancy |
 
 ## Permission Model

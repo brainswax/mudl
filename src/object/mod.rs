@@ -11,8 +11,6 @@ use std::collections::HashMap;
 use bitflags::bitflags;
 
 use crate::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
-use crate::inventory::describe_carried;
-
 pub use editor::{parse_value_literal, resolve_object_ref, set_field, unset_field, EditError};
 pub use factory::ObjectFactory;
 pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS};
@@ -449,6 +447,23 @@ fn describe_room_player(obj: &Object, ctx: &DisplayContext) -> String {
 
 fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
     let brief = ctx.flags.contains(DisplayFlags::BRIEF);
+
+    if obj.object_type() == "player" && obj.id == ctx.observer {
+        if brief {
+            let mut lines = vec![obj.name.clone()];
+            if let Some(desc) = obj.get_description() {
+                lines.push(desc);
+            }
+            lines.push(crate::display::format_look_self_summary(
+                obj,
+                &ctx.objects,
+                &ctx.anatomy,
+            ));
+            return lines.join("\n");
+        }
+        return crate::display::format_examine_self(obj, &ctx.objects, &ctx.anatomy);
+    }
+
     let mut lines = vec![crate::display::format_stackable_label(obj)];
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
@@ -462,21 +477,6 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
         let inside = crate::display::format_inside_container(obj, &ctx.objects);
         if !inside.is_empty() {
             lines.push(inside);
-        }
-    }
-    if obj.object_type() == "player" && obj.id == ctx.observer {
-        let carried = if brief {
-            crate::display::format_look_self_summary(obj, &ctx.objects, &ctx.anatomy)
-        } else {
-            describe_carried(obj, &ctx.objects, &ctx.anatomy)
-        };
-        lines.push(carried);
-        if !brief {
-            if let Some(plan_name) = obj.body_plan_name() {
-                if let Some(plan) = ctx.anatomy.body_plan(&plan_name) {
-                    lines.push(crate::display::format_player_body_plan_line(obj, plan));
-                }
-            }
         }
     }
     lines.join("\n")

@@ -290,7 +290,7 @@ async fn main() -> Result<()> {
                             "  look [target]  (l)          - immersive view (current room if no target)"
                         );
                         println!(
-                            "  examine [target]  (x)       - in-game close look (try .parent, #parent)"
+                            "  examine [target]  (x)       - close look (self, .body, .parent)"
                         );
                         println!(
                             "  @examine [target] [parent]  - wizard: properties, anatomy, prototype"

@@ -29,11 +29,23 @@ Uses `DisplayFlags::BRIEF` internally.
 
 **Purpose:** Closer in-game inspection with physical stats.
 
-Includes everything `look` shows, plus:
+Includes everything `look` shows, plus weight and capacity for items and containers.
 
-- Weight and capacity (`You can carry up to 100 weight.`, `The purse can hold up to 10 weight.`; `-1` = unlimited)
-- On `examine self`: per-hand grasp detail, worn placement, total carried weight, and body plan summary (grasp/wear/limb slots, carry capacity)
-- On `examine human` (or any `@creature` name): body plan slot listing when no object with that name exists
+**`examine self`** — concise equipment summary (MOO-style, no property dump):
+
+```text
+Admin (human)
+Equipped: Rusty Sword (right hand), Wooden Sword (left hand), backpack (back)
+Carrying: 12/100 weight.
+```
+
+**`examine self body`** or **`examine self.body`** — detailed anatomy only:
+
+```text
+You are human. Available slots: left hand, right hand, head, back, left arm, right arm, ...
+```
+
+**`examine human`** (creature name, no matching object) — same slot list with `Human anatomy.` heading.
 
 **Parent / prototype inspection** (inherited defaults from the prototype object):
 

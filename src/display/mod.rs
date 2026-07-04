@@ -11,18 +11,19 @@ pub mod examine;
 pub mod examine_target;
 pub mod narrative;
 pub mod resolve;
+pub mod self_examine;
 pub mod weight;
 pub use carried::format_look_self_summary;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_inside_container,
     format_stackable_label,
 };
-pub use body_plan::{creature_definition, format_body_plan_summary};
+pub use body_plan::{creature_definition, format_body_detail_player};
 pub use examine::{
     builder_object_type, format_builder_examine_entity, format_builder_examine_room,
-    format_player_body_plan_line, format_prototype_examine_builder,
-    format_prototype_examine_player,
+    format_prototype_examine_builder, format_prototype_examine_player,
 };
+pub use self_examine::format_examine_self;
 pub use examine_target::{
     format_examine_output, format_no_parent_message, parse_examine_request, resolve_examine_request,
     ExamineError, ExamineRequest, ExamineResolution, ExamineTarget,
@@ -367,12 +368,14 @@ mod tests {
             .clone();
         player.init_creature_role(anatomy.player_template("default").unwrap());
 
-        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player).with_anatomy(anatomy);
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_anatomy(anatomy)
+            .with_flags(DisplayFlags::BRIEF);
         let output = player.describe(&ctx);
 
         assert!(output.contains("Admin"));
         assert!(output.contains("weary adventurer"));
-        assert!(output.contains("completely naked and empty-handed"));
+        assert!(output.contains("aren't carrying anything"));
         assert!(!output.contains("player:admin-001"));
     }
 
@@ -703,7 +706,7 @@ mod tests {
     }
 
     #[test]
-    fn examine_self_shows_body_plan_summary() {
+    fn examine_self_shows_concise_equipment_summary() {
         let anatomy = load_module("modules/default")
             .unwrap()
             .active_world()
@@ -712,7 +715,7 @@ mod tests {
             .clone();
         let owner = ObjectId::new("player:admin-001");
         let mut player = Object {
-            id: generate_object_id("player", "admin", 1),
+            id: owner.clone(),
             name: "Admin".to_string(),
             aliases: Vec::new(),
             location: Some(ObjectId::new("room:void-001")),
@@ -726,14 +729,17 @@ mod tests {
             deleted_at: None,
         };
         player.init_creature_role(anatomy.player_template("default").unwrap());
+        player.set_property_int("max_weight", 100);
 
         let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
             .with_anatomy(anatomy);
         let output = player.describe(&ctx);
 
-        assert!(output.contains("Body (human)"));
-        assert!(output.contains("grasp"));
-        assert!(output.contains("left hand"));
+        assert!(output.starts_with("Admin (human)"));
+        assert!(output.contains("Equipped:"));
+        assert!(output.contains("Carrying: 0/100 weight."));
+        assert!(!output.contains("completely naked"));
+        assert!(!output.contains("Available slots"));
     }
 
     #[test]
