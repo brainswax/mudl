@@ -65,7 +65,7 @@ Type `help` at the prompt to see the list of commands at any time.
 | `create <type> <name...>` | Create a new object at your current location  | `create sword Rusty Sword`           |
 | `list`                   | Builder: names in session working memory         | `list`                               |
 | `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
-| `examine [target]` (`x`) | In-game detail; `self` shows equipment + weight  | `examine self`, `examine self body`, `examine coins.parent` |
+| `examine [target]` (`x`) | In-game detail; `self` shows gear, slot use, weight | `examine self`, `examine self body`, `examine coins.parent` |
 | `@examine [target] [parent]` | Wizard: properties, anatomy, prototype chain | `@examine self`, `@examine coins parent` |
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
 | `@create <type> <name...> [key=value...]` | Wizard create with role options | `@create container "Leather Bag" capacity=8 max_weight=40` |
@@ -148,9 +148,11 @@ The Void
 You are in a featureless void.
 You see: Rusty Sword
 > take rusty sword
-You pick up the Rusty Sword.
+You pick up a Rusty Sword.
 > look self
 You are holding a Rusty Sword.
+> examine self
+You're a human carrying a Rusty Sword. You have a carry capacity of 1/10 and are carrying 1/100 weight.
 > inventory
 You are completely naked.
 You are carrying:

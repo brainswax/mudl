@@ -6,10 +6,19 @@ Command reference for the MUDL REPL (MVP).
 
 | Layer | Commands | Voice | IRC notes |
 |-------|----------|-------|-----------|
-| **In-character** | `look`, `examine` | Short natural English sentences | No leading object name; one line when possible; use `examine self body` etc. for detail |
+| **In-character** | `look`, `examine`, `take`, `put`, `drop`, `wear`, `wield`, … | Short natural English sentences | No leading object name; no player name on `look self` / `examine self`; one line when possible |
 | **Out-of-character** | `@look`, `@examine`, `@dump` | Structured builder fields / JSON | Technical data for builders; not sent as in-character emote text |
 
 Player verbs have no `@` prefix. Wizard/builder meta-commands use `@` and require builder permission.
+
+### In-character style guidelines
+
+- **Voice:** Second person (`You …`) or immersive third (`The backpack contains …`). Contractions are fine (`You're`, `aren't`).
+- **No leading names:** Item look/examine never starts with the object name (`The purse contains 2 coins.` not `purse: …`). `look self` / `examine self` never lead with the player name.
+- **Articles:** Use `a` / `an` when introducing items (`You pick up a Rusty Sword.`). Stack counts stay bare (`20 coins`).
+- **One line when possible:** Prefer a single IRC-friendly sentence; use sub-targets for detail (`examine self body`, `examine coins.parent`).
+- **Stats on examine only:** Weight, slot occupancy, and capacity appear on `examine`, not `look`.
+- **Self examine:** Creature type + gear in prose, then slot use (`carry capacity of 2/10`) and weight (`are carrying 13/100 weight`).
 
 ## Inspection
 
@@ -51,13 +60,13 @@ Includes everything `look` shows, plus weight and capacity for items and contain
 The backpack contains 20 coins and has a capacity of 1/20. It is carrying 13/100 weight.
 ```
 
-**`examine self`** — concise equipment summary (MOO-style, no property dump):
+**`examine self`** — creature identity, gear, slot use, and weight (no property dump):
 
 ```text
-Admin (human)
-Equipped: Rusty Sword (right hand), Wooden Sword (left hand), backpack (back)
-Carrying: 12/100 weight.
+You're a human carrying a Rusty Sword and wearing a backpack. You have a carry capacity of 2/10 and are carrying 13/100 weight.
 ```
+
+`carry capacity` is occupied body slots / total anatomy slots (not weight limit).
 
 **`examine self body`** or **`examine self.body`** — detailed anatomy only:
 

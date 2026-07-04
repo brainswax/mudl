@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::display::{resolve_object, ResolveScope as LookupScope, TargetResolution};
+use crate::display::{
+    grammar::indefinite_article, resolve_object, ResolveScope as LookupScope, TargetResolution,
+};
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{LocationRef, Object, ObjectId};
 use crate::world::move_manager::{
@@ -367,7 +369,11 @@ pub fn take_item(
         )
     })?;
 
-    Ok(format!("You pick up the {}.", item.name))
+    Ok(format!(
+        "You pick up {} {}.",
+        indefinite_article(&item.name),
+        item.name
+    ))
 }
 
 pub fn drop_item(

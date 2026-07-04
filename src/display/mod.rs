@@ -7,6 +7,7 @@ use crate::object::{Object, ObjectId};
 pub mod body_plan;
 pub mod carried;
 pub mod container;
+pub mod equipment;
 pub mod examine;
 pub mod examine_target;
 pub mod grammar;
@@ -808,9 +809,11 @@ mod tests {
             .with_anatomy(anatomy);
         let output = player.describe(&ctx);
 
-        assert!(output.starts_with("Admin (human)"));
-        assert!(output.contains("Equipped:"));
-        assert!(output.contains("Carrying: 0/100 weight."));
+        assert!(output.starts_with("You're a human."));
+        assert!(output.contains("carry capacity of 0/10"));
+        assert!(output.contains("are carrying 0/100 weight."));
+        assert!(!output.contains("Admin"));
+        assert!(!output.contains("Equipped:"));
         assert!(!output.contains("completely naked"));
         assert!(!output.contains("Available slots"));
     }

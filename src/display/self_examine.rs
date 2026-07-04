@@ -1,18 +1,13 @@
-//! Concise `examine self` output — MOO-style equipment summary without property dumps.
+//! Natural-language `examine self` — creature identity, gear, slot use, and weight.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crate::display::format_stackable_label;
+use crate::display::equipment::{collect_gear_lists, occupied_body_slots};
+use crate::display::grammar::phrase_with_leading_article;
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan};
-use crate::object::{format_weight_amount, is_unlimited_weight, player_carried_weight, Object, ObjectId};
-
-fn grasp_slot_sort_key(name: &str) -> u8 {
-    match name {
-        "right_hand" => 0,
-        "left_hand" => 1,
-        _ => 2,
-    }
-}
+use crate::object::{
+    format_weight_amount, is_unlimited_weight, player_carried_weight, Object, ObjectId,
+};
 
 /// Placement label for equipped items (torso → "back", per common MUD convention).
 pub fn equipment_placement_label(slot: &str) -> String {
@@ -22,128 +17,67 @@ pub fn equipment_placement_label(slot: &str) -> String {
     }
 }
 
-struct EquippedEntry {
-    item_name: String,
-    placement: String,
-    sort_key: (u8, u8, String),
+fn format_identity_sentence(creature: &str, holding: &[String], wearing: &[String]) -> String {
+    let mut sentence = format!("You're a {creature}");
+    match (holding.is_empty(), wearing.is_empty()) {
+        (true, true) => sentence.push('.'),
+        (false, true) => {
+            sentence.push_str(&format!(
+                " carrying {}.",
+                phrase_with_leading_article(holding)
+            ));
+        }
+        (true, false) => {
+            sentence.push_str(&format!(
+                " wearing {}.",
+                phrase_with_leading_article(wearing)
+            ));
+        }
+        (false, false) => {
+            sentence.push_str(&format!(
+                " carrying {} and wearing {}.",
+                phrase_with_leading_article(holding),
+                phrase_with_leading_article(wearing)
+            ));
+        }
+    }
+    sentence
 }
 
-fn equipped_entries(
-    player: &Object,
-    objects: &HashMap<ObjectId, Object>,
-    plan: &BodyPlan,
-) -> Vec<EquippedEntry> {
-    let mut entries = Vec::new();
-    let left = player.body_slot_item("left_hand");
-    let right = player.body_slot_item("right_hand");
-
-    if let (Some(left_id), Some(right_id)) = (&left, &right) {
-        if left_id == right_id {
-            if let Some(obj) = objects.get(left_id) {
-                if obj.is_active() {
-                    entries.push(EquippedEntry {
-                        item_name: format_stackable_label(obj),
-                        placement: "both hands".to_string(),
-                        sort_key: (0, 0, "both".to_string()),
-                    });
-                }
-            }
-        }
+fn format_weight_clause(player: &Object, objects: &HashMap<ObjectId, Object>) -> String {
+    let carried = player_carried_weight(player, objects);
+    match player.get_int_property("max_weight") {
+        Some(max) if is_unlimited_weight(max) => format!(
+            "are carrying {}/unlimited weight.",
+            format_weight_amount(carried)
+        ),
+        Some(max) => format!(
+            "are carrying {}/{} weight.",
+            format_weight_amount(carried),
+            format_weight_amount(max as f64)
+        ),
+        None => format!("are carrying {} weight.", format_weight_amount(carried)),
     }
-
-    let mut grasp_slots = plan.grasp_slots();
-    grasp_slots.sort_by_key(|s| grasp_slot_sort_key(&s.name));
-
-    let mut seen_grasp = HashSet::new();
-    for slot in grasp_slots {
-        let Some(item_id) = player.body_slot_item(&slot.name) else {
-            continue;
-        };
-        if entries.iter().any(|e| e.placement == "both hands") {
-            continue;
-        }
-        if !seen_grasp.insert(item_id.clone()) {
-            continue;
-        }
-        let Some(obj) = objects.get(&item_id) else {
-            continue;
-        };
-        if !obj.is_active() {
-            continue;
-        }
-        entries.push(EquippedEntry {
-            item_name: format_stackable_label(obj),
-            placement: equipment_placement_label(&slot.name),
-            sort_key: (0, grasp_slot_sort_key(&slot.name), slot.name.clone()),
-        });
-    }
-
-    let mut seen_wear = HashSet::new();
-    for slot in plan.wear_slots() {
-        let Some(item_id) = player.body_slot_item(&slot.name) else {
-            continue;
-        };
-        if !seen_wear.insert(item_id.clone()) {
-            continue;
-        };
-        let Some(obj) = objects.get(&item_id) else {
-            continue;
-        };
-        if !obj.is_active() {
-            continue;
-        };
-        entries.push(EquippedEntry {
-            item_name: format_stackable_label(obj),
-            placement: equipment_placement_label(&slot.name),
-            sort_key: (1, 0, slot.name.clone()),
-        });
-    }
-
-    entries.sort_by(|a, b| a.sort_key.cmp(&b.sort_key));
-    entries
 }
 
-fn format_equipped_line(
+fn format_capacity_and_weight(
     player: &Object,
     objects: &HashMap<ObjectId, Object>,
     plan: &BodyPlan,
 ) -> String {
-    let entries = equipped_entries(player, objects, plan);
-    if entries.is_empty() {
-        return "Equipped: nothing.".to_string();
-    }
-    let parts: Vec<String> = entries
-        .iter()
-        .map(|e| format!("{} ({})", e.item_name, e.placement))
-        .collect();
-    format!("Equipped: {}.", parts.join(", "))
+    let occupied = occupied_body_slots(player, plan);
+    let total = plan.slots.len() as u32;
+    format!(
+        "You have a carry capacity of {occupied}/{total} and {}",
+        format_weight_clause(player, objects)
+    )
 }
 
-fn format_carrying_line(player: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let carried = player_carried_weight(player, objects);
-    match player.get_int_property("max_weight") {
-        Some(max) if is_unlimited_weight(max) => {
-            format!(
-                "Carrying: {}/unlimited weight.",
-                format_weight_amount(carried)
-            )
-        }
-        Some(max) => format!(
-            "Carrying: {}/{} weight.",
-            format_weight_amount(carried),
-            format_weight_amount(max as f64)
-        ),
-        None => format!("Carrying: {} weight.", format_weight_amount(carried)),
-    }
-}
-
-/// Concise player self-examination (`examine self`).
+/// Player self-examination (`examine self`).
 ///
 /// Example:
 /// ```text
-/// Admin (human)
-/// Equipped: Rusty Sword (right hand), Wooden Sword (left hand), backpack (back)
-/// Carrying: 12/100 weight.
+/// You're a human carrying a Rusty Sword and wearing a backpack. You have a carry capacity of 2/10 and are carrying 13/100 weight.
 /// ```
 pub fn format_examine_self(
     player: &Object,
@@ -154,16 +88,15 @@ pub fn format_examine_self(
         .body_plan_name()
         .unwrap_or_else(|| "human".to_string());
 
-    let mut lines = vec![format!("{} ({})", player.name, creature)];
+    let Some(plan) = anatomy.body_plan(&creature) else {
+        let identity = format_identity_sentence(&creature, &[], &[]);
+        return format!("{identity} {}", format_weight_clause(player, objects));
+    };
 
-    if let Some(plan) = anatomy.body_plan(&creature) {
-        lines.push(format_equipped_line(player, objects, plan));
-    } else {
-        lines.push("Equipped: nothing.".to_string());
-    }
-
-    lines.push(format_carrying_line(player, objects));
-    lines.join("\n")
+    let (holding, wearing) = collect_gear_lists(player, objects, plan);
+    let identity = format_identity_sentence(&creature, &holding, &wearing);
+    let stats = format_capacity_and_weight(player, objects, plan);
+    format!("{identity} {stats}")
 }
 
 #[cfg(test)]
@@ -199,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn examine_self_shows_concise_equipment_summary() {
+    fn examine_self_natural_gear_and_stats() {
         let anatomy = anatomy();
         let mut player = bare("player:hero-001", "Admin");
         player.init_creature_role(anatomy.player_template("default").unwrap());
@@ -233,10 +166,10 @@ mod tests {
         let output = format_examine_self(&player, &objects, &anatomy);
         assert_eq!(
             output,
-            "Admin (human)\n\
-             Equipped: Rusty Sword (right hand), Wooden Sword (left hand), backpack (back).\n\
-             Carrying: 3/100 weight."
+            "You're a human carrying a Rusty Sword and Wooden Sword and wearing a backpack. \
+             You have a carry capacity of 3/10 and are carrying 3/100 weight."
         );
+        assert!(!output.contains("Admin"));
     }
 
     #[test]
@@ -247,8 +180,9 @@ mod tests {
         player.set_property_int("max_weight", 100);
 
         let output = format_examine_self(&player, &HashMap::new(), &anatomy);
-        assert!(output.contains("Admin (human)"));
-        assert!(output.contains("Equipped: nothing."));
-        assert!(output.contains("Carrying: 0/100 weight."));
+        assert_eq!(
+            output,
+            "You're a human. You have a carry capacity of 0/10 and are carrying 0/100 weight."
+        );
     }
 }

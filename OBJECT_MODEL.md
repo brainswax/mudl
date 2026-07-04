@@ -238,7 +238,7 @@ pub enum LocationRef {
 
 **Dirty tracking**: `DirtyTracker` records mutated object IDs; `persist_dirty()` saves only those rows.
 
-**Look / examine**: In-character commands use natural sentences without a leading object name. Container look: `The purse contains 20 coins.` Container examine adds capacity/weight in one short paragraph. Stackables show quantity in content lists (`20 coins`). `@look` / `@examine` show structured builder fields.
+**Look / examine**: In-character commands use natural sentences without a leading object name. Container look: `The purse contains 20 coins.` Container examine adds capacity/weight in one short paragraph. `examine self`: creature + gear prose, slot occupancy (`carry capacity of 2/10`), and weight. Stackables show quantity in content lists (`20 coins`). `@look` / `@examine` show structured builder fields. See [COMMANDS.md](COMMANDS.md) style guidelines.
 
 **Target resolution** (`src/display/resolve.rs`): verbs resolve names with possession-first priority (body slots → BFS through carried containers → room ground → global). Duplicate matches prompt disambiguation with short IDs and container hints (`coins-042 (in purse)`). Inventory verbs map to scoped lookups (`PossessionOnly`, `RoomOnly`, `PossessionOrRoom`).
 

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::display::grammar::indefinite_article;
 use crate::object::{
     format_weight_amount, is_unlimited_weight, player_carried_weight, Object, ObjectId,
 };
@@ -40,7 +41,12 @@ pub fn format_examine_item_player(obj: &Object) -> String {
         lines.push(weight);
     }
     if lines.is_empty() {
-        lines.push(crate::display::format_stackable_label(obj));
+        let label = crate::display::format_stackable_label(obj);
+        if obj.is_stackable() && obj.stack_count() > 1 {
+            lines.push(format!("There are {label}."));
+        } else {
+            lines.push(format!("It is {} {label}.", indefinite_article(&label)));
+        }
     }
     lines.join("\n")
 }
@@ -157,6 +163,12 @@ mod tests {
 
         let line = format_weight_examine_player(&player, &HashMap::new()).unwrap();
         assert_eq!(line, "You can carry up to 100 weight.");
+    }
+
+    #[test]
+    fn examine_item_without_description_uses_natural_sentence() {
+        let sword = bare("item:sword-001", "Rusty Sword");
+        assert_eq!(format_examine_item_player(&sword), "It is a Rusty Sword.");
     }
 
     #[test]

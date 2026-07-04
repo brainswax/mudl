@@ -637,7 +637,7 @@ mod tests {
 
         let msg =
             take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy).unwrap();
-        assert_eq!(msg, "You pick up the Boots.");
+        assert_eq!(msg, "You pick up a Boots.");
 
         let player = objects.get(&owner).unwrap();
         assert!(

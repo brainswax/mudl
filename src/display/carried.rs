@@ -1,41 +1,11 @@
 //! Brief carried/worn summaries for `look self`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crate::display::grammar::indefinite_article;
+use crate::display::equipment::collect_gear_lists;
+use crate::display::grammar::phrase_with_leading_article;
 use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
-
-fn grasp_slot_sort_key(name: &str) -> u8 {
-    match name {
-        "right_hand" => 0,
-        "left_hand" => 1,
-        _ => 2,
-    }
-}
-
-/// Display name for a held or worn item (no weight or slot detail).
-fn look_item_name(obj: &Object) -> String {
-    if obj.is_stackable() && obj.stack_count() > 1 {
-        format!("{} {}", obj.stack_count(), obj.name)
-    } else {
-        obj.name.clone()
-    }
-}
-
-/// Join item names: first gets a/an, rest are bare, all chained with "and".
-///
-/// `["Rusty Sword", "Wooden Sword"]` → `a Rusty Sword and Wooden Sword`
-fn phrase_with_leading_article(items: &[String]) -> String {
-    match items.len() {
-        0 => String::new(),
-        1 => format!("{} {}", indefinite_article(&items[0]), items[0]),
-        _ => {
-            let first = format!("{} {}", indefinite_article(&items[0]), items[0]);
-            format!("{first} and {}", items[1..].join(" and "))
-        }
-    }
-}
 
 /// Natural `look self` sentence: held grasp items and worn gear only.
 ///
@@ -52,41 +22,7 @@ pub fn format_look_self_summary(
         return "You aren't holding or wearing anything.".to_string();
     };
 
-    let mut holding = Vec::new();
-    let mut seen_hold = HashSet::new();
-    let mut grasp_slots = plan.grasp_slots();
-    grasp_slots.sort_by_key(|slot| grasp_slot_sort_key(&slot.name));
-    for slot in grasp_slots {
-        let Some(item_id) = player.body_slot_item(&slot.name) else {
-            continue;
-        };
-        if !seen_hold.insert(item_id.clone()) {
-            continue;
-        }
-        let Some(obj) = objects.get(&item_id) else {
-            continue;
-        };
-        if obj.is_active() {
-            holding.push(look_item_name(obj));
-        }
-    }
-
-    let mut wearing = Vec::new();
-    let mut seen_wear = HashSet::new();
-    for slot in plan.wear_slots() {
-        let Some(item_id) = player.body_slot_item(&slot.name) else {
-            continue;
-        };
-        if !seen_wear.insert(item_id.clone()) {
-            continue;
-        };
-        let Some(obj) = objects.get(&item_id) else {
-            continue;
-        };
-        if obj.is_active() {
-            wearing.push(look_item_name(obj));
-        }
-    }
+    let (holding, wearing) = collect_gear_lists(player, objects, plan);
 
     match (holding.is_empty(), wearing.is_empty()) {
         (true, true) => "You aren't holding or wearing anything.".to_string(),
@@ -109,6 +45,7 @@ pub fn format_look_self_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display::grammar::phrase_with_leading_article;
     use crate::mudl::load_module;
     use crate::object::{ContainerSpec, PermissionFlags, StackableSpec};
 
@@ -144,8 +81,8 @@ mod tests {
         let mut player = bare("player:hero-001", "Hero");
         player.init_creature_role(anatomy.player_template("default").unwrap());
 
-        let mut rusty = bare("item:rusty-001", "Rusty Sword");
-        let mut wooden = bare("item:wooden-001", "Wooden Sword");
+        let rusty = bare("item:rusty-001", "Rusty Sword");
+        let wooden = bare("item:wooden-001", "Wooden Sword");
         let mut backpack = bare("item:backpack-001", "backpack");
         backpack.apply_container_role(&ContainerSpec {
             capacity: 5,
