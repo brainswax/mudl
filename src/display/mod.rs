@@ -14,6 +14,7 @@ pub mod grammar;
 pub mod narrative;
 pub mod object_look;
 pub mod resolve;
+pub mod room_look;
 pub mod self_examine;
 pub mod weight;
 pub use carried::format_look_self_summary;
@@ -22,6 +23,7 @@ pub use container::{
     format_inside_container, format_look_container_player, format_stackable_label,
 };
 pub use object_look::{format_look_item_player, format_look_object_player};
+pub use room_look::format_room_look_player;
 pub use weight::format_examine_item_player;
 pub use body_plan::{creature_definition, format_body_detail_player};
 pub use examine::{
@@ -241,10 +243,10 @@ mod tests {
         let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let output = area.describe(&ctx);
 
-        assert!(output.contains("The Void"));
+        assert!(!output.starts_with("The Void"));
         assert!(output.contains("featureless void"));
         assert!(output.contains("Obvious exits: north"));
-        assert!(output.contains("You see: Boots"));
+        assert!(output.contains("You see a Boots here."));
     }
 
     #[tokio::test]
@@ -274,10 +276,10 @@ mod tests {
         let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let output = room.describe(&ctx);
 
-        assert!(output.contains("South Garden"));
+        assert!(!output.starts_with("South Garden"));
         assert!(output.contains("peaceful garden"));
         assert!(output.contains("Obvious exits: north"));
-        assert!(output.contains("Daisy"));
+        assert!(output.contains("You see a Daisy here."));
         assert!(!output.contains("room:garden-001"));
         assert!(!output.contains("player:admin-001"));
     }

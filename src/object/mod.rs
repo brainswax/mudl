@@ -388,61 +388,8 @@ impl Object {
     }
 }
 
-fn format_exits_player(exits: &HashMap<String, ObjectId>) -> String {
-    if exits.is_empty() {
-        return String::new();
-    }
-    let mut dirs: Vec<&str> = exits.keys().map(String::as_str).collect();
-    dirs.sort_unstable();
-    format!("Obvious exits: {}", dirs.join(", "))
-}
-
-fn format_contents_player(obj: &Object, ctx: &DisplayContext) -> String {
-    let contents: Vec<String> = obj
-        .contents(&ctx.objects)
-        .into_iter()
-        .filter(|item| item.id != ctx.observer)
-        .map(|item| match item.object_type() {
-            "player" => item.name.clone(),
-            "item" | "thing" => {
-                let label = crate::display::format_stackable_label(item);
-                if let Some(desc) = item.get_description() {
-                    format!("{label} — {desc}")
-                } else {
-                    label
-                }
-            }
-            _ => item.name.clone(),
-        })
-        .collect();
-
-    if contents.is_empty() {
-        String::new()
-    } else {
-        format!("You see: {}", contents.join("; "))
-    }
-}
-
 fn describe_room_player(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![obj.name.clone()];
-
-    if ctx.flags.contains(DisplayFlags::DARK) {
-        lines.push("It is pitch black.".to_string());
-    } else if let Some(desc) = obj.get_description() {
-        lines.push(desc);
-    }
-
-    let exits = format_exits_player(&obj.get_exits());
-    if !exits.is_empty() {
-        lines.push(exits);
-    }
-
-    let contents = format_contents_player(obj, ctx);
-    if !contents.is_empty() {
-        lines.push(contents);
-    }
-
-    lines.join("\n")
+    crate::display::format_room_look_player(obj, ctx)
 }
 
 fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
@@ -629,6 +576,6 @@ mod tests {
 
         let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let output = room.describe(&ctx);
-        assert!(output.contains("You see: 20 coins"));
+        assert!(output.contains("You see 20 coins here."));
     }
 }

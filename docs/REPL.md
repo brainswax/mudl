@@ -114,7 +114,7 @@ Players spawn as **naked humans** from the active world's `creatures.mudl` (`@cr
 - **In hands** — `left_hand` / `right_hand` grasp slots; two-handed items (`hand_slot: both`) occupy both
 - **Worn** — items on `wear` slots (e.g. `torso` for a backpack via `wear_slot`)
 - **Inside containers** — nested via each container's `contents` list
-- **On the ground** — items with `location` set to your current area/room appear in `look` as `You see: …`
+- **On the ground** — items with `location` set to your current area/room appear in `look` as `You see an anvil and a boulder here.`
 
 `create <type> <name...>` places the new object at your current location (area, room, or any navigable place). Multi-word names are supported; IDs are lowercase slugs capped at 16 characters (`Rusty Sword` → `sword:rusty-sword-001`). Quote names if needed: `create sword "Rusty Sword"`.
 
@@ -144,9 +144,8 @@ Example output:
 > create sword Rusty Sword
 You forge a Rusty Sword, and it clatters to the ground in The Void.
 > look
-The Void
 You are in a featureless void.
-You see: Rusty Sword
+You see a Rusty Sword here.
 > take rusty sword
 You pick up a Rusty Sword.
 > look self
@@ -169,7 +168,6 @@ After bootstrap, your player starts in The Void:
 
 ```
 > look
-The Void
 You are in a featureless void. This is the starting point for new players.
 
 Obvious exits: north

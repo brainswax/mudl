@@ -594,8 +594,7 @@ mod tests {
         let ctx =
             DisplayContext::new(owner.clone(), DisplayMode::Player).with_objects(objects.clone());
         let output = objects.get(&area_id).unwrap().describe(&ctx);
-        assert!(output.contains("boots"));
-        assert!(output.contains("You see:"));
+        assert!(output.contains("You see a boots here."));
     }
 
     #[tokio::test]

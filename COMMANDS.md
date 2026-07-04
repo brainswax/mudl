@@ -14,7 +14,8 @@ Player verbs have no `@` prefix. Wizard/builder meta-commands use `@` and requir
 ### In-character style guidelines
 
 - **Voice:** Second person (`You …`) or immersive third (`The backpack contains …`). Contractions are fine (`You're`, `aren't`).
-- **No leading names:** Item look/examine never starts with the object name (`The purse contains 2 coins.` not `purse: …`). `look self` / `examine self` never lead with the player name.
+- **No leading names:** Room look omits the room title line. Item look/examine never starts with the object name (`The purse contains 2 coins.` not `purse: …`). `look self` / `examine self` never lead with the player name.
+- **Room contents:** `You see an anvil and a boulder here.` — not `You see: anvil; boulder`.
 - **Articles:** Use `a` / `an` when introducing items (`You pick up a Rusty Sword.`). Stack counts stay bare (`20 coins`).
 - **One line when possible:** Prefer a single IRC-friendly sentence; use sub-targets for detail (`examine self body`, `examine coins.parent`).
 - **Stats on examine only:** Weight, slot occupancy, and capacity appear on `examine`, not `look`.
@@ -28,12 +29,16 @@ Player verbs have no `@` prefix. Wizard/builder meta-commands use `@` and requir
 
 | Target | Shows |
 |--------|--------|
-| *(none)* | Current room: name, description, exits, ground items |
+| *(none)* | Current room: description, exits, visible ground items |
 | `<object>` | Description or a natural sentence; containers list direct contents only |
 | `self` | One-sentence gear summary (held and worn items) |
 
 **Examples:**
 ```
+> look
+You are in a featureless void. This is the starting point for new players.
+You see an anvil and a boulder here.
+
 > look backpack
 The backpack contains 20 coins.
 
