@@ -83,9 +83,11 @@ pub fn compute_container_fit(
     }
 
     if let Some(max_w) = container.container_max_weight() {
-        let room = max_w.saturating_sub(container.contents_weight(objects));
-        if unit_w > 0 {
-            max_units = max_units.min((room / unit_w) as u32);
+        if crate::object::weight_limit_applies(Some(max_w)) {
+            let room = max_w.saturating_sub(container.contents_weight(objects));
+            if unit_w > 0 {
+                max_units = max_units.min((room / unit_w) as u32);
+            }
         }
     } else if unit_w < 0 {
         max_units = 0;
@@ -135,9 +137,11 @@ pub fn fit_failure_reason(
     let unit_v = item.unit_volume().max(1);
 
     if let Some(max_w) = container.container_max_weight() {
-        let room = max_w.saturating_sub(container.contents_weight(objects));
-        if room < unit_w {
-            return MoveError::WeightExceeded;
+        if crate::object::weight_limit_applies(Some(max_w)) {
+            let room = max_w.saturating_sub(container.contents_weight(objects));
+            if room < unit_w {
+                return MoveError::WeightExceeded;
+            }
         }
     }
 
@@ -262,6 +266,23 @@ mod tests {
         let fit = compute_container_fit(&purse, &incoming, &objects, None).unwrap();
         assert_eq!(fit.merge_target, Some(ObjectId::new("item:coins-001")));
         assert_eq!(fit.units, 7); // max_weight 10 - 3 existing = 7 room
+    }
+
+    #[test]
+    fn unlimited_max_weight_fits_entire_stack() {
+        let mut bag = bare("item:bag-001", "bag");
+        bag.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 2,
+            max_weight: Some(crate::object::UNLIMITED_WEIGHT),
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+        });
+        let coins = coins(50);
+        let objects = HashMap::new();
+
+        let fit = compute_container_fit(&bag, &coins, &objects, None).unwrap();
+        assert_eq!(fit.units, 50);
     }
 
     #[test]

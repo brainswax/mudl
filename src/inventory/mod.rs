@@ -867,6 +867,10 @@ mod tests {
         assert!(player.get_property("pockets").is_none());
         assert_eq!(player.body_plan_name(), Some("human".to_string()));
         assert!(player.body_slots().is_empty());
+        assert_eq!(
+            player.get_int_property("max_weight"),
+            Some(crate::object::DEFAULT_PLAYER_MAX_WEIGHT)
+        );
     }
 
     #[tokio::test]

@@ -298,6 +298,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_player_has_default_max_weight() {
+        let factory = memory_factory().await;
+        let anatomy = crate::mudl::load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let owner = ObjectId::new("player:hero-001");
+
+        let player = factory
+            .create_player("hero", owner, &anatomy)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            player.get_int_property("max_weight"),
+            Some(crate::object::DEFAULT_PLAYER_MAX_WEIGHT)
+        );
+    }
+
+    #[tokio::test]
     async fn create_container_with_weight_limit() {
         let factory = memory_factory().await;
         let owner = ObjectId::new("player:hero-001");

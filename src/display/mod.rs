@@ -25,9 +25,7 @@ pub use resolve::{
     format_disambiguation, is_in_player_possession, name_matches, resolve_object, short_id,
     ResolveScope, ResolvedMatch, TargetResolution,
 };
-pub use weight::{
-    format_carried_weight_summary, format_weight_examine_builder, format_weight_examine_player,
-};
+pub use weight::{format_weight_examine_builder, format_weight_examine_player};
 
 /// How an object should be rendered for a given command/audience.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -557,7 +555,7 @@ mod tests {
 
         let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let examine_out = purse.describe(&examine_ctx);
-        assert!(examine_out.contains("The purse weighs 2/10."));
+        assert!(examine_out.contains("The purse can hold up to 10 weight."));
     }
 
     #[test]
@@ -612,7 +610,7 @@ mod tests {
 
         let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let output = purse.describe(&ctx);
-        assert!(output.contains("The purse weighs 2/10."));
+        assert!(output.contains("The purse can hold up to 10 weight."));
     }
 
     #[test]

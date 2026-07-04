@@ -31,7 +31,7 @@ Uses `DisplayFlags::BRIEF` internally.
 
 Includes everything `look` shows, plus:
 
-- Weight and capacity (`The purse weighs 2/10.`, `They weigh 20.` for stacks)
+- Weight and capacity (`You can carry up to 100 weight.`, `The purse can hold up to 10 weight.`; `-1` = unlimited)
 - On `examine self`: per-hand grasp detail, worn placement, total carried weight
 
 Does **not** show: object IDs, raw properties, verb source, or JSON.

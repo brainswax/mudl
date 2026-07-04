@@ -14,7 +14,10 @@ use crate::inventory::describe_carried;
 pub use factory::ObjectFactory;
 pub use location::LocationRef;
 pub use roles::{ContainerSpec, ItemPhysSpec, ObjectRoles, RoleKind, StackableSpec, WearableSpec};
-pub use weight::player_carried_weight;
+pub use weight::{
+    is_unlimited_weight, player_carried_weight, weight_limit_applies, DEFAULT_PLAYER_MAX_WEIGHT,
+    UNLIMITED_WEIGHT,
+};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -496,16 +499,7 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
         let carried = if brief {
             crate::display::format_look_self_summary(obj, &ctx.objects, &ctx.anatomy)
         } else {
-            let mut detail = describe_carried(obj, &ctx.objects, &ctx.anatomy);
-            if let Some(summary) =
-                crate::display::format_carried_weight_summary(obj, &ctx.objects)
-            {
-                if !detail.is_empty() {
-                    detail.push('\n');
-                }
-                detail.push_str(&summary);
-            }
-            detail
+            describe_carried(obj, &ctx.objects, &ctx.anatomy)
         };
         lines.push(carried);
     }

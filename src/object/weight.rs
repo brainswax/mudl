@@ -4,6 +4,22 @@ use std::collections::{HashMap, HashSet};
 
 use crate::object::{Object, ObjectId};
 
+/// Default carrying capacity for new players.
+pub const DEFAULT_PLAYER_MAX_WEIGHT: i64 = 100;
+
+/// `max_weight` value meaning unlimited capacity.
+pub const UNLIMITED_WEIGHT: i64 = -1;
+
+/// Whether a weight limit value denotes unlimited capacity.
+pub fn is_unlimited_weight(limit: i64) -> bool {
+    limit < 0
+}
+
+/// Whether a stored weight limit should be enforced or displayed as a cap.
+pub fn weight_limit_applies(limit: Option<i64>) -> bool {
+    limit.is_some_and(|l| !is_unlimited_weight(l))
+}
+
 impl Object {
     /// Total weight of this object: own weight (including stack scaling) plus nested contents.
     pub fn total_weight(&self, objects: &HashMap<ObjectId, Object>) -> i64 {
@@ -83,6 +99,13 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         }
+    }
+
+    #[test]
+    fn weight_limit_applies_excludes_unlimited() {
+        assert!(!weight_limit_applies(Some(UNLIMITED_WEIGHT)));
+        assert!(weight_limit_applies(Some(10)));
+        assert!(!weight_limit_applies(None));
     }
 
     #[test]

@@ -234,6 +234,10 @@ impl Object {
             behavior: None,
         });
         self.set_property_map("body_slots", HashMap::new());
+        self.set_property_int(
+            "max_weight",
+            crate::object::weight::DEFAULT_PLAYER_MAX_WEIGHT,
+        );
     }
 
     /// Backward-compatible alias for [`init_creature_role`](Self::init_creature_role).
