@@ -151,8 +151,7 @@ You see: Rusty Sword
 You pick up the Rusty Sword.
 > look self
 Admin
-You are completely naked.
-You are holding Rusty Sword in your right hand.
+You are holding a Rusty Sword.
 > inventory
 You are completely naked.
 You are carrying:
@@ -221,7 +220,7 @@ Builder `examine` resolves exit targets and owners to display names — no raw I
 ```
 > look self
 Admin
-You are completely naked and empty-handed.
+You aren't holding or wearing anything.
 > inventory
 You are completely naked.
 Your hands are empty.
@@ -240,7 +239,7 @@ You inscribe "hand_slot" upon sword.
 You pick up the sword.
 > look self
 Admin
-You are holding sword in your right hand.
+You are holding a sword.
 ```
 
 ### 7. Create and inspect an item

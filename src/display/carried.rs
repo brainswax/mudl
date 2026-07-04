@@ -2,13 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::display::format_stackable_label;
 use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
-
-fn item_label(obj: &Object) -> String {
-    format_stackable_label(obj).to_lowercase()
-}
 
 fn grasp_slot_sort_key(name: &str) -> u8 {
     match name {
@@ -18,9 +13,39 @@ fn grasp_slot_sort_key(name: &str) -> u8 {
     }
 }
 
-/// Short `look self` line: held grasp items and worn gear, no slots or container contents.
+/// Display name for a held or worn item (no weight or slot detail).
+fn look_item_name(obj: &Object) -> String {
+    if obj.is_stackable() && obj.stack_count() > 1 {
+        format!("{} {}", obj.stack_count(), obj.name)
+    } else {
+        obj.name.clone()
+    }
+}
+
+fn indefinite_article(word: &str) -> &'static str {
+    match word.chars().next().map(|c| c.to_ascii_lowercase()) {
+        Some('a' | 'e' | 'i' | 'o' | 'u') => "an",
+        _ => "a",
+    }
+}
+
+/// Join item names: first gets a/an, rest are bare, all chained with "and".
 ///
-/// Example: `You are holding: purse, coins. Wearing: backpack.`
+/// `["Rusty Sword", "Wooden Sword"]` → `a Rusty Sword and Wooden Sword`
+fn phrase_with_leading_article(items: &[String]) -> String {
+    match items.len() {
+        0 => String::new(),
+        1 => format!("{} {}", indefinite_article(&items[0]), items[0]),
+        _ => {
+            let first = format!("{} {}", indefinite_article(&items[0]), items[0]);
+            format!("{first} and {}", items[1..].join(" and "))
+        }
+    }
+}
+
+/// Natural `look self` sentence: held grasp items and worn gear only.
+///
+/// Example: `You are holding a Rusty Sword and Wooden Sword and wearing a backpack.`
 pub fn format_look_self_summary(
     player: &Object,
     objects: &HashMap<ObjectId, Object>,
@@ -30,7 +55,7 @@ pub fn format_look_self_summary(
         .body_plan_name()
         .unwrap_or_else(|| "human".to_string());
     let Some(plan) = anatomy.body_plan(&plan_name) else {
-        return "You aren't carrying anything.".to_string();
+        return "You aren't holding or wearing anything.".to_string();
     };
 
     let mut holding = Vec::new();
@@ -43,12 +68,12 @@ pub fn format_look_self_summary(
         };
         if !seen_hold.insert(item_id.clone()) {
             continue;
-        };
+        }
         let Some(obj) = objects.get(&item_id) else {
             continue;
         };
         if obj.is_active() {
-            holding.push(item_label(obj));
+            holding.push(look_item_name(obj));
         }
     }
 
@@ -65,22 +90,25 @@ pub fn format_look_self_summary(
             continue;
         };
         if obj.is_active() {
-            wearing.push(item_label(obj));
+            wearing.push(look_item_name(obj));
         }
     }
 
-    let mut parts = Vec::new();
-    if !holding.is_empty() {
-        parts.push(format!("You are holding: {}.", holding.join(", ")));
-    }
-    if !wearing.is_empty() {
-        parts.push(format!("Wearing: {}.", wearing.join(", ")));
-    }
-
-    if parts.is_empty() {
-        "You aren't carrying anything.".to_string()
-    } else {
-        parts.join(" ")
+    match (holding.is_empty(), wearing.is_empty()) {
+        (true, true) => "You aren't holding or wearing anything.".to_string(),
+        (false, true) => format!(
+            "You are holding {}.",
+            phrase_with_leading_article(&holding)
+        ),
+        (true, false) => format!(
+            "You are wearing {}.",
+            phrase_with_leading_article(&wearing)
+        ),
+        (false, false) => format!(
+            "You are holding {} and wearing {}.",
+            phrase_with_leading_article(&holding),
+            phrase_with_leading_article(&wearing)
+        ),
     }
 }
 
@@ -117,7 +145,41 @@ mod tests {
     }
 
     #[test]
-    fn look_self_lists_holding_and_wearing_without_slots() {
+    fn look_self_holding_and_wearing_natural_sentence() {
+        let anatomy = anatomy();
+        let mut player = bare("player:hero-001", "Hero");
+        player.init_creature_role(anatomy.player_template("default").unwrap());
+
+        let mut rusty = bare("item:rusty-001", "Rusty Sword");
+        let mut wooden = bare("item:wooden-001", "Wooden Sword");
+        let mut backpack = bare("item:backpack-001", "backpack");
+        backpack.apply_container_role(&ContainerSpec {
+            capacity: 5,
+            max_weight: None,
+            max_volume: None,
+            wearable: true,
+            wear_slot: Some("torso".to_string()),
+        });
+
+        player.set_body_slot("right_hand", Some(rusty.id.clone()));
+        player.set_body_slot("left_hand", Some(wooden.id.clone()));
+        player.set_body_slot("torso", Some(backpack.id.clone()));
+
+        let mut objects = HashMap::new();
+        objects.insert(rusty.id.clone(), rusty);
+        objects.insert(wooden.id.clone(), wooden);
+        objects.insert(backpack.id.clone(), backpack);
+        objects.insert(player.id.clone(), player.clone());
+
+        let summary = format_look_self_summary(&player, &objects, &anatomy);
+        assert_eq!(
+            summary,
+            "You are holding a Rusty Sword and Wooden Sword and wearing a backpack."
+        );
+    }
+
+    #[test]
+    fn look_self_lists_held_items_not_nested_contents() {
         let anatomy = anatomy();
         let mut player = bare("player:hero-001", "Hero");
         player.init_creature_role(anatomy.player_template("default").unwrap());
@@ -139,32 +201,17 @@ mod tests {
         coins.location = Some(purse.id.clone());
         purse.set_property_list("contents", vec![coins.id.clone()]);
 
-        let mut backpack = bare("item:backpack-001", "backpack");
-        backpack.apply_container_role(&ContainerSpec {
-            capacity: 5,
-            max_weight: None,
-            max_volume: None,
-            wearable: true,
-            wear_slot: Some("torso".to_string()),
-        });
-
         player.set_body_slot("right_hand", Some(purse.id.clone()));
-        player.set_body_slot("left_hand", Some(coins.id.clone()));
-        player.set_body_slot("torso", Some(backpack.id.clone()));
 
         let mut objects = HashMap::new();
         objects.insert(coins.id.clone(), coins);
         objects.insert(purse.id.clone(), purse);
-        objects.insert(backpack.id.clone(), backpack);
         objects.insert(player.id.clone(), player.clone());
 
         let summary = format_look_self_summary(&player, &objects, &anatomy);
-        assert_eq!(
-            summary,
-            "You are holding: purse, 20 coins. Wearing: backpack."
-        );
+        assert_eq!(summary, "You are holding a purse.");
+        assert!(!summary.contains("20 coins"));
         assert!(!summary.contains("right_hand"));
-        assert!(!summary.contains("inside"));
     }
 
     #[test]
@@ -173,7 +220,7 @@ mod tests {
         let mut player = bare("player:hero-001", "Hero");
         player.init_creature_role(anatomy.player_template("default").unwrap());
 
-        let sword = bare("item:sword-001", "sword");
+        let sword = bare("item:sword-001", "Iron Sword");
         let sword_id = sword.id.clone();
         player.set_body_slot("left_hand", Some(sword_id.clone()));
         player.set_body_slot("right_hand", Some(sword_id));
@@ -183,6 +230,18 @@ mod tests {
         objects.insert(player.id.clone(), player.clone());
 
         let summary = format_look_self_summary(&player, &objects, &anatomy);
-        assert_eq!(summary, "You are holding: sword.");
+        assert_eq!(summary, "You are holding an Iron Sword.");
+    }
+
+    #[test]
+    fn look_self_uses_an_before_vowel() {
+        assert_eq!(
+            phrase_with_leading_article(&["apple".to_string()]),
+            "an apple"
+        );
+        assert_eq!(
+            phrase_with_leading_article(&["Rusty Sword".to_string(), "apple".to_string()]),
+            "a Rusty Sword and apple"
+        );
     }
 }

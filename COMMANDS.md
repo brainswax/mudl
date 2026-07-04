@@ -18,7 +18,7 @@ Command reference for the MUDL REPL (MVP). Player verbs use plain names; wizard/
 ```
 Admin
 A weary adventurer.
-You are holding: purse, 20 coins. Wearing: backpack.
+You are holding a Rusty Sword and Wooden Sword and wearing a backpack.
 ```
 
 Does **not** show: weight, capacity, hand slots, nested container contents, properties, or IDs.

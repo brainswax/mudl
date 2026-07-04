@@ -375,7 +375,7 @@ mod tests {
 
         assert!(output.contains("Admin"));
         assert!(output.contains("weary adventurer"));
-        assert!(output.contains("aren't carrying anything"));
+        assert!(output.contains("aren't holding or wearing anything"));
         assert!(!output.contains("player:admin-001"));
     }
 
@@ -509,8 +509,7 @@ mod tests {
             .with_flags(DisplayFlags::BRIEF);
         let output = player.describe(&ctx);
 
-        assert!(output.contains("You are holding: purse."));
-        assert!(output.contains("Wearing: backpack."));
+        assert!(output.contains("You are holding a purse and wearing a backpack."));
         assert!(!output.contains("right hand"));
         assert!(!output.contains("weighs"));
     }

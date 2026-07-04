@@ -190,7 +190,7 @@ See **[COMMANDS.md](COMMANDS.md)** for the full command reference.
 
 - **`create <type> <name> [key=value...]`** — Creates an object via `ObjectFactory`. The display name is parsed separately from options (`capacity=3`, `max_weight=10`, etc.); options become properties, not part of `name` or the ID slug. ID base names are slugified and capped at 16 characters (`purse` → `item:purse-001`). When the player has a current location, the new object is placed there automatically.
 - **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate with short IDs. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
-- **`look`** — Short immersive view (`DisplayFlags::BRIEF`): name, description, container contents, room exits. **`look self`** → `You are holding: purse, coins. Wearing: backpack.` (no hand slots, weights, or nested contents).
+- **`look`** — Short immersive view (`DisplayFlags::BRIEF`): name, description, container contents, room exits. **`look self`** → `You are holding a Rusty Sword and Wooden Sword and wearing a backpack.` (no hand slots, weights, or nested contents).
 - **`examine`** — In-game detail: weight, capacity, full grasp/worn summary on self.
 - **`@examine`** / **`@dump`** — Wizard structured view / raw JSON.
 - **`inventory`** — Full slot-by-slot listing (use `examine self` for weight totals).
