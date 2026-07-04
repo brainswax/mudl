@@ -5,8 +5,7 @@ use std::collections::HashMap;
 use crate::object::{Object, ObjectId};
 
 use super::container::format_look_container_player;
-use super::grammar::indefinite_article;
-use super::format_stackable_label;
+use super::stackable::format_look_stackable_sentence;
 
 /// Brief `look` at a non-container item — description or a short natural sentence.
 pub fn format_look_item_player(obj: &Object) -> String {
@@ -14,12 +13,7 @@ pub fn format_look_item_player(obj: &Object) -> String {
         return desc;
     }
 
-    let label = format_stackable_label(obj);
-    if obj.is_stackable() && obj.stack_count() > 1 {
-        format!("There are {label}.")
-    } else {
-        format!("It is {} {label}.", indefinite_article(&label))
-    }
+    format_look_stackable_sentence(obj)
 }
 
 /// Brief `look` at any object (container, item, etc.).
@@ -61,5 +55,15 @@ mod tests {
             max_stack: 99,
         });
         assert_eq!(format_look_item_player(&coins), "There are 20 coins.");
+    }
+
+    #[test]
+    fn look_gold_bar_stack_pluralizes_name() {
+        let mut bar = bare("item:bar-001", "gold bar");
+        bar.apply_stackable_role(&StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        assert_eq!(format_look_item_player(&bar), "There are 10 gold bars.");
     }
 }

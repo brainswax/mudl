@@ -7,15 +7,7 @@ use crate::object::{
 };
 
 use super::grammar::join_natural_list;
-
-/// Player-facing label for an item, with stack count when stackable.
-pub fn format_stackable_label(item: &Object) -> String {
-    if item.is_stackable() && item.stack_count() > 1 {
-        format!("{} {}", item.stack_count(), item.name)
-    } else {
-        item.name.clone()
-    }
-}
+pub use super::stackable::format_stackable_label;
 
 /// Labels for each object in a container's `contents` list.
 pub fn container_content_labels(

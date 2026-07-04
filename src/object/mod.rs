@@ -523,7 +523,7 @@ mod tests {
         let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let examine_out = coins.describe(&examine_ctx);
         assert!(examine_out.contains("Shiny gold coins."));
-        assert!(examine_out.contains("They weigh 20."));
+        assert!(examine_out.contains("The stack of 20 coins weighs 20 in total."));
         assert!(!examine_out.starts_with("20 coins"));
     }
 

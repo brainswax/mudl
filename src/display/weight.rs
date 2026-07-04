@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::display::grammar::indefinite_article;
+use crate::display::stackable::{
+    format_examine_stack_weight, format_examine_stackable_fallback,
+};
 use crate::object::{
     format_weight_amount, is_unlimited_weight, player_carried_weight, Object, ObjectId,
 };
@@ -15,38 +17,17 @@ fn player_capacity_message(max: i64) -> String {
     }
 }
 
-fn format_item_weight_line(obj: &Object) -> Option<String> {
-    if obj.is_stackable() && obj.stack_count() > 1 {
-        return Some(format!(
-            "They weigh {}.",
-            format_weight_amount(obj.weight())
-        ));
-    }
-
-    let w = obj.weight();
-    if w > 1.0 || (w > 0.0 && obj.get_numeric_property("weight").is_some()) {
-        return Some(format!("It weighs {}.", format_weight_amount(w)));
-    }
-
-    None
-}
-
 /// Player `examine` output for a non-container item (no redundant name line).
 pub fn format_examine_item_player(obj: &Object) -> String {
     let mut lines = Vec::new();
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
     }
-    if let Some(weight) = format_item_weight_line(obj) {
+    if let Some(weight) = format_examine_stack_weight(obj) {
         lines.push(weight);
     }
     if lines.is_empty() {
-        let label = crate::display::format_stackable_label(obj);
-        if obj.is_stackable() && obj.stack_count() > 1 {
-            lines.push(format!("There are {label}."));
-        } else {
-            lines.push(format!("It is {} {label}.", indefinite_article(&label)));
-        }
+        lines.push(format_examine_stackable_fallback(obj));
     }
     lines.join("\n")
 }
@@ -172,7 +153,22 @@ mod tests {
     }
 
     #[test]
-    fn examine_item_shows_description_and_weight() {
+    fn examine_gold_bar_stack_shows_total_weight() {
+        let mut bar = bare("item:bar-001", "gold bar");
+        bar.set_property_int("weight", 10);
+        bar.apply_stackable_role(&StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+
+        assert_eq!(
+            format_examine_item_player(&bar),
+            "The stack of 10 gold bars weighs 100 in total."
+        );
+    }
+
+    #[test]
+    fn examine_item_shows_description_and_stack_weight() {
         let mut coins = bare("item:coins-001", "coins");
         coins.set_property_int("weight", 1);
         coins.apply_stackable_role(&StackableSpec {
@@ -187,7 +183,10 @@ mod tests {
         });
 
         let output = format_examine_item_player(&coins);
-        assert_eq!(output, "Gold coins glint.\nThey weigh 20.");
+        assert_eq!(
+            output,
+            "Gold coins glint.\nThe stack of 20 coins weighs 20 in total."
+        );
     }
 
     #[test]

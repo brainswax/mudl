@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::display::stackable::stack_quantity_phrase;
 use crate::mudl::BodyPlan;
 use crate::object::{Object, ObjectId};
 
@@ -15,11 +16,7 @@ fn grasp_slot_sort_key(name: &str) -> u8 {
 
 /// Display name for gear on the body (stack count when relevant).
 pub fn gear_item_name(obj: &Object) -> String {
-    if obj.is_stackable() && obj.stack_count() > 1 {
-        format!("{} {}", obj.stack_count(), obj.name)
-    } else {
-        obj.name.clone()
-    }
+    stack_quantity_phrase(obj)
 }
 
 /// Held grasp items and worn gear (deduped, sorted).

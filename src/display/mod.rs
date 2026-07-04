@@ -16,11 +16,16 @@ pub mod object_look;
 pub mod resolve;
 pub mod room_look;
 pub mod self_examine;
+pub mod stackable;
 pub mod weight;
 pub use carried::format_look_self_summary;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_examine_container_player,
-    format_inside_container, format_look_container_player, format_stackable_label,
+    format_inside_container, format_look_container_player,
+};
+pub use stackable::{
+    format_examine_stack_weight, format_examine_stackable_fallback, format_look_stackable_sentence,
+    format_stackable_label, pluralize_item_name, stack_quantity_phrase,
 };
 pub use object_look::{format_look_item_player, format_look_object_player};
 pub use room_look::format_room_look_player;
@@ -425,7 +430,7 @@ mod tests {
         let output = item.describe(&ctx);
 
         assert!(output.contains("Gold coins glint"));
-        assert!(output.contains("They weigh"));
+        assert!(output.contains("weighs 20 in total"));
         assert!(!output.contains("id:"));
         assert!(!output.contains("properties:"));
         assert!(!output.contains("flip"));
