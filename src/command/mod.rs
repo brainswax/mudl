@@ -172,6 +172,8 @@ pub struct CreateOptions {
     pub capacity: Option<u32>,
     pub max_weight: Option<i64>,
     pub max_volume: Option<i64>,
+    pub weight: Option<i64>,
+    pub volume: Option<i64>,
     pub wearable: Option<bool>,
     pub wear_slot: Option<String>,
     pub stack_count: Option<u32>,
@@ -182,23 +184,44 @@ pub struct CreateOptions {
 /// Parse `key=value` tokens from `@create` trailing arguments.
 pub fn parse_create_options(tokens: &[&str]) -> CreateOptions {
     let mut opts = CreateOptions::default();
+    let mut extra_pairs: Vec<(&str, &str)> = Vec::new();
     for token in tokens {
         if let Some((key, value)) = token.split_once('=') {
+            let value = value.trim_matches('"');
             match key {
                 "capacity" => opts.capacity = value.parse().ok(),
                 "max_weight" | "weight_limit" => opts.max_weight = value.parse().ok(),
                 "max_volume" | "volume_limit" => opts.max_volume = value.parse().ok(),
+                "weight" => opts.weight = parse_create_int(value),
+                "volume" => opts.volume = parse_create_int(value),
                 "wearable" => opts.wearable = Some(value == "true"),
                 "wear_slot" => opts.wear_slot = Some(value.to_string()),
                 "count" | "stack_count" => opts.stack_count = value.parse().ok(),
                 "prototype" => opts.prototype = Some(ObjectId::new(value)),
-                _ => {
-                    opts.mudl_props = MudlRoleProps::from_pairs(&[(key, value.trim_matches('"'))]);
-                }
+                _ => extra_pairs.push((key, value)),
             }
         }
     }
+    if !extra_pairs.is_empty() {
+        opts.mudl_props = MudlRoleProps::from_pairs(&extra_pairs);
+    }
     opts
+}
+
+/// Parse a signed integer for create overrides; rejects non-numeric values.
+fn parse_create_int(value: &str) -> Option<i64> {
+    value.trim().parse().ok()
+}
+
+/// Apply scalar create overrides (weight, volume, hand_slot, etc.) onto a new object.
+pub fn apply_create_property_overrides(obj: &mut Object, options: &CreateOptions) {
+    if let Some(w) = options.weight {
+        obj.set_property_int("weight", w);
+    }
+    if let Some(v) = options.volume {
+        obj.set_property_int("volume", v);
+    }
+    options.mudl_props.apply_scalar_overrides(obj);
 }
 
 /// Create an object and place it at the player's current location when one is set.
@@ -292,11 +315,18 @@ pub async fn create_at_location_with_options<P: Persistence>(
             }
             if options.mudl_props != MudlRoleProps::default() {
                 options.mudl_props.apply_to(&mut obj);
-                factory.persistence().save_object(&obj).await?;
             }
             obj
         }
     };
+
+    if options.weight.is_some()
+        || options.volume.is_some()
+        || options.mudl_props.has_scalar_overrides()
+    {
+        apply_create_property_overrides(&mut obj, &options);
+        factory.persistence().save_object(&obj).await?;
+    }
 
     if let Some(loc_id) = location {
         obj.location = Some(loc_id.clone());
@@ -762,6 +792,61 @@ mod tests {
         let inventory = describe_carried(player, &objects, &anatomy);
         assert!(inventory.contains("Rusty Sword"));
         assert!(!inventory.contains(':'));
+    }
+
+    #[test]
+    fn parse_create_command_parses_weight_and_volume() {
+        let parsed = parse_create_command(
+            "create container backpack max_weight=100 weight=10 capacity=20",
+        )
+        .unwrap();
+        assert_eq!(parsed.type_name, "container");
+        assert_eq!(parsed.display_name, "backpack");
+        assert_eq!(parsed.options.capacity, Some(20));
+        assert_eq!(parsed.options.max_weight, Some(100));
+        assert_eq!(parsed.options.weight, Some(10));
+    }
+
+    #[test]
+    fn parse_create_int_rejects_non_numeric() {
+        assert_eq!(parse_create_int("10"), Some(10));
+        assert_eq!(parse_create_int("abc"), None);
+        assert_eq!(parse_create_int(""), None);
+    }
+
+    #[tokio::test]
+    async fn create_container_applies_weight_to_examine() {
+        let factory = test_factory().await;
+        let anatomy = test_anatomy();
+        let owner = ObjectId::new("player:hero-001");
+
+        let parsed = parse_create_command(
+            "create container backpack max_weight=100 weight=10 capacity=20",
+        )
+        .unwrap();
+        let backpack = create_at_location_with_options(
+            &factory,
+            &parsed.type_name,
+            &parsed.display_name,
+            owner.clone(),
+            None,
+            &anatomy,
+            parsed.options,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(backpack.weight(), 10);
+        assert_eq!(backpack.container_capacity(), 20);
+        assert_eq!(backpack.container_max_weight(), Some(100));
+
+        let mut objects = HashMap::new();
+        objects.insert(backpack.id.clone(), backpack.clone());
+        let builder_ctx =
+            DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
+        let examine_out = backpack.describe_detailed(&builder_ctx);
+        assert!(examine_out.contains("Weight: 10"));
+        assert!(examine_out.contains("Contents weight: 0/100"));
     }
 
     #[tokio::test]

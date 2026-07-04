@@ -45,6 +45,30 @@ impl MudlRoleProps {
         props
     }
 
+    /// Whether any scalar property overrides are present (weight, hand_slot, etc.).
+    pub fn has_scalar_overrides(&self) -> bool {
+        self.weight.is_some()
+            || self.volume.is_some()
+            || self.pocketable.is_some()
+            || self.hand_slot.is_some()
+    }
+
+    /// Apply scalar overrides without re-applying role composition.
+    pub fn apply_scalar_overrides(&self, obj: &mut Object) {
+        if let Some(w) = self.weight {
+            obj.set_property_int("weight", w);
+        }
+        if let Some(v) = self.volume {
+            obj.set_property_int("volume", v);
+        }
+        if let Some(p) = self.pocketable {
+            obj.set_property_bool("is_pocketable", p);
+        }
+        if let Some(ref slot) = self.hand_slot {
+            obj.set_property_string("hand_slot", slot);
+        }
+    }
+
     /// Apply parsed role properties onto an object (composable — multiple roles allowed).
     pub fn apply_to(&self, obj: &mut Object) {
         if self.is_container == Some(true) {
