@@ -34,14 +34,11 @@ pub fn container_content_labels(
 /// Player-mode line for container contents (e.g. "Inside the purse: 20 coins").
 pub fn format_inside_container(container: &Object, objects: &HashMap<ObjectId, Object>) -> String {
     let labels = container_content_labels(container, objects);
+    let name = container.name.to_lowercase();
     if labels.is_empty() {
-        return String::new();
+        return format!("The {name} is empty.");
     }
-    format!(
-        "Inside the {}: {}",
-        container.name.to_lowercase(),
-        labels.join("; ")
-    )
+    format!("Inside the {name}: {}", labels.join("; "))
 }
 
 /// Builder-mode summary of container contents.
@@ -97,6 +94,21 @@ mod tests {
             max_stack: 99,
         });
         assert_eq!(format_stackable_label(&coin), "coin");
+    }
+
+    #[test]
+    fn inside_empty_container() {
+        let mut backpack = bare("item:backpack-001", "backpack");
+        backpack.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 20,
+            max_weight: Some(100),
+            max_volume: None,
+            wearable: true,
+            wear_slot: Some("torso".to_string()),
+        });
+
+        let line = format_inside_container(&backpack, &HashMap::new());
+        assert_eq!(line, "The backpack is empty.");
     }
 
     #[test]

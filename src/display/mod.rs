@@ -497,6 +497,43 @@ mod tests {
     }
 
     #[test]
+    fn look_empty_container_shows_empty_message() {
+        let owner = ObjectId::new("player:admin-001");
+        let mut backpack = Object {
+            id: ObjectId::new("item:backpack-001"),
+            name: "backpack".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        backpack.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 20,
+            max_weight: Some(100),
+            max_volume: None,
+            wearable: true,
+            wear_slot: Some("torso".to_string()),
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(backpack.id.clone(), backpack.clone());
+
+        let ctx = DisplayContext::new(owner, DisplayMode::Player)
+            .with_objects(objects)
+            .with_flags(DisplayFlags::BRIEF);
+        let look_out = backpack.describe(&ctx);
+        assert!(look_out.contains("backpack"));
+        assert!(look_out.contains("The backpack is empty."));
+        assert!(!look_out.contains("Inside the"));
+    }
+
+    #[test]
     fn look_brief_hides_weight_on_objects() {
         let owner = ObjectId::new("player:admin-001");
         let mut purse = Object {
