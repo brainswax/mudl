@@ -1,7 +1,8 @@
 //! Container capacity, weight, and volume calculations for stackable items.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use crate::mudl::BodyPlan;
 use crate::object::{Object, ObjectId};
 use crate::world::move_manager::MoveError;
 
@@ -12,6 +13,119 @@ pub struct ContainerFit {
     pub units: u32,
     /// Existing stack in the container to merge into, if any.
     pub merge_target: Option<ObjectId>,
+}
+
+/// How many units of a stackable can move into a player's grasp (merge and/or new stack).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InventoryFit {
+    pub merge_target: Option<ObjectId>,
+    /// Units to add to an existing held stack.
+    pub merge_units: u32,
+    /// Units that need a free grasp slot as a separate stack.
+    pub new_stack_units: u32,
+}
+
+impl InventoryFit {
+    pub fn total_units(&self) -> u32 {
+        self.merge_units.saturating_add(self.new_stack_units)
+    }
+}
+
+/// Find a held stackable in the player's grasp slots that can merge with `item`.
+pub fn find_mergeable_stack_in_grasp(
+    player: &Object,
+    item: &Object,
+    plan: &BodyPlan,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<ObjectId> {
+    if !item.is_stackable() {
+        return None;
+    }
+    let item_key = stack_merge_key(item);
+    let mut seen = HashSet::new();
+    for slot in plan.grasp_slots() {
+        let Some(item_id) = player.body_slot_item(&slot.name) else {
+            continue;
+        };
+        if !seen.insert(item_id.clone()) {
+            continue;
+        }
+        let Some(existing) = objects.get(&item_id) else {
+            continue;
+        };
+        if existing.is_stackable() && stack_merge_key(existing) == item_key {
+            return Some(item_id);
+        }
+    }
+    None
+}
+
+/// Compute how many units of `item` can be taken into the player's grasp.
+///
+/// `free_grasp_slot` is whether a new stack could occupy an empty hand slot.
+pub fn compute_inventory_fit(
+    player: &Object,
+    item: &Object,
+    plan: &BodyPlan,
+    objects: &HashMap<ObjectId, Object>,
+    requested_units: Option<u32>,
+    free_grasp_slot: bool,
+) -> InventoryFit {
+    if !item.is_stackable() {
+        return InventoryFit {
+            merge_target: None,
+            merge_units: 0,
+            new_stack_units: if free_grasp_slot { 1 } else { 0 },
+        };
+    }
+
+    let stack_count = effective_stack_count(item);
+    let units_requested = match requested_units {
+        None => stack_count,
+        Some(0) => 0,
+        Some(n) => n.min(stack_count),
+    };
+
+    let merge_target = find_mergeable_stack_in_grasp(player, item, plan, objects);
+    let merge_room = merge_target
+        .as_ref()
+        .and_then(|id| objects.get(id))
+        .map(|t| t.max_stack().saturating_sub(t.stack_count()))
+        .unwrap_or(0);
+
+    let new_stack_room = if free_grasp_slot {
+        item.max_stack()
+    } else {
+        0
+    };
+
+    let merge_units = if merge_room > 0 && merge_target.is_some() {
+        units_requested.min(merge_room)
+    } else {
+        0
+    };
+    let remaining = units_requested.saturating_sub(merge_units);
+    let new_stack_units = if remaining > 0 && new_stack_room > 0 {
+        remaining.min(new_stack_room)
+    } else {
+        0
+    };
+
+    InventoryFit {
+        merge_target,
+        merge_units,
+        new_stack_units,
+    }
+}
+
+/// Cap an inventory fit to a weight-based unit limit (prefers merging first).
+pub fn cap_inventory_fit_to_weight(fit: &mut InventoryFit, max_units: u32) {
+    if fit.total_units() <= max_units {
+        return;
+    }
+    fit.merge_units = fit.merge_units.min(max_units);
+    let remaining = max_units.saturating_sub(fit.merge_units);
+    fit.new_stack_units = fit.new_stack_units.min(remaining);
 }
 
 /// Find a stackable item in `container` that can merge with `item`.
@@ -283,6 +397,76 @@ mod tests {
 
         let fit = compute_container_fit(&bag, &coins, &objects, None).unwrap();
         assert_eq!(fit.units, 50);
+    }
+
+    #[test]
+    fn inventory_fit_merges_into_held_stack() {
+        use crate::mudl::load_module;
+
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let plan = anatomy.body_plan("human").unwrap();
+
+        let mut player = bare("player:hero-001", "Hero");
+
+        let mut held = coins(5);
+        held.name = "gold bar".to_string();
+        held.id = ObjectId::new("item:held-001");
+        player.set_body_slot("right_hand", Some(held.id.clone()));
+
+        let mut incoming = coins(10);
+        incoming.name = "gold bar".to_string();
+        incoming.id = ObjectId::new("item:ground-001");
+        incoming.prototype = held.prototype.clone();
+
+        let mut objects = HashMap::new();
+        objects.insert(held.id.clone(), held);
+
+        let fit = compute_inventory_fit(&player, &incoming, plan, &objects, None, false);
+        assert_eq!(fit.merge_target, Some(ObjectId::new("item:held-001")));
+        assert_eq!(fit.merge_units, 10);
+        assert_eq!(fit.new_stack_units, 0);
+    }
+
+    #[test]
+    fn inventory_fit_splits_merge_and_new_stack() {
+        use crate::mudl::load_module;
+
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let plan = anatomy.body_plan("human").unwrap();
+
+        let mut player = bare("player:hero-001", "Hero");
+
+        let mut held = coins(90);
+        held.name = "gold bar".to_string();
+        held.id = ObjectId::new("item:held-001");
+        held.apply_stackable_role(&crate::object::StackableSpec {
+            count: 90,
+            max_stack: 99,
+        });
+        player.set_body_slot("right_hand", Some(held.id.clone()));
+
+        let mut incoming = coins(15);
+        incoming.name = "gold bar".to_string();
+        incoming.id = ObjectId::new("item:ground-001");
+        incoming.prototype = held.prototype.clone();
+
+        let mut objects = HashMap::new();
+        objects.insert(held.id.clone(), held);
+
+        let fit = compute_inventory_fit(&player, &incoming, plan, &objects, None, true);
+        assert_eq!(fit.merge_units, 9);
+        assert_eq!(fit.new_stack_units, 6);
+        assert_eq!(fit.total_units(), 15);
     }
 
     #[test]

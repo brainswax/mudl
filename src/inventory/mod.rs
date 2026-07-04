@@ -1364,8 +1364,165 @@ mod tests {
             anatomy: &anatomy,
         };
 
-        let err = take_item(&mut ctx, "10 gold bars").unwrap_err();
-        assert_eq!(err, InventoryError::TooHeavy("gold bar".to_string()));
+        let msg = take_item(&mut ctx, "10 gold bars").unwrap();
+        assert_eq!(msg, "You pick up 5 gold bars.");
+
+        let ground = objects.get(&ObjectId::new("item:bars-001")).unwrap();
+        assert_eq!(ground.stack_count(), 5);
+        assert_eq!(ground.location.as_ref(), Some(&room_id));
+    }
+
+    #[tokio::test]
+    async fn take_merges_into_held_stack_when_hands_occupied() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 3)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        held.location = Some(player_id.clone());
+        let held_id = held.id.clone();
+
+        let mut ground = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 7)
+            .await
+            .unwrap();
+        ground.name = "gold bar".to_string();
+        ground.location = Some(room_id.clone());
+        let ground_id = ground.id.clone();
+
+        let mut sword = factory.create_item("sword", player_id.clone()).await.unwrap();
+        sword.name = "Rusty Sword".to_string();
+        sword.set_property_string("hand_slot", "right");
+        sword.location = Some(player_id.clone());
+        let sword_id = sword.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(sword_id.clone()));
+        player.set_body_slot("left_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(held_id.clone(), held);
+        objects.insert(ground_id.clone(), ground);
+        objects.insert(sword_id, sword);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let msg = take_item(&mut ctx, "gold bars").unwrap();
+        assert_eq!(msg, "You pick up 7 gold bars.");
+
+        let merged = objects.get(&held_id).unwrap();
+        assert_eq!(merged.stack_count(), 10);
+        assert_eq!(merged.location.as_ref(), Some(&player_id));
+        assert!(objects.get(&ground_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn take_singular_merges_one_into_held_stack() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 5)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        let held_id = held.id.clone();
+
+        let mut ground = Object {
+            id: ObjectId::new("item:bars-ground"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: held.prototype.clone(),
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        ground.apply_stackable_role(&crate::object::StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        let ground_id = ground.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(held_id.clone(), held);
+        objects.insert(ground_id.clone(), ground);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let msg = take_item(&mut ctx, "gold bar").unwrap();
+        assert_eq!(msg, "You pick up a gold bar.");
+
+        let merged = objects.get(&held_id).unwrap();
+        assert_eq!(merged.stack_count(), 6);
+        let remainder = objects.get(&ground_id).unwrap();
+        assert_eq!(remainder.stack_count(), 9);
+    }
+
+    #[tokio::test]
+    async fn take_fails_hands_full_only_when_no_merge_and_no_slot() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 99)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        held.set_property_int("weight", 0);
+        held.apply_stackable_role(&crate::object::StackableSpec {
+            count: 99,
+            max_stack: 99,
+        });
+        let held_id = held.id.clone();
+
+        let mut ground = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 5)
+            .await
+            .unwrap();
+        ground.name = "gold bar".to_string();
+        ground.set_property_int("weight", 0);
+        ground.location = Some(room_id.clone());
+
+        let mut sword = factory.create_item("sword", player_id.clone()).await.unwrap();
+        sword.name = "Sword".to_string();
+        sword.set_property_int("weight", 0);
+        sword.location = Some(player_id.clone());
+        let sword_id = sword.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_property_int("max_weight", crate::object::UNLIMITED_WEIGHT);
+        player.set_body_slot("right_hand", Some(sword_id.clone()));
+        player.set_body_slot("left_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(held_id, held);
+        objects.insert(ground.id.clone(), ground);
+        objects.insert(sword_id, sword);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let err = take_item(&mut ctx, "gold bars").unwrap_err();
+        assert_eq!(err, InventoryError::HandsFull);
     }
 
     #[tokio::test]

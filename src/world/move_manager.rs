@@ -6,10 +6,12 @@ use crate::display::is_in_player_possession;
 use crate::mudl::{AnatomyRegistry, BodyPlan};
 use crate::object::LocationRef;
 use crate::object::{
-    transfer_weight, player_weight_bearer, would_exceed_player_max_weight, Object, ObjectId,
+    is_unlimited_weight, player_carried_weight, transfer_weight, player_weight_bearer,
+    would_exceed_player_max_weight, Object, ObjectId,
 };
 use crate::world::container_fit::{
-    compute_container_fit, fit_failure_reason, split_stack_id, ContainerFit,
+    cap_inventory_fit_to_weight, compute_container_fit, compute_inventory_fit,
+    fit_failure_reason, split_stack_id, ContainerFit, InventoryFit,
 };
 use crate::world::dirty::DirtyTracker;
 
@@ -191,6 +193,173 @@ fn player_body_plan<'a>(
 
 fn grasp_slot_free(player: &Object, slot: &str) -> bool {
     player.body_slot_item(slot).is_none()
+}
+
+fn max_carry_units_for_weight(
+    player: &Object,
+    item: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> u32 {
+    let Some(max_w) = player.get_int_property("max_weight") else {
+        return u32::MAX;
+    };
+    if is_unlimited_weight(max_w) {
+        return u32::MAX;
+    }
+    let room = max_w as f64 - player_carried_weight(player, objects);
+    let unit_w = item.unit_weight().max(0.0);
+    if unit_w <= 0.0 {
+        return u32::MAX;
+    }
+    (room / unit_w).floor().max(0.0) as u32
+}
+
+fn grasp_slot_available(player: &Object, item: &Object, plan: &BodyPlan) -> bool {
+    select_grasp_slots(player, item, plan).is_ok()
+}
+
+fn select_grasp_slots(
+    player: &Object,
+    item: &Object,
+    plan: &BodyPlan,
+) -> Result<(Vec<String>, Option<String>), MoveError> {
+    let hand_pref = item.hand_slot();
+    let preference = hand_pref.as_deref().unwrap_or("right");
+    let grasp_names: Vec<String> = plan.grasp_slots().iter().map(|s| s.name.clone()).collect();
+
+    let (target_slots, carried_label) = if preference == "both" {
+        let left = "left_hand";
+        let right = "right_hand";
+        if !grasp_slot_free(player, left) || !grasp_slot_free(player, right) {
+            return Err(MoveError::HandsFull);
+        }
+        (
+            vec![left.to_string(), right.to_string()],
+            Some(left.to_string()),
+        )
+    } else if preference == "left" {
+        if !grasp_slot_free(player, "left_hand") {
+            return Err(MoveError::HandsFull);
+        }
+        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
+    } else if grasp_slot_free(player, "right_hand") {
+        (
+            vec!["right_hand".to_string()],
+            Some("right_hand".to_string()),
+        )
+    } else if grasp_slot_free(player, "left_hand") {
+        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
+    } else {
+        return Err(MoveError::HandsFull);
+    };
+
+    for slot in &grasp_names {
+        if target_slots.contains(slot) && !grasp_slot_free(player, slot) {
+            return Err(MoveError::HandsFull);
+        }
+    }
+
+    Ok((target_slots, carried_label))
+}
+
+fn inventory_transfer_failure(
+    item: &Object,
+    weight_cap: u32,
+) -> MoveError {
+    if weight_cap == 0 && item.unit_weight() > 0.0 {
+        MoveError::TooHeavy(item.name.clone())
+    } else {
+        MoveError::HandsFull
+    }
+}
+
+fn merge_units_into_grasp_stack(
+    ctx: &mut MoveContext<'_>,
+    source_id: &ObjectId,
+    merge_id: &ObjectId,
+    units: u32,
+) -> Result<(), MoveError> {
+    let source = ctx
+        .objects
+        .get(source_id)
+        .ok_or_else(|| MoveError::NotFound(source_id.to_string()))?
+        .clone();
+    let stack_count = source.stack_count();
+    if units == 0 || units > stack_count {
+        return Err(MoveError::InvalidTarget(
+            "Invalid merge quantity.".into(),
+        ));
+    }
+
+    let mut target = ctx
+        .objects
+        .get(merge_id)
+        .ok_or_else(|| MoveError::NotFound(merge_id.to_string()))?
+        .clone();
+    target.set_stack_count(target.stack_count() + units);
+    ctx.objects.insert(merge_id.clone(), target);
+
+    if units >= stack_count {
+        ctx.objects.remove(source_id);
+    } else {
+        let mut remainder = source;
+        remainder.set_stack_count(stack_count - units);
+        ctx.objects.insert(source_id.clone(), remainder);
+    }
+    Ok(())
+}
+
+fn transfer_stack_to_inventory(
+    ctx: &mut MoveContext<'_>,
+    obj_id: &ObjectId,
+    player_id: &ObjectId,
+    src: &LocationRef,
+    fit: &InventoryFit,
+) -> Result<(u32, ObjectId), MoveError> {
+    let total = fit.total_units();
+    if total == 0 {
+        return Err(MoveError::InvalidTarget(
+            "You must move at least one.".into(),
+        ));
+    }
+
+    let mut primary_id = obj_id.clone();
+
+    if fit.merge_units > 0 {
+        let merge_id = fit
+            .merge_target
+            .as_ref()
+            .ok_or(MoveError::InvalidTarget("No merge target.".into()))?;
+        merge_units_into_grasp_stack(ctx, obj_id, merge_id, fit.merge_units)?;
+        primary_id = merge_id.clone();
+    }
+
+    if fit.new_stack_units > 0 {
+        let Some(source) = ctx.objects.get(obj_id) else {
+            return Ok((total, primary_id));
+        };
+        let stack_count = source.stack_count();
+        if fit.new_stack_units < stack_count {
+            let (_, split_id) = partial_stack_transfer(
+                ctx,
+                obj_id,
+                src,
+                &LocationRef::Inventory(player_id.clone()),
+                fit.new_stack_units,
+            )?;
+            if primary_id == *obj_id {
+                primary_id = split_id;
+            }
+        } else {
+            remove_from_source(ctx, obj_id, src)?;
+            apply_destination(ctx, obj_id, &LocationRef::Inventory(player_id.clone()))?;
+            if primary_id == *obj_id || fit.merge_units == 0 {
+                primary_id = obj_id.clone();
+            }
+        }
+    }
+
+    Ok((total, primary_id))
 }
 
 fn place_in_container(
@@ -458,42 +627,7 @@ fn place_in_grasp_slots(
 ) -> Result<Vec<String>, MoveError> {
     let item = objects.get(item_id).ok_or(MoveError::NotCarried)?.clone();
     let player = objects.get(player_id).ok_or(MoveError::NotCarried)?;
-    let hand_pref = item.hand_slot();
-    let preference = hand_pref.as_deref().unwrap_or("right");
-
-    let grasp_names: Vec<String> = plan.grasp_slots().iter().map(|s| s.name.clone()).collect();
-
-    let (target_slots, carried_label) = if preference == "both" {
-        let left = "left_hand";
-        let right = "right_hand";
-        if !grasp_slot_free(player, left) || !grasp_slot_free(player, right) {
-            return Err(MoveError::HandsFull);
-        }
-        (
-            vec![left.to_string(), right.to_string()],
-            Some(left.to_string()),
-        )
-    } else if preference == "left" {
-        if !grasp_slot_free(player, "left_hand") {
-            return Err(MoveError::HandsFull);
-        }
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else if grasp_slot_free(player, "right_hand") {
-        (
-            vec!["right_hand".to_string()],
-            Some("right_hand".to_string()),
-        )
-    } else if grasp_slot_free(player, "left_hand") {
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else {
-        return Err(MoveError::HandsFull);
-    };
-
-    for slot in &grasp_names {
-        if target_slots.contains(slot) && !grasp_slot_free(player, slot) {
-            return Err(MoveError::HandsFull);
-        }
-    }
+    let (target_slots, carried_label) = select_grasp_slots(player, &item, plan)?;
 
     let mut player = objects.get(player_id).ok_or(MoveError::NotCarried)?.clone();
     for slot in &target_slots {
@@ -677,6 +811,46 @@ pub fn move_object(
         validate_player_carry_weight(&item, obj_id, &dst, fit.units, ctx.objects)?;
         let units = place_in_container(ctx, obj_id, container_id, &src, &fit)?;
         (Some(units), None)
+    } else if let LocationRef::Inventory(player_id) = &dst {
+        let anatomy = ctx.anatomy.ok_or(MoveError::NoBodyPlan)?;
+        let player = ctx
+            .objects
+            .get(player_id)
+            .ok_or(MoveError::NotCarried)?
+            .clone();
+        let plan = player_body_plan(&player, anatomy)?;
+        let free_hand = grasp_slot_available(&player, &item, plan);
+        let mut inv_fit = compute_inventory_fit(
+            &player,
+            &item,
+            plan,
+            ctx.objects,
+            requested_units,
+            free_hand,
+        );
+        let weight_cap = max_carry_units_for_weight(&player, &item, ctx.objects);
+        cap_inventory_fit_to_weight(&mut inv_fit, weight_cap);
+
+        if inv_fit.total_units() == 0 {
+            return Err(inventory_transfer_failure(&item, weight_cap));
+        }
+
+        validate_player_carry_weight(&item, obj_id, &dst, inv_fit.total_units(), ctx.objects)?;
+
+        if item.is_stackable() {
+            let (transferred, primary_id) =
+                transfer_stack_to_inventory(ctx, obj_id, player_id, &src, &inv_fit)?;
+            let extra = if primary_id != *obj_id {
+                Some(primary_id)
+            } else {
+                None
+            };
+            (Some(transferred), extra)
+        } else {
+            remove_from_source(ctx, obj_id, &src)?;
+            apply_destination(ctx, obj_id, &dst)?;
+            (Some(1), None)
+        }
     } else {
         let stack_count = if item.is_stackable() {
             item.stack_count()
