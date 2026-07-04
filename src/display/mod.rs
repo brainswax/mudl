@@ -25,7 +25,9 @@ pub use container::{
 };
 pub use stackable::{
     format_examine_stack_weight, format_examine_stackable_fallback, format_look_stackable_sentence,
-    format_stackable_label, pluralize_item_name, stack_quantity_phrase,
+    display_name_for_single_unit, format_stack_transfer_message, format_stackable_label,
+    item_lookup_variants, name_looks_plural, pluralize_item_name, singularize_item_name,
+    stack_quantity_phrase,
 };
 pub use object_look::{format_look_item_player, format_look_object_player};
 pub use room_look::format_room_look_player;

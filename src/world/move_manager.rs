@@ -285,6 +285,83 @@ fn place_in_container(
     Ok(units)
 }
 
+/// Split `units` from a stack at `src` and place the new stack at `dst`.
+/// Returns units moved and the new stack object's id.
+fn partial_stack_transfer(
+    ctx: &mut MoveContext<'_>,
+    item_id: &ObjectId,
+    src: &LocationRef,
+    dst: &LocationRef,
+    units: u32,
+) -> Result<(u32, ObjectId), MoveError> {
+    let _ = src;
+    let item = ctx
+        .objects
+        .get(item_id)
+        .ok_or_else(|| MoveError::NotFound(item_id.to_string()))?
+        .clone();
+    if !item.is_stackable() {
+        return Err(MoveError::InvalidTarget(
+            "You can only split stackable items.".into(),
+        ));
+    }
+    let stack_count = item.stack_count();
+    let units = units.min(stack_count);
+    if units == 0 {
+        return Err(MoveError::InvalidTarget(
+            "You must move at least one.".into(),
+        ));
+    }
+    if units >= stack_count {
+        return Err(MoveError::InvalidTarget(
+            "Partial transfer requires a smaller quantity.".into(),
+        ));
+    }
+
+    let new_id = split_stack_id(item_id, ctx.objects);
+    let mut placed = item.clone();
+    placed.id = new_id.clone();
+    placed.set_stack_count(units);
+
+    let mut source = item;
+    source.set_stack_count(stack_count - units);
+    ctx.objects.insert(item_id.clone(), source);
+
+    match dst {
+        LocationRef::Room(room_id) => {
+            placed.location = Some(room_id.clone());
+            placed.set_carried_slot(None);
+            ctx.objects.insert(new_id.clone(), placed);
+        }
+        LocationRef::Inventory(player_id) => {
+            ctx.objects.insert(new_id.clone(), placed);
+            let anatomy = ctx.anatomy.ok_or(MoveError::NoBodyPlan)?;
+            let player = ctx
+                .objects
+                .get(player_id)
+                .ok_or(MoveError::NotCarried)?
+                .clone();
+            let plan = player_body_plan(&player, anatomy)?;
+            place_in_grasp_slots(player_id, &new_id, plan, ctx.objects)?;
+        }
+        LocationRef::BodySlot(holder, slot) => {
+            placed.location = Some(holder.clone());
+            placed.set_carried_slot(Some(slot));
+            ctx.objects.insert(new_id.clone(), placed);
+            let mut holder_obj = ctx.objects.get(holder).ok_or(MoveError::NotCarried)?.clone();
+            holder_obj.set_body_slot(slot, Some(new_id.clone()));
+            ctx.objects.insert(holder.clone(), holder_obj);
+        }
+        _ => {
+            return Err(MoveError::InvalidTarget(
+                "Partial stack moves support room and inventory only.".into(),
+            ));
+        }
+    }
+
+    Ok((units, new_id))
+}
+
 /// Remove an item from its source location. `full_detach` clears body slots; partial keeps them.
 fn detach_from_source(
     ctx: &mut MoveContext<'_>,
@@ -557,11 +634,14 @@ fn verify_at_source(
 }
 
 /// Move an object from `src` to `dst` with validation and optional dirty tracking.
+///
+/// `requested_units` limits stackable transfers; `None` moves the full stack.
 pub fn move_object(
     ctx: &mut MoveContext<'_>,
     obj_id: &ObjectId,
     src: LocationRef,
     dst: LocationRef,
+    requested_units: Option<u32>,
 ) -> Result<MoveResult, MoveError> {
     if let (LocationRef::Container(c, _), LocationRef::Container(d, _)) = (&src, &dst) {
         if c == d {
@@ -582,7 +662,9 @@ pub fn move_object(
         .ok_or_else(|| MoveError::NotFound(obj_id.to_string()))?
         .clone();
 
-    let units_transferred = if let LocationRef::Container(container_id, _) = &dst {
+    let (units_transferred, split_object_id) = if let LocationRef::Container(container_id, _) =
+        &dst
+    {
         let container = ctx
             .objects
             .get(container_id)
@@ -593,20 +675,44 @@ pub fn move_object(
             return Err(fit_failure_reason(&container, &item, ctx.objects));
         }
         validate_player_carry_weight(&item, obj_id, &dst, fit.units, ctx.objects)?;
-        Some(place_in_container(ctx, obj_id, container_id, &src, &fit)?)
+        let units = place_in_container(ctx, obj_id, container_id, &src, &fit)?;
+        (Some(units), None)
     } else {
-        let units = if item.is_stackable() {
+        let stack_count = if item.is_stackable() {
             item.stack_count()
         } else {
             1
         };
-        validate_player_carry_weight(&item, obj_id, &dst, units, ctx.objects)?;
-        remove_from_source(ctx, obj_id, &src)?;
-        apply_destination(ctx, obj_id, &dst)?;
-        None
+        let units_to_move = match requested_units {
+            Some(n) => n.min(stack_count),
+            None => stack_count,
+        };
+        if units_to_move == 0 {
+            return Err(MoveError::InvalidTarget(
+                "You must move at least one.".into(),
+            ));
+        }
+        validate_player_carry_weight(&item, obj_id, &dst, units_to_move, ctx.objects)?;
+
+        let (transferred, split_id) = if item.is_stackable() && units_to_move < stack_count {
+            partial_stack_transfer(ctx, obj_id, &src, &dst, units_to_move)?
+        } else {
+            remove_from_source(ctx, obj_id, &src)?;
+            apply_destination(ctx, obj_id, &dst)?;
+            (units_to_move, obj_id.clone())
+        };
+        let extra = if split_id != *obj_id {
+            Some(split_id)
+        } else {
+            None
+        };
+        (Some(transferred), extra)
     };
 
     let mut touched = vec![obj_id.clone()];
+    if let Some(split_id) = split_object_id {
+        touched.push(split_id);
+    }
     if let Some(id) = src.holder_id() {
         touched.push(id.clone());
     }
@@ -617,7 +723,9 @@ pub fn move_object(
     }
     for obj in ctx.objects.values() {
         if obj.location.as_ref() == dst.holder_id() {
-            touched.push(obj.id.clone());
+            if !touched.contains(&obj.id) {
+                touched.push(obj.id.clone());
+            }
         }
     }
 
@@ -642,9 +750,16 @@ pub fn move_to_room(
     ctx: &mut MoveContext<'_>,
     obj_id: &ObjectId,
     room_id: &ObjectId,
+    requested_units: Option<u32>,
 ) -> Result<MoveResult, MoveError> {
     let src = resolve_location(obj_id, ctx.objects).ok_or(MoveError::NotAtSource)?;
-    move_object(ctx, obj_id, src, LocationRef::Room(room_id.clone()))
+    move_object(
+        ctx,
+        obj_id,
+        src,
+        LocationRef::Room(room_id.clone()),
+        requested_units,
+    )
 }
 
 /// Convenience: move into a player's inventory (grasp slots).
@@ -652,9 +767,16 @@ pub fn move_to_inventory(
     ctx: &mut MoveContext<'_>,
     obj_id: &ObjectId,
     player_id: &ObjectId,
+    requested_units: Option<u32>,
 ) -> Result<MoveResult, MoveError> {
     let src = resolve_location(obj_id, ctx.objects).ok_or(MoveError::NotAtSource)?;
-    move_object(ctx, obj_id, src, LocationRef::Inventory(player_id.clone()))
+    move_object(
+        ctx,
+        obj_id,
+        src,
+        LocationRef::Inventory(player_id.clone()),
+        requested_units,
+    )
 }
 
 /// Convenience: move into a container, optionally limiting stackable quantity.
@@ -828,6 +950,7 @@ mod tests {
             &coin_id,
             LocationRef::Room(room_id.clone()),
             LocationRef::Inventory(player_id.clone()),
+            None,
         )
         .unwrap();
 
@@ -837,6 +960,53 @@ mod tests {
                 || player.body_slot_item("right_hand").is_some()
         );
         assert!(!dirty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn partial_stack_take_from_room() {
+        let (anatomy, player_id, room_id, mut objects) = setup().await;
+
+        let mut bars = Object {
+            id: ObjectId::new("item:bars-001"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        bars.apply_stackable_role(&crate::object::StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        let bars_id = bars.id.clone();
+        objects.insert(bars_id.clone(), bars);
+
+        let mut ctx = MoveContext {
+            objects: &mut objects,
+            anatomy: Some(&anatomy),
+            hooks: MoveHooks::default(),
+            dirty: None,
+        };
+
+        let result = move_object(
+            &mut ctx,
+            &bars_id,
+            LocationRef::Room(room_id.clone()),
+            LocationRef::Inventory(player_id.clone()),
+            Some(3),
+        )
+        .unwrap();
+
+        assert_eq!(result.units_transferred, Some(3));
+        let ground = objects.get(&bars_id).unwrap();
+        assert_eq!(ground.stack_count(), 7);
+        assert_eq!(ground.location.as_ref(), Some(&room_id));
     }
 
     #[tokio::test]
@@ -866,6 +1036,7 @@ mod tests {
             &boulder.id,
             LocationRef::Room(room_id.clone()),
             LocationRef::Inventory(player_id.clone()),
+            None,
         )
         .unwrap_err();
 
@@ -904,6 +1075,7 @@ mod tests {
             &heavy_id,
             LocationRef::Room(room_id.clone()),
             LocationRef::Inventory(player_id.clone()),
+            None,
         )
         .unwrap();
 
@@ -912,6 +1084,7 @@ mod tests {
             &heavy_id,
             LocationRef::Inventory(player_id.clone()),
             LocationRef::Container(backpack_id, None),
+            None,
         )
         .unwrap_err();
         assert_eq!(err, MoveError::WeightExceeded);
@@ -967,6 +1140,7 @@ mod tests {
             &coins_id,
             LocationRef::BodySlot(player_id.clone(), "right_hand".to_string()),
             LocationRef::Container(purse_id.clone(), None),
+            None,
         )
         .unwrap();
 
@@ -1009,6 +1183,7 @@ mod tests {
             &coin_id,
             LocationRef::Room(room_id),
             LocationRef::Inventory(player_id),
+            None,
         )
         .unwrap();
 

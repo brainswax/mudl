@@ -637,7 +637,7 @@ async fn main() -> Result<()> {
                     }
                     "drop" => {
                         if parts.len() < 2 {
-                            println!("Usage: drop <item>");
+                            println!("Usage: drop [count] <item>");
                             continue;
                         }
                         let item_name = parts[1..].join(" ");

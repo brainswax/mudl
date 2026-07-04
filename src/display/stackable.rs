@@ -22,6 +22,70 @@ pub fn pluralize_item_name(name: &str) -> String {
     }
 }
 
+fn singularize_word(word: &str) -> String {
+    if word.is_empty() {
+        return word.to_string();
+    }
+    let lower = word.to_lowercase();
+    if lower.ends_with("ies") && word.len() > 3 {
+        return format!("{}y", &word[..word.len() - 3]);
+    }
+    if lower.ends_with("es")
+        && (lower.ends_with("ches") || lower.ends_with("shes") || lower.ends_with("xes"))
+        && word.len() > 2
+    {
+        return word[..word.len() - 2].to_string();
+    }
+    if lower.ends_with('s') && !lower.ends_with("ss") && word.len() > 1 {
+        return word[..word.len() - 1].to_string();
+    }
+    word.to_string()
+}
+
+/// Whether a plural-looking name is a fixed item title (e.g. `Boots`), not a count phrase.
+fn is_fixed_plural_item_name(name: &str) -> bool {
+    name_looks_plural(name)
+        && !name.contains(' ')
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_uppercase())
+}
+
+/// Label for a single unit in player messages (`gold bar`, `coin`, `Boots`).
+pub fn display_name_for_single_unit(name: &str) -> String {
+    if !name_looks_plural(name) || is_fixed_plural_item_name(name) {
+        return name.to_string();
+    }
+    singularize_item_name(name)
+}
+
+/// Singular form for lookup (`gold bars` → `gold bar`).
+pub fn singularize_item_name(name: &str) -> String {
+    if !name_looks_plural(name) {
+        return name.to_string();
+    }
+    if let Some((head, tail)) = name.rsplit_once(' ') {
+        format!("{head} {}", singularize_word(tail))
+    } else {
+        singularize_word(name)
+    }
+}
+
+/// Name variants for target resolution (singular and plural).
+pub fn item_lookup_variants(name: &str) -> Vec<String> {
+    let mut variants = vec![name.to_string()];
+    let singular = singularize_item_name(name);
+    if singular != name {
+        variants.push(singular);
+    }
+    let plural = pluralize_item_name(name);
+    if plural != name && !variants.iter().any(|v| v == &plural) {
+        variants.push(plural);
+    }
+    variants
+}
+
 fn pluralize_word(word: &str) -> String {
     if word.is_empty() {
         return word.to_string();
@@ -93,6 +157,19 @@ pub fn format_examine_stack_weight(obj: &Object) -> Option<String> {
     None
 }
 
+/// Natural message for take/drop of `units` (`pick up`, `drop`, …).
+pub fn format_stack_transfer_message(verb: &str, item: &Object, units: u32) -> String {
+    if units == 1 {
+        let label = display_name_for_single_unit(&item.name);
+        return format!("You {verb} {} {label}.", indefinite_article(&label));
+    }
+    let mut snap = item.clone();
+    if item.is_stackable() {
+        snap.set_stack_count(units);
+    }
+    format!("You {verb} {}.", stack_quantity_phrase(&snap))
+}
+
 /// Examine fallback when there is no description or weight line.
 pub fn format_examine_stackable_fallback(obj: &Object) -> String {
     if obj.is_stackable() && obj.stack_count() > 1 {
@@ -123,6 +200,13 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         }
+    }
+
+    #[test]
+    fn display_name_for_single_unit_handles_boots_and_coins() {
+        assert_eq!(display_name_for_single_unit("Boots"), "Boots");
+        assert_eq!(display_name_for_single_unit("gold bar"), "gold bar");
+        assert_eq!(display_name_for_single_unit("coins"), "coin");
     }
 
     #[test]
