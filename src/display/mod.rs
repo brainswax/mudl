@@ -15,9 +15,10 @@ pub mod self_examine;
 pub mod weight;
 pub use carried::format_look_self_summary;
 pub use container::{
-    container_content_labels, format_container_contents_builder, format_inside_container,
-    format_stackable_label,
+    container_content_labels, format_container_contents_builder, format_examine_container_player,
+    format_inside_container, format_stackable_label,
 };
+pub use weight::format_examine_item_player;
 pub use body_plan::{creature_definition, format_body_detail_player};
 pub use examine::{
     builder_object_type, format_builder_examine_entity, format_builder_examine_room,
@@ -417,8 +418,8 @@ mod tests {
         let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let output = item.describe(&ctx);
 
-        assert!(output.contains("20 coins"));
         assert!(output.contains("Gold coins glint"));
+        assert!(output.contains("They weigh"));
         assert!(!output.contains("id:"));
         assert!(!output.contains("properties:"));
         assert!(!output.contains("flip"));
@@ -610,7 +611,10 @@ mod tests {
 
         let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let examine_out = purse.describe(&examine_ctx);
-        assert!(examine_out.contains("The purse can hold up to 10 weight."));
+        assert!(examine_out.contains("Inside the purse: 2 coins"));
+        assert!(examine_out.contains("a capacity of 1/3"));
+        assert!(examine_out.contains("is carrying 2/10 weight"));
+        assert!(!examine_out.starts_with("purse"));
     }
 
     #[test]
@@ -665,7 +669,10 @@ mod tests {
 
         let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
         let output = purse.describe(&ctx);
-        assert!(output.contains("The purse can hold up to 10 weight."));
+        assert_eq!(
+            output,
+            "Inside the purse: 2 coins\nThe purse has a capacity of 1/3 and is carrying 2/10 weight."
+        );
     }
 
     #[test]

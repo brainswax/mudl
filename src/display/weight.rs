@@ -14,54 +14,12 @@ fn player_capacity_message(max: i64) -> String {
     }
 }
 
-fn container_capacity_message(name: &str, max: i64) -> String {
-    if is_unlimited_weight(max) {
-        format!("The {name} has unlimited carrying capacity.")
-    } else {
-        format!("The {name} can hold up to {max} weight.")
-    }
-}
-
-/// In-game weight line for `examine` (player mode).
-pub fn format_weight_examine_player(obj: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
-    if obj.object_type() == "player" {
-        let mut parts = Vec::new();
-        let carried = player_carried_weight(obj, objects);
-        if carried > 0.0 {
-            parts.push(format!("You are carrying {carried} weight."));
-        }
-        if let Some(max) = obj.get_int_property("max_weight") {
-            parts.push(player_capacity_message(max));
-        }
-        return if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join(" "))
-        };
-    }
-
-    if obj.is_container() {
-        let current = obj.contents_weight(objects);
-        let name = obj.name.to_lowercase();
-        let mut parts = Vec::new();
-        if current > 0.0 || obj.container_max_weight().is_some() {
-            parts.push(format!(
-                "The {name} holds {} weight.",
-                format_weight_amount(current)
-            ));
-        }
-        if let Some(max) = obj.container_max_weight() {
-            parts.push(container_capacity_message(&name, max));
-        }
-        return if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join(" "))
-        };
-    }
-
+fn format_item_weight_line(obj: &Object) -> Option<String> {
     if obj.is_stackable() && obj.stack_count() > 1 {
-        return Some(format!("They weigh {}.", format_weight_amount(obj.weight())));
+        return Some(format!(
+            "They weigh {}.",
+            format_weight_amount(obj.weight())
+        ));
     }
 
     let w = obj.weight();
@@ -70,6 +28,44 @@ pub fn format_weight_examine_player(obj: &Object, objects: &HashMap<ObjectId, Ob
     }
 
     None
+}
+
+/// Player `examine` output for a non-container item (no redundant name line).
+pub fn format_examine_item_player(obj: &Object) -> String {
+    let mut lines = Vec::new();
+    if let Some(desc) = obj.get_description() {
+        lines.push(desc);
+    }
+    if let Some(weight) = format_item_weight_line(obj) {
+        lines.push(weight);
+    }
+    if lines.is_empty() {
+        lines.push(crate::display::format_stackable_label(obj));
+    }
+    lines.join("\n")
+}
+
+/// In-game weight line for legacy call sites (players only).
+pub fn format_weight_examine_player(obj: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
+    if obj.object_type() != "player" {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let carried = player_carried_weight(obj, objects);
+    if carried > 0.0 {
+        parts.push(format!(
+            "You are carrying {} weight.",
+            format_weight_amount(carried)
+        ));
+    }
+    if let Some(max) = obj.get_int_property("max_weight") {
+        parts.push(player_capacity_message(max));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
 }
 
 /// Builder weight lines for `@examine`.
@@ -129,7 +125,7 @@ pub fn format_weight_examine_builder(
 mod tests {
     use super::*;
     use crate::mudl::load_module;
-    use crate::object::{ContainerSpec, PermissionFlags, StackableSpec, UNLIMITED_WEIGHT};
+    use crate::object::{PermissionFlags, StackableSpec};
 
     fn bare(id: &str, name: &str) -> Object {
         Object {
@@ -149,35 +145,6 @@ mod tests {
     }
 
     #[test]
-    fn player_examine_container_shows_capacity_message() {
-        let mut purse = bare("item:purse-001", "purse");
-        purse.set_property_int("weight", 1);
-        purse.apply_container_role(&ContainerSpec {
-            capacity: 3,
-            max_weight: Some(10),
-            max_volume: None,
-            wearable: false,
-            wear_slot: None,
-        });
-
-        let mut coins = bare("item:coins-001", "coins");
-        coins.set_property_int("weight", 1);
-        coins.apply_stackable_role(&StackableSpec {
-            count: 2,
-            max_stack: 99,
-        });
-        purse.set_property_list("contents", vec![coins.id.clone()]);
-
-        let mut objects = HashMap::new();
-        objects.insert(coins.id.clone(), coins);
-        objects.insert(purse.id.clone(), purse.clone());
-
-        let line = format_weight_examine_player(&purse, &objects).unwrap();
-        assert!(line.contains("The purse holds 2 weight."));
-        assert!(line.contains("The purse can hold up to 10 weight."));
-    }
-
-    #[test]
     fn player_examine_shows_carry_capacity() {
         let anatomy = load_module("modules/default")
             .unwrap()
@@ -193,19 +160,22 @@ mod tests {
     }
 
     #[test]
-    fn unlimited_container_examine_message() {
-        let mut bag = bare("item:bag-001", "bag");
-        bag.apply_container_role(&ContainerSpec {
-            capacity: 10,
-            max_weight: Some(UNLIMITED_WEIGHT),
-            max_volume: None,
-            wearable: false,
-            wear_slot: None,
+    fn examine_item_shows_description_and_weight() {
+        let mut coins = bare("item:coins-001", "coins");
+        coins.set_property_int("weight", 1);
+        coins.apply_stackable_role(&StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        coins.add_property(crate::object::Property {
+            name: "description".to_string(),
+            value: crate::object::Value::String("Gold coins glint.".to_string()),
+            permissions: PermissionFlags::EVERYONE,
+            behavior: None,
         });
 
-        let line = format_weight_examine_player(&bag, &HashMap::new()).unwrap();
-        assert!(line.contains("The bag holds 0 weight."));
-        assert!(line.contains("unlimited carrying capacity"));
+        let output = format_examine_item_player(&coins);
+        assert_eq!(output, "Gold coins glint.\nThey weigh 20.");
     }
 
     #[test]

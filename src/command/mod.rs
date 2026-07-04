@@ -1007,7 +1007,8 @@ mod tests {
         let player_ctx =
             DisplayContext::new(owner.clone(), DisplayMode::Player).with_objects(objects.clone());
         let player_out = coins.describe(&player_ctx);
-        assert!(player_out.contains("10 coins"));
+        assert!(player_out.contains("Shiny."));
+        assert!(player_out.contains("They weigh"));
         assert!(!player_out.contains("id:"));
         assert!(!player_out.contains("properties:"));
 

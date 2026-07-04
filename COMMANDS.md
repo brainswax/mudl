@@ -19,7 +19,15 @@ Command reference for the MUDL REPL (MVP). Player verbs use plain names; wizard/
 You are holding a Rusty Sword and Wooden Sword and wearing a backpack.
 ```
 
-Does **not** show: weight, capacity, hand slots, nested container contents, properties, or IDs.
+Does **not** show: weight, capacity, hand slots, or properties/IDs. Containers list direct contents only.
+
+**`examine backpack` example:**
+```
+Inside the backpack: 20 coins
+The backpack has a capacity of 1/20 and is carrying 20/100 weight.
+```
+
+Item examine leads with description and weight when present — no redundant name line.
 
 Uses `DisplayFlags::BRIEF` internally.
 

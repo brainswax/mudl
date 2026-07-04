@@ -455,14 +455,16 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
         return crate::display::format_examine_self(obj, &ctx.objects, &ctx.anatomy);
     }
 
+    if !brief {
+        if obj.is_container() {
+            return crate::display::format_examine_container_player(obj, &ctx.objects);
+        }
+        return crate::display::format_examine_item_player(obj);
+    }
+
     let mut lines = vec![crate::display::format_stackable_label(obj)];
     if let Some(desc) = obj.get_description() {
         lines.push(desc);
-    }
-    if !brief {
-        if let Some(weight) = crate::display::format_weight_examine_player(obj, &ctx.objects) {
-            lines.push(weight);
-        }
     }
     if obj.is_container() {
         let inside = crate::display::format_inside_container(obj, &ctx.objects);
@@ -572,10 +574,18 @@ mod tests {
         let mut objects = HashMap::new();
         objects.insert(coins.id.clone(), coins.clone());
 
-        let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
-        let output = coins.describe(&ctx);
-        assert!(output.starts_with("20 coins"));
-        assert!(output.contains("Shiny gold coins."));
+        let look_ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_objects(objects.clone())
+            .with_flags(DisplayFlags::BRIEF);
+        let look_out = coins.describe(&look_ctx);
+        assert!(look_out.starts_with("20 coins"));
+        assert!(look_out.contains("Shiny gold coins."));
+
+        let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let examine_out = coins.describe(&examine_ctx);
+        assert!(examine_out.contains("Shiny gold coins."));
+        assert!(examine_out.contains("They weigh 20."));
+        assert!(!examine_out.starts_with("20 coins"));
     }
 
     #[test]
