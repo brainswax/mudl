@@ -32,7 +32,18 @@ Uses `DisplayFlags::BRIEF` internally.
 Includes everything `look` shows, plus:
 
 - Weight and capacity (`You can carry up to 100 weight.`, `The purse can hold up to 10 weight.`; `-1` = unlimited)
-- On `examine self`: per-hand grasp detail, worn placement, total carried weight
+- On `examine self`: per-hand grasp detail, worn placement, total carried weight, and body plan summary (grasp/wear/limb slots, carry capacity)
+- On `examine human` (or any `@creature` name): body plan slot listing when no object with that name exists
+
+**Parent / prototype inspection** (inherited defaults from the prototype object):
+
+| Form | Example |
+|------|---------|
+| `examine <object>.parent` | `examine coins.parent` |
+| `examine #parent` | Parent of self (creature body plan for players without a prototype object) |
+| `examine <object> parent` | Same as dot form |
+
+Shows inherited properties from the prototype (`weight`, `description`, role flags, etc.). Players without a `prototype` object fall back to their creature body plan (`examine #parent` → human anatomy).
 
 Does **not** show: object IDs, raw properties, verb source, or JSON.
 
@@ -43,6 +54,10 @@ Does **not** show: object IDs, raw properties, verb source, or JSON.
 Requires wizard permission (stubbed `true` in REPL).
 
 Shows: short ID, owner, location, weight breakdown (`Weight: 20 (2 × 10)`, `Contents weight: 7/10`), properties, verbs, container contents summary.
+
+**Parent / prototype:** `@examine coins parent` or `@examine coins.parent` — categorized view of the prototype object plus an `inherited:` section (local overrides marked).
+
+**Body plans:** `@examine human` — slot definitions from `creatures.mudl`. `@examine self` (or any player) adds an `anatomy:` section listing each slot, type, capacity, and current occupant.
 
 ### `@dump [target]`
 

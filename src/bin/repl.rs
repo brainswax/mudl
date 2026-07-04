@@ -10,11 +10,13 @@ use mudl::command::{
     soft_delete_object, take_from_location, undelete_object, wizard_access_denied,
 };
 use mudl::display::{
-    narrate_create, narrate_field_set, narrate_field_unset, narrate_go, narrate_loaded,
-    narrate_module_bundled, narrate_module_reloaded, narrate_no_exit, narrate_no_location,
-    narrate_no_location_builder, narrate_not_in_cache, narrate_saved, narrate_target_not_found,
-    narrate_wizard_not_found, resolve_object, resolve_target, Describable, DisplayContext,
-    DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
+    format_examine_output, format_no_parent_message, narrate_create, narrate_field_set,
+    narrate_field_unset, narrate_go, narrate_loaded, narrate_module_bundled,
+    narrate_module_reloaded, narrate_no_exit, narrate_no_location, narrate_no_location_builder,
+    narrate_not_in_cache, narrate_saved, narrate_target_not_found, narrate_wizard_not_found,
+    parse_examine_request, resolve_examine_request, resolve_object, resolve_target, Describable,
+    DisplayContext, DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope,
+    TargetResolution,
 };
 use mudl::inventory::{
     describe_inventory, drop_item, parse_put_args, put_item, remove_item, wear_item, wield_item,
@@ -106,6 +108,70 @@ fn render_object(obj: &Object, ctx: &DisplayContext, detailed: bool, debug: bool
         obj.describe(ctx)
     };
     println!("{output}");
+}
+
+async fn run_examine_command(
+    args: &[&str],
+    mode: DisplayMode,
+    current_location: &Option<ObjectId>,
+    observer: &ObjectId,
+    anatomy: &mudl::mudl::AnatomyRegistry,
+    persistence: &SqlitePersistence,
+    cache: &mut HashMap<ObjectId, Object>,
+    builder: bool,
+) -> Result<(), anyhow::Error> {
+    let request = parse_examine_request(args);
+    let objects = load_all_objects(persistence, cache).await?;
+    let ctx = DisplayContext::new(observer.clone(), mode)
+        .with_objects(objects)
+        .with_anatomy(anatomy.clone());
+
+    match resolve_examine_request(&request, anatomy, observer, current_location.as_ref(), &ctx.objects)
+    {
+        Ok(resolution) => {
+            if let ExamineResolution::Prototype { prototype_id, .. } = &resolution {
+                if !cache.contains_key(prototype_id) {
+                    if let Some(proto) = persistence.load_object(prototype_id).await? {
+                        cache.insert(prototype_id.clone(), proto);
+                    }
+                }
+            }
+            let objects = load_all_objects(persistence, cache).await?;
+            let ctx = ctx.with_objects(objects);
+            if let Some(output) = format_examine_output(&resolution, &ctx) {
+                println!("{output}");
+            } else if let ExamineResolution::Object(id) = resolution {
+                if let Some(obj) = ctx.objects.get(&id) {
+                    render_object(obj, &ctx, builder, false);
+                } else {
+                    println!("{}", narrate_target_not_found(args.first().unwrap_or(&"target")));
+                }
+            }
+        }
+        Err(ExamineError::Ambiguous(msg)) => println!("{msg}"),
+        Err(ExamineError::NoParent(id)) => {
+            if let Some(obj) = ctx.objects.get(&id) {
+                println!("{}", format_no_parent_message(obj));
+            } else {
+                println!("{}", narrate_target_not_found(args.first().unwrap_or(&"target")));
+            }
+        }
+        Err(ExamineError::NotFound) => {
+            if args.is_empty() {
+                println!(
+                    "{}",
+                    if builder {
+                        narrate_no_location_builder("Try '@examine <target>' or '@examine here'.")
+                    } else {
+                        narrate_no_location()
+                    }
+                );
+            } else {
+                println!("{}", narrate_target_not_found(args[0]));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -224,10 +290,10 @@ async fn main() -> Result<()> {
                             "  look [target]  (l)          - immersive view (current room if no target)"
                         );
                         println!(
-                            "  examine [target]  (x)       - in-game close look at a target"
+                            "  examine [target]  (x)       - in-game close look (try .parent, #parent)"
                         );
                         println!(
-                            "  @examine [target]           - wizard: IDs, properties, verbs"
+                            "  @examine [target] [parent]  - wizard: properties, anatomy, prototype"
                         );
                         println!("  @dump [target]              - wizard: full JSON dump of an object");
                         println!(
@@ -364,99 +430,37 @@ async fn main() -> Result<()> {
                         }
                     }
                     "examine" | "x" => {
-                        let target = parts.get(1).copied();
-                        match resolve_and_load(
-                            target,
+                        if let Err(e) = run_examine_command(
+                            &parts[1..],
+                            DisplayMode::Player,
                             &current_location,
                             &default_owner,
+                            &active_anatomy,
                             &persistence,
                             &mut cache,
+                            false,
                         )
                         .await
                         {
-                            Ok(TargetResolution::Found(id)) => {
-                                let objects = load_all_objects(&persistence, &cache).await?;
-                                let ctx =
-                                    DisplayContext::new(default_owner.clone(), DisplayMode::Player)
-                                        .with_objects(objects)
-                                        .with_anatomy(active_anatomy.clone());
-                                if let Some(obj) = cache.get(&id) {
-                                    render_object(obj, &ctx, false, false);
-                                } else if let Some(target) = parts.get(1) {
-                                    println!("{}", narrate_target_not_found(target));
-                                } else {
-                                    println!("{}", narrate_no_location());
-                                }
-                            }
-                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
-                            Ok(TargetResolution::NotFound) => {
-                                if parts.get(1).is_some() {
-                                    println!(
-                                        "{}",
-                                        narrate_target_not_found(parts.get(1).unwrap())
-                                    );
-                                } else {
-                                    println!("{}", narrate_no_location());
-                                }
-                            }
-                            Err(e) => {
-                                error!(error = %e, "examine failed");
-                                println!("You study it, but learn nothing new.");
-                            }
+                            error!(error = %e, "examine failed");
+                            println!("You study it, but learn nothing new.");
                         }
                     }
                     "@examine" => {
-                        let target = parts.get(1).copied();
-                        match resolve_and_load(
-                            target,
+                        if let Err(e) = run_examine_command(
+                            &parts[1..],
+                            DisplayMode::Builder,
                             &current_location,
                             &default_owner,
+                            &active_anatomy,
                             &persistence,
                             &mut cache,
+                            true,
                         )
                         .await
                         {
-                            Ok(TargetResolution::Found(id)) => {
-                                let objects = load_all_objects(&persistence, &cache).await?;
-                                let ctx = DisplayContext::new(
-                                    default_owner.clone(),
-                                    DisplayMode::Builder,
-                                )
-                                .with_objects(objects)
-                                .with_anatomy(active_anatomy.clone());
-                                if let Some(obj) = cache.get(&id) {
-                                    render_object(obj, &ctx, true, false);
-                                } else if let Some(target) = parts.get(1) {
-                                    println!("{}", narrate_target_not_found(target));
-                                } else {
-                                    println!(
-                                        "{}",
-                                        narrate_no_location_builder(
-                                            "Try '@examine <target>' or '@examine here'."
-                                        )
-                                    );
-                                }
-                            }
-                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
-                            Ok(TargetResolution::NotFound) => {
-                                if parts.get(1).is_some() {
-                                    println!(
-                                        "{}",
-                                        narrate_target_not_found(parts.get(1).unwrap())
-                                    );
-                                } else {
-                                    println!(
-                                        "{}",
-                                        narrate_no_location_builder(
-                                            "Try '@examine <target>' or '@examine here'."
-                                        )
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                error!(error = %e, "@examine failed");
-                                println!("The internal details remain obscured.");
-                            }
+                            error!(error = %e, "@examine failed");
+                            println!("The internal details remain obscured.");
                         }
                     }
                     "@dump" => {

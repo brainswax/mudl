@@ -126,7 +126,28 @@ status:
 verbs: (none)
 ```
 
-Rooms use `state.present` instead of `contents`. Players show `state.body_slots` and `status.carried_weight`.
+Rooms use `state.present` instead of `contents`. Players show `state.body_slots`, `anatomy:` (slot definitions from the creature body plan with occupancy), and `status.carried_weight`.
+
+### Parent / prototype inspection
+
+| Command | Shows |
+|---------|--------|
+| `examine <object>.parent` | Player-facing inherited properties from prototype |
+| `examine #parent` | Parent of self; players without a prototype object show their creature body plan |
+| `@examine <object> parent` | Builder view: `prototype of:`, `inherited:`, prototype `properties` / `state` / `verbs` |
+
+Inherited keys match those copied at creation (`weight`, `volume`, role flags, `description`, etc.). Local overrides on the instance are marked `(overridden locally)`.
+
+### Body plan inspection
+
+Creature definitions live in MUDL (`@creature human` in `creatures.mudl`), loaded into `AnatomyRegistry`. Players store the plan name in the `creature` property (set from `@player-template` at spawn).
+
+| Command | Shows |
+|---------|--------|
+| `examine human` | Player-facing slot groups (grasp, wear, limbs) and carry capacity |
+| `examine self` | Carried summary + body plan line (`Body (human): 2 grasp slots …`) |
+| `@examine human` | `type: body_plan` with per-slot `type`, `capacity`, `hands` |
+| `@examine <player>` | Adds `anatomy:` section with slot occupancy |
 
 ## Permission Model
 

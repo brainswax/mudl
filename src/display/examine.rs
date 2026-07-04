@@ -2,14 +2,31 @@
 
 use std::collections::HashMap;
 
+use crate::mudl::BodyPlan;
 use crate::object::{
     format_weight_amount, is_state_property, is_unlimited_weight, player_carried_weight, Object,
     ObjectId,
 };
 
-use super::{
-    format_property_value, location_label, owner_label, short_id, DisplayContext,
-};
+use super::body_plan::{format_anatomy_section, format_body_plan_summary};
+use super::{format_property_value, location_label, owner_label, short_id, DisplayContext};
+
+/// Config properties copied from a prototype at object creation.
+pub const PROTOTYPE_PROPERTY_KEYS: &[&str] = &[
+    "weight",
+    "volume",
+    "is_container",
+    "is_wearable",
+    "is_pocketable",
+    "capacity",
+    "max_weight",
+    "max_volume",
+    "wear_slot",
+    "hand_slot",
+    "stackable",
+    "max_stack",
+    "description",
+];
 
 /// Preferred ordering for common config properties in `@examine`.
 const CONFIG_PROPERTY_ORDER: &[&str] = &[
@@ -250,6 +267,99 @@ pub fn format_builder_examine_room(obj: &Object, ctx: &DisplayContext) -> String
     lines.join("\n")
 }
 
+fn prototype_display_name(proto: &Object, objects: &HashMap<ObjectId, Object>) -> String {
+    if let Some(loc) = &proto.location {
+        if let Some(holder) = objects.get(loc) {
+            return format!("{} ({})", proto.name, short_id(&holder.id));
+        }
+    }
+    format!("{} ({})", proto.name, short_id(&proto.id))
+}
+
+fn format_prototype_property_line(
+    key: &str,
+    proto: &Object,
+    instance: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<String> {
+    let inherited = proto.resolve_inherited_property(key, |id| objects.get(id).cloned())?;
+    let local = instance.get_property(key);
+    let value = format_property_value(&inherited.value, objects);
+    if local.is_some() {
+        Some(format!("{key}: {value} (overridden locally)"))
+    } else {
+        Some(format!("{key}: {value}"))
+    }
+}
+
+/// Player-facing parent/prototype inspection (`examine coins.parent`).
+pub fn format_prototype_examine_player(
+    instance: &Object,
+    prototype: &Object,
+    ctx: &DisplayContext,
+) -> String {
+    let header = format!(
+        "Parent of {}: {}",
+        instance.name.to_lowercase(),
+        prototype_display_name(prototype, &ctx.objects)
+    );
+    let mut lines = vec![header];
+
+    for key in PROTOTYPE_PROPERTY_KEYS {
+        if let Some(line) =
+            format_prototype_property_line(key, prototype, instance, &ctx.objects)
+        {
+            lines.push(line);
+        }
+    }
+
+    if lines.len() == 1 {
+        lines.push("(no inherited properties defined on prototype)".to_string());
+    }
+    lines.join("\n")
+}
+
+/// Builder parent/prototype inspection (`@examine coins parent`).
+pub fn format_prototype_examine_builder(
+    instance: &Object,
+    prototype: &Object,
+    ctx: &DisplayContext,
+) -> String {
+    let mut lines = vec![
+        format!("prototype of: {}", short_id(&instance.id)),
+        format!("name: {}", prototype.name),
+        format!("type: {}", builder_object_type(prototype)),
+        format!("id: {}", short_id(&prototype.id)),
+    ];
+
+    let mut inherited = Vec::new();
+    for key in PROTOTYPE_PROPERTY_KEYS {
+        if let Some(line) =
+            format_prototype_property_line(key, prototype, instance, &ctx.objects)
+        {
+            inherited.push(line);
+        }
+    }
+    push_section(&mut lines, "inherited", &inherited);
+
+    let config = format_config_properties(prototype, &ctx.objects);
+    push_section(&mut lines, "properties", &config);
+
+    let state = format_object_state_entries(prototype, ctx);
+    push_section(&mut lines, "state", &state);
+
+    lines.extend(format_verbs_section(prototype));
+    lines.join("\n")
+}
+
+/// Player-facing body plan line for `examine self` (appended after carried summary).
+pub fn format_player_body_plan_line(player: &Object, plan: &BodyPlan) -> String {
+    let capacity = player
+        .get_int_property("max_weight")
+        .map(|v| v as f64);
+    format_body_plan_summary(plan, capacity)
+}
+
 /// Categorized builder examine for items, players, and other entities.
 pub fn format_builder_examine_entity(obj: &Object, ctx: &DisplayContext) -> String {
     let mut lines = Vec::new();
@@ -262,6 +372,15 @@ pub fn format_builder_examine_entity(obj: &Object, ctx: &DisplayContext) -> Stri
 
     let state = format_object_state_entries(obj, ctx);
     push_section(&mut lines, "state", &state);
+
+    if obj.object_type() == "player" {
+        if let Some(plan_name) = obj.creature_name() {
+            if let Some(plan) = ctx.anatomy.body_plan(&plan_name) {
+                let anatomy = format_anatomy_section(obj, plan, &ctx.objects);
+                push_section(&mut lines, "anatomy", &anatomy);
+            }
+        }
+    }
 
     let status = format_status_entries(obj, &ctx.objects);
     push_section(&mut lines, "status", &status);
@@ -354,6 +473,36 @@ mod tests {
         assert!(output.contains("contents: [coins]"));
         assert!(output.contains("status:"));
         assert!(output.contains("contents_weight: 10/10"));
+    }
+
+    #[test]
+    fn builder_examine_player_shows_anatomy_section() {
+        use crate::mudl::load_module;
+
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let owner = ObjectId::new("player:admin-001");
+        let mut player = bare("player:admin-001", "Admin");
+        player.add_property(crate::object::Property {
+            name: "creature".to_string(),
+            value: crate::object::Value::String("human".to_string()),
+            permissions: crate::object::PermissionFlags::OWNER,
+            behavior: None,
+        });
+        player.set_property_map("body_slots", HashMap::new());
+
+        let ctx = DisplayContext::new(owner, DisplayMode::Builder)
+            .with_objects(HashMap::from([(player.id.clone(), player.clone())]))
+            .with_anatomy(anatomy);
+        let output = format_builder_examine_entity(&player, &ctx);
+
+        assert!(output.contains("anatomy:"));
+        assert!(output.contains("left_hand (grasp"));
+        assert!(output.contains("torso (wear"));
     }
 
     #[test]

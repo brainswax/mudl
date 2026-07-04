@@ -65,7 +65,8 @@ Type `help` at the prompt to see the list of commands at any time.
 | `create <type> <name...>` | Create a new object at your current location  | `create sword Rusty Sword`           |
 | `list`                   | Builder: names in session working memory         | `list`                               |
 | `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
-| `examine [target]` (`x`) | Builder view: properties, verbs, named exits     | `examine`, `examine daisy`           |
+| `examine [target]` (`x`) | In-game detail: weight, body plan, parent view   | `examine self`, `examine human`, `examine coins.parent` |
+| `@examine [target] [parent]` | Wizard: properties, anatomy, prototype chain | `@examine self`, `@examine coins parent` |
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
 | `@create <type> <name...> [key=value...]` | Wizard create with role options | `@create container "Leather Bag" capacity=8 max_weight=40` |
 | `go <dir>`               | Move in a direction from the current room        | `go north`                           |
@@ -98,7 +99,8 @@ MUDL aims for **MOO-like immersion**: player commands speak in narrative prose; 
 | Command | Mode | What you see |
 |---------|------|--------------|
 | `look` / `l`, `take`, `create`, `go`, `inventory`, … | **Player** | Immersive text — names, descriptions, exits, natural inventory. No IDs. |
-| `examine` / `x`, `add_prop`, `add_verb`, `load`, `save`, `list`, … | **Builder** | Contextual detail — owner (as *you* or a name), properties, verbs, exits as place names |
+| `examine` / `x` | **Player** | Weight, capacity, carried gear, body plan summary; `examine <obj>.parent` for prototype properties |
+| `@examine`, `load`, `save`, `list`, `@set`, … | **Builder** | Structured fields — owner, properties, anatomy slots, inherited prototype values |
 | `@dump` | **Debug** | Full JSON serialization of the object |
 
 Technical bootstrap and persistence events log to stderr when `RUST_LOG=info` (or higher). See [LANGUAGE.md](../LANGUAGE.md#player-facing-output) for the full output model and future MUDL customization hooks.

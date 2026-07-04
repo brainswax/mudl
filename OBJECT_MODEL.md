@@ -7,7 +7,8 @@ This document defines the core data structures and rules that power the MUDL wor
 ## Philosophy
 - **Everything is an Object** — rooms, items, players, NPCs, exits, abstract systems, even the world itself.
 - **Composition over inheritance** — capabilities are **roles** (Container, Wearable, Creature, Stackable) stored as properties, composed at creation time via `ObjectFactory` or MUDL `MudlRoleProps`.
-- **Prototype-based inheritance** — objects inherit from a parent (like classic MOO or JavaScript prototypes) for shared defaults and stackable item templates.
+- **Prototype-based inheritance** — objects inherit from a parent (like classic MOO or JavaScript prototypes) for shared defaults and stackable item templates. Inspect with `examine <object>.parent` or `@examine <object> parent`.
+- **Creature body plans** — anatomy slots (grasp, wear, limb) are defined in MUDL (`@creature human`) and referenced by the player's `creature` property. Inspect with `examine human` or `examine #parent` (for self).
 - **Runtime modifiable** — the world can add, change, or remove properties, verbs, and behaviors while running.
 - **Secure by default** — all mutations go through the API Gateway + RBAC checks.
 

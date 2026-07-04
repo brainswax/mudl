@@ -471,6 +471,13 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
             describe_carried(obj, &ctx.objects, &ctx.anatomy)
         };
         lines.push(carried);
+        if !brief {
+            if let Some(plan_name) = obj.body_plan_name() {
+                if let Some(plan) = ctx.anatomy.body_plan(&plan_name) {
+                    lines.push(crate::display::format_player_body_plan_line(obj, plan));
+                }
+            }
+        }
     }
     lines.join("\n")
 }

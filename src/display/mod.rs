@@ -4,9 +4,11 @@ use std::collections::HashMap;
 use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
 
+pub mod body_plan;
 pub mod carried;
 pub mod container;
 pub mod examine;
+pub mod examine_target;
 pub mod narrative;
 pub mod resolve;
 pub mod weight;
@@ -15,8 +17,15 @@ pub use container::{
     container_content_labels, format_container_contents_builder, format_inside_container,
     format_stackable_label,
 };
+pub use body_plan::{creature_definition, format_body_plan_summary};
 pub use examine::{
     builder_object_type, format_builder_examine_entity, format_builder_examine_room,
+    format_player_body_plan_line, format_prototype_examine_builder,
+    format_prototype_examine_player,
+};
+pub use examine_target::{
+    format_examine_output, format_no_parent_message, parse_examine_request, resolve_examine_request,
+    ExamineError, ExamineRequest, ExamineResolution, ExamineTarget,
 };
 pub use narrative::{
     format_property_value, location_label, narrate_create, narrate_create_builder, narrate_go,
@@ -691,6 +700,40 @@ mod tests {
         assert!(output.contains("status:"));
         assert!(output.contains("contents_weight: 0/10"));
         assert!(output.contains("weight: 1"));
+    }
+
+    #[test]
+    fn examine_self_shows_body_plan_summary() {
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let owner = ObjectId::new("player:admin-001");
+        let mut player = Object {
+            id: generate_object_id("player", "admin", 1),
+            name: "Admin".to_string(),
+            aliases: Vec::new(),
+            location: Some(ObjectId::new("room:void-001")),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        player.init_creature_role(anatomy.player_template("default").unwrap());
+
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_anatomy(anatomy);
+        let output = player.describe(&ctx);
+
+        assert!(output.contains("Body (human)"));
+        assert!(output.contains("grasp"));
+        assert!(output.contains("left hand"));
     }
 
     #[test]
