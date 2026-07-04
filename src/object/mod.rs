@@ -385,10 +385,6 @@ impl Object {
     }
 }
 
-fn format_value(value: &Value, objects: &HashMap<ObjectId, Object>) -> String {
-    crate::display::format_property_value(value, objects)
-}
-
 fn format_exits_player(exits: &HashMap<String, ObjectId>) -> String {
     if exits.is_empty() {
         return String::new();
@@ -422,38 +418,6 @@ fn format_contents_player(obj: &Object, ctx: &DisplayContext) -> String {
     } else {
         format!("You see: {}", contents.join("; "))
     }
-}
-
-fn format_properties_builder(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    if obj.properties.is_empty() {
-        return "  (none)".to_string();
-    }
-    let mut names: Vec<&str> = obj.properties.keys().map(String::as_str).collect();
-    names.sort_unstable();
-    names
-        .into_iter()
-        .map(|name| {
-            let prop = &obj.properties[name];
-            format!("  {}: {}", name, format_value(&prop.value, objects))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn format_verbs_builder(obj: &Object) -> String {
-    if obj.verbs.is_empty() {
-        return "  (none)".to_string();
-    }
-    let mut names: Vec<&str> = obj.verbs.keys().map(String::as_str).collect();
-    names.sort_unstable();
-    names
-        .into_iter()
-        .map(|name| {
-            let verb = &obj.verbs[name];
-            format!("  {}: {}", name, verb.code)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn describe_room_player(obj: &Object, ctx: &DisplayContext) -> String {
@@ -507,88 +471,11 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
 }
 
 fn describe_room_builder(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![obj.name.clone()];
-
-    lines.push(format!(
-        "Owner: {}",
-        crate::display::owner_label(&obj.owner, &ctx.observer, &ctx.objects)
-    ));
-
-    if let Some(desc) = obj.get_description() {
-        lines.push(desc);
-    }
-
-    let exits = obj.get_exits();
-    if !exits.is_empty() {
-        let mut dirs: Vec<&str> = exits.keys().map(String::as_str).collect();
-        dirs.sort_unstable();
-        let exit_list: Vec<String> = dirs
-            .into_iter()
-            .map(|dir| {
-                format!(
-                    "{} to {}",
-                    dir,
-                    crate::display::object_name(&exits[dir], &ctx.objects)
-                )
-            })
-            .collect();
-        lines.push(format!("Exits: {}", exit_list.join(", ")));
-    }
-
-    let contents: Vec<String> = obj
-        .contents(&ctx.objects)
-        .into_iter()
-        .map(|item| item.name.clone())
-        .collect();
-    if !contents.is_empty() {
-        lines.push(format!("Present: {}", contents.join(", ")));
-    }
-
-    lines.push("Properties:".to_string());
-    lines.push(format_properties_builder(obj, &ctx.objects));
-    lines.push("Verbs:".to_string());
-    lines.push(format_verbs_builder(obj));
-
-    lines.join("\n")
+    crate::display::format_builder_examine_room(obj, ctx)
 }
 
 fn describe_entity_builder(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![obj.name.clone()];
-
-    lines.push(format!("ID: {}", crate::display::short_id(&obj.id)));
-
-    lines.push(format!(
-        "Owner: {}",
-        crate::display::owner_label(&obj.owner, &ctx.observer, &ctx.objects)
-    ));
-
-    if let Some(loc) = &obj.location {
-        lines.push(format!(
-            "Location: {}",
-            crate::display::location_label(loc, &ctx.objects)
-        ));
-    }
-    if let Some(desc) = obj.get_description() {
-        lines.push(desc);
-    }
-
-    if obj.is_container() {
-        lines.push(crate::display::format_container_contents_builder(
-            obj,
-            &ctx.objects,
-        ));
-    }
-
-    for weight_line in crate::display::format_weight_examine_builder(obj, &ctx.objects) {
-        lines.push(weight_line);
-    }
-
-    lines.push("Properties:".to_string());
-    lines.push(format_properties_builder(obj, &ctx.objects));
-    lines.push("Verbs:".to_string());
-    lines.push(format_verbs_builder(obj));
-
-    lines.join("\n")
+    crate::display::format_builder_examine_entity(obj, ctx)
 }
 
 impl Describable for Object {

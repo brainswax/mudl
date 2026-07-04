@@ -845,8 +845,9 @@ mod tests {
         let builder_ctx =
             DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let examine_out = backpack.describe_detailed(&builder_ctx);
-        assert!(examine_out.contains("Weight: 10"));
-        assert!(examine_out.contains("Contents weight: 0/100"));
+        assert!(examine_out.contains("weight: 10"));
+        assert!(examine_out.contains("contents_weight: 0/100"));
+        assert!(examine_out.contains("type: container"));
     }
 
     #[tokio::test]
@@ -947,14 +948,15 @@ mod tests {
             DisplayContext::new(owner.clone(), DisplayMode::Player).with_objects(objects.clone());
         let player_out = coins.describe(&player_ctx);
         assert!(player_out.contains("10 coins"));
-        assert!(!player_out.contains("ID:"));
-        assert!(!player_out.contains("Properties:"));
+        assert!(!player_out.contains("id:"));
+        assert!(!player_out.contains("properties:"));
 
         let builder_ctx =
             DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let builder_out = coins.describe_detailed(&builder_ctx);
-        assert!(builder_out.contains("ID: coins-001"));
-        assert!(builder_out.contains("Properties:"));
+        assert!(builder_out.contains("id: coins-001"));
+        assert!(builder_out.contains("properties:"));
+        assert!(builder_out.contains("state:"));
         assert!(builder_out.contains("flip"));
     }
 

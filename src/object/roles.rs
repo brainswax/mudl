@@ -192,6 +192,12 @@ impl Object {
             self.set_property_string("wear_slot", slot);
         }
         self.set_property_bool("is_pocketable", false);
+        if self.get_int_property("weight").is_none() {
+            self.set_property_int("weight", 1);
+        }
+        if self.get_int_property("volume").is_none() {
+            self.set_property_int("volume", 1);
+        }
     }
 
     pub fn apply_wearable_role(&mut self, spec: &WearableSpec) {

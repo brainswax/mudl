@@ -6,6 +6,7 @@ use crate::object::{Object, ObjectId};
 
 pub mod carried;
 pub mod container;
+pub mod examine;
 pub mod narrative;
 pub mod resolve;
 pub mod weight;
@@ -13,6 +14,9 @@ pub use carried::format_look_self_summary;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_inside_container,
     format_stackable_label,
+};
+pub use examine::{
+    builder_object_type, format_builder_examine_entity, format_builder_examine_room,
 };
 pub use narrative::{
     format_property_value, location_label, narrate_create, narrate_create_builder, narrate_go,
@@ -277,8 +281,9 @@ mod tests {
         let ctx = DisplayContext::new(owner.clone(), DisplayMode::Builder).with_objects(objects);
         let output = room.describe_detailed(&ctx);
 
-        assert!(output.contains("South Garden"));
-        assert!(output.contains("Owner: you"));
+        assert!(output.contains("name: South Garden"));
+        assert!(output.contains("type: room"));
+        assert!(output.contains("owner: you"));
         assert!(!output.contains("room:garden-001"));
         assert!(!output.contains("player:admin-001"));
     }
@@ -400,8 +405,8 @@ mod tests {
 
         assert!(output.contains("20 coins"));
         assert!(output.contains("Gold coins glint"));
-        assert!(!output.contains("ID:"));
-        assert!(!output.contains("Properties:"));
+        assert!(!output.contains("id:"));
+        assert!(!output.contains("properties:"));
         assert!(!output.contains("flip"));
     }
 
@@ -681,8 +686,8 @@ mod tests {
 
         let ctx = DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let output = purse.describe_detailed(&ctx);
-        assert!(output.contains("Contents weight: 0/10"));
-        assert!(output.contains("Weight: 1"));
+        assert!(output.contains("contents_weight: 0/10"));
+        assert!(output.contains("weight: 1"));
     }
 
     #[test]
@@ -713,9 +718,10 @@ mod tests {
         let ctx = DisplayContext::new(owner.clone(), DisplayMode::Builder).with_objects(objects);
         let output = player.describe_detailed(&ctx);
 
-        assert!(output.contains("Admin"));
-        assert!(output.contains("ID: admin-001"));
-        assert!(output.contains("Owner: you"));
+        assert!(output.contains("name: Admin"));
+        assert!(output.contains("type: player"));
+        assert!(output.contains("id: admin-001"));
+        assert!(output.contains("owner: you"));
         assert!(output.contains("wave"));
         assert!(!output.contains("player:admin-001"));
     }
