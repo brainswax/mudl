@@ -9,9 +9,9 @@ use crate::object::{
     is_unlimited_weight, player_carried_weight, transfer_weight, player_weight_bearer,
     would_exceed_player_max_weight, Object, ObjectId,
 };
-use crate::world::container_fit::{
-    cap_inventory_fit_to_weight, compute_container_fit, compute_inventory_fit,
-    fit_failure_reason, split_stack_id, ContainerFit, InventoryFit,
+use crate::world::stack_transfer::{
+    compute_stack_transfer_plan, cap_stack_transfer_plan_to_weight, fit_failure_reason,
+    split_stack_id, StackTransferPlan,
 };
 use crate::world::dirty::DirtyTracker;
 
@@ -273,18 +273,23 @@ fn inventory_transfer_failure(
     }
 }
 
-fn merge_units_into_grasp_stack(
+fn merge_stack_units(
     ctx: &mut MoveContext<'_>,
     source_id: &ObjectId,
     merge_id: &ObjectId,
     units: u32,
+    src: &LocationRef,
 ) -> Result<(), MoveError> {
     let source = ctx
         .objects
         .get(source_id)
         .ok_or_else(|| MoveError::NotFound(source_id.to_string()))?
         .clone();
-    let stack_count = source.stack_count();
+    let stack_count = if source.is_stackable() {
+        source.stack_count()
+    } else {
+        1
+    };
     if units == 0 || units > stack_count {
         return Err(MoveError::InvalidTarget(
             "Invalid merge quantity.".into(),
@@ -300,6 +305,7 @@ fn merge_units_into_grasp_stack(
     ctx.objects.insert(merge_id.clone(), target);
 
     if units >= stack_count {
+        detach_from_source(ctx, source_id, src, true)?;
         ctx.objects.remove(source_id);
     } else {
         let mut remainder = source;
@@ -309,129 +315,42 @@ fn merge_units_into_grasp_stack(
     Ok(())
 }
 
-fn transfer_stack_to_inventory(
+fn place_new_stack_in_container(
     ctx: &mut MoveContext<'_>,
-    obj_id: &ObjectId,
-    player_id: &ObjectId,
+    source_id: &ObjectId,
     src: &LocationRef,
-    fit: &InventoryFit,
-) -> Result<(u32, ObjectId), MoveError> {
-    let total = fit.total_units();
-    if total == 0 {
-        return Err(MoveError::InvalidTarget(
-            "You must move at least one.".into(),
-        ));
-    }
-
-    let mut primary_id = obj_id.clone();
-
-    if fit.merge_units > 0 {
-        let merge_id = fit
-            .merge_target
-            .as_ref()
-            .ok_or(MoveError::InvalidTarget("No merge target.".into()))?;
-        merge_units_into_grasp_stack(ctx, obj_id, merge_id, fit.merge_units)?;
-        primary_id = merge_id.clone();
-    }
-
-    if fit.new_stack_units > 0 {
-        let Some(source) = ctx.objects.get(obj_id) else {
-            return Ok((total, primary_id));
-        };
-        let stack_count = source.stack_count();
-        if fit.new_stack_units < stack_count {
-            let (_, split_id) = partial_stack_transfer(
-                ctx,
-                obj_id,
-                src,
-                &LocationRef::Inventory(player_id.clone()),
-                fit.new_stack_units,
-            )?;
-            if primary_id == *obj_id {
-                primary_id = split_id;
-            }
-        } else {
-            remove_from_source(ctx, obj_id, src)?;
-            apply_destination(ctx, obj_id, &LocationRef::Inventory(player_id.clone()))?;
-            if primary_id == *obj_id || fit.merge_units == 0 {
-                primary_id = obj_id.clone();
-            }
-        }
-    }
-
-    Ok((total, primary_id))
-}
-
-fn place_in_container(
-    ctx: &mut MoveContext<'_>,
-    item_id: &ObjectId,
     container_id: &ObjectId,
-    src: &LocationRef,
-    fit: &ContainerFit,
-) -> Result<u32, MoveError> {
+    units: u32,
+) -> Result<ObjectId, MoveError> {
     let item = ctx
         .objects
-        .get(item_id)
-        .ok_or_else(|| MoveError::NotFound(item_id.to_string()))?
+        .get(source_id)
+        .ok_or_else(|| MoveError::NotFound(source_id.to_string()))?
         .clone();
     let stack_count = if item.is_stackable() {
         item.stack_count()
     } else {
         1
     };
-    let units = fit.units.min(stack_count);
-    if units == 0 {
-        let container = ctx
-            .objects
-            .get(container_id)
-            .ok_or(MoveError::NotContainer)?
-            .clone();
-        return Err(fit_failure_reason(&container, &item, ctx.objects));
-    }
 
-    let consumes_source = units >= stack_count;
-
-    if let Some(ref merge_id) = fit.merge_target {
-        let target = ctx
-            .objects
-            .get(merge_id)
-            .ok_or_else(|| MoveError::NotFound(merge_id.to_string()))?
-            .clone();
-        let mut target = target;
-        target.set_stack_count(target.stack_count() + units);
-        ctx.objects.insert(merge_id.clone(), target);
-
-        if consumes_source {
-            detach_from_source(ctx, item_id, src, true)?;
-            ctx.objects.remove(item_id);
-        } else {
-            let mut source = item;
-            source.set_stack_count(stack_count - units);
-            ctx.objects.insert(item_id.clone(), source);
-        }
-        return Ok(units);
-    }
-
-    if consumes_source {
-        detach_from_source(ctx, item_id, src, true)?;
-
+    if units >= stack_count {
+        detach_from_source(ctx, source_id, src, true)?;
         let mut container = ctx
             .objects
             .get(container_id)
             .ok_or(MoveError::NotContainer)?
             .clone();
-        container.add_to_list_property("contents", item_id.clone());
+        container.add_to_list_property("contents", source_id.clone());
         ctx.objects.insert(container_id.clone(), container);
 
-        let mut item = item;
-        item.location = Some(container_id.clone());
-        item.set_carried_slot(None);
-        ctx.objects.insert(item_id.clone(), item);
-        return Ok(units);
+        let mut placed = item;
+        placed.location = Some(container_id.clone());
+        placed.set_carried_slot(None);
+        ctx.objects.insert(source_id.clone(), placed);
+        return Ok(source_id.clone());
     }
 
-    // Partial split: remainder stays at source (e.g. in hand), new stack in container.
-    let new_id = split_stack_id(item_id, ctx.objects);
+    let new_id = split_stack_id(source_id, ctx.objects);
     let mut placed = item.clone();
     placed.id = new_id.clone();
     placed.set_stack_count(units);
@@ -440,7 +359,7 @@ fn place_in_container(
 
     let mut source = item;
     source.set_stack_count(stack_count - units);
-    ctx.objects.insert(item_id.clone(), source);
+    ctx.objects.insert(source_id.clone(), source);
 
     let mut container = ctx
         .objects
@@ -449,9 +368,110 @@ fn place_in_container(
         .clone();
     container.add_to_list_property("contents", new_id.clone());
     ctx.objects.insert(container_id.clone(), container);
-    ctx.objects.insert(new_id, placed);
+    ctx.objects.insert(new_id.clone(), placed);
+    Ok(new_id)
+}
 
-    Ok(units)
+fn place_new_stack(
+    ctx: &mut MoveContext<'_>,
+    source_id: &ObjectId,
+    src: &LocationRef,
+    dst: &LocationRef,
+    units: u32,
+    current_primary: &ObjectId,
+) -> Result<ObjectId, MoveError> {
+    let Some(source) = ctx.objects.get(source_id) else {
+        return Ok(current_primary.clone());
+    };
+    let stack_count = if source.is_stackable() {
+        source.stack_count()
+    } else {
+        1
+    };
+
+    match dst {
+        LocationRef::Container(container_id, _) => {
+            let placed_id =
+                place_new_stack_in_container(ctx, source_id, src, container_id, units)?;
+            Ok(if current_primary == source_id {
+                placed_id
+            } else {
+                current_primary.clone()
+            })
+        }
+        LocationRef::Room(_) | LocationRef::Inventory(_) | LocationRef::BodySlot(_, _) => {
+            if units < stack_count {
+                let (_, split_id) = partial_stack_transfer(ctx, source_id, src, dst, units)?;
+                Ok(if current_primary == source_id {
+                    split_id
+                } else {
+                    current_primary.clone()
+                })
+            } else {
+                remove_from_source(ctx, source_id, src)?;
+                apply_destination(ctx, source_id, dst)?;
+                Ok(source_id.clone())
+            }
+        }
+        LocationRef::Nowhere => {
+            remove_from_source(ctx, source_id, src)?;
+            apply_destination(ctx, source_id, dst)?;
+            Ok(source_id.clone())
+        }
+    }
+}
+
+fn execute_stack_transfer_plan(
+    ctx: &mut MoveContext<'_>,
+    source_id: &ObjectId,
+    src: &LocationRef,
+    dst: &LocationRef,
+    plan: &StackTransferPlan,
+) -> Result<(u32, ObjectId), MoveError> {
+    let total = plan.total_units();
+    if total == 0 {
+        return Err(MoveError::InvalidTarget(
+            "You must move at least one.".into(),
+        ));
+    }
+
+    let mut primary_id = source_id.clone();
+
+    if plan.merge_units > 0 {
+        let merge_id = plan
+            .merge_target
+            .as_ref()
+            .ok_or(MoveError::InvalidTarget("No merge target.".into()))?;
+        merge_stack_units(ctx, source_id, merge_id, plan.merge_units, src)?;
+        primary_id = merge_id.clone();
+    }
+
+    if plan.new_stack_units > 0 {
+        primary_id = place_new_stack(
+            ctx,
+            source_id,
+            src,
+            dst,
+            plan.new_stack_units,
+            &primary_id,
+        )?;
+    }
+
+    Ok((total, primary_id))
+}
+
+fn stack_transfer_failure(
+    item: &Object,
+    dst: &LocationRef,
+    objects: &HashMap<ObjectId, Object>,
+    weight_cap: u32,
+) -> MoveError {
+    if let LocationRef::Container(container_id, _) = dst {
+        if let Some(container) = objects.get(container_id) {
+            return fit_failure_reason(container, item, objects);
+        }
+    }
+    inventory_transfer_failure(item, weight_cap)
 }
 
 /// Split `units` from a stack at `src` and place the new stack at `dst`.
@@ -796,91 +816,62 @@ pub fn move_object(
         .ok_or_else(|| MoveError::NotFound(obj_id.to_string()))?
         .clone();
 
-    let (units_transferred, split_object_id) = if let LocationRef::Container(container_id, _) =
-        &dst
-    {
-        let container = ctx
-            .objects
-            .get(container_id)
-            .ok_or(MoveError::NotContainer)?
-            .clone();
-        let fit = compute_container_fit(&container, &item, ctx.objects, None)?;
-        if fit.units == 0 {
-            return Err(fit_failure_reason(&container, &item, ctx.objects));
-        }
-        validate_player_carry_weight(&item, obj_id, &dst, fit.units, ctx.objects)?;
-        let units = place_in_container(ctx, obj_id, container_id, &src, &fit)?;
-        (Some(units), None)
-    } else if let LocationRef::Inventory(player_id) = &dst {
+    let free_grasp_slot = if let LocationRef::Inventory(player_id) = &dst {
         let anatomy = ctx.anatomy.ok_or(MoveError::NoBodyPlan)?;
         let player = ctx
             .objects
             .get(player_id)
             .ok_or(MoveError::NotCarried)?
             .clone();
-        let plan = player_body_plan(&player, anatomy)?;
-        let free_hand = grasp_slot_available(&player, &item, plan);
-        let mut inv_fit = compute_inventory_fit(
-            &player,
-            &item,
-            plan,
-            ctx.objects,
-            requested_units,
-            free_hand,
-        );
-        let weight_cap = max_carry_units_for_weight(&player, &item, ctx.objects);
-        cap_inventory_fit_to_weight(&mut inv_fit, weight_cap);
-
-        if inv_fit.total_units() == 0 {
-            return Err(inventory_transfer_failure(&item, weight_cap));
-        }
-
-        validate_player_carry_weight(&item, obj_id, &dst, inv_fit.total_units(), ctx.objects)?;
-
-        if item.is_stackable() {
-            let (transferred, primary_id) =
-                transfer_stack_to_inventory(ctx, obj_id, player_id, &src, &inv_fit)?;
-            let extra = if primary_id != *obj_id {
-                Some(primary_id)
-            } else {
-                None
-            };
-            (Some(transferred), extra)
-        } else {
-            remove_from_source(ctx, obj_id, &src)?;
-            apply_destination(ctx, obj_id, &dst)?;
-            (Some(1), None)
-        }
+        let body_plan = player_body_plan(&player, anatomy)?;
+        grasp_slot_available(&player, &item, body_plan)
     } else {
-        let stack_count = if item.is_stackable() {
-            item.stack_count()
-        } else {
-            1
-        };
-        let units_to_move = match requested_units {
-            Some(n) => n.min(stack_count),
-            None => stack_count,
-        };
-        if units_to_move == 0 {
-            return Err(MoveError::InvalidTarget(
-                "You must move at least one.".into(),
-            ));
-        }
-        validate_player_carry_weight(&item, obj_id, &dst, units_to_move, ctx.objects)?;
+        false
+    };
 
-        let (transferred, split_id) = if item.is_stackable() && units_to_move < stack_count {
-            partial_stack_transfer(ctx, obj_id, &src, &dst, units_to_move)?
+    let mut plan = compute_stack_transfer_plan(
+        &item,
+        obj_id,
+        &dst,
+        ctx.objects,
+        ctx.anatomy,
+        requested_units,
+        free_grasp_slot,
+    )?;
+
+    if let LocationRef::Inventory(player_id) = &dst {
+        let player = ctx.objects.get(player_id).ok_or(MoveError::NotCarried)?;
+        let weight_cap = max_carry_units_for_weight(player, &item, ctx.objects);
+        cap_stack_transfer_plan_to_weight(&mut plan, weight_cap);
+    }
+
+    if plan.is_empty() {
+        let weight_cap = if let LocationRef::Inventory(player_id) = &dst {
+            max_carry_units_for_weight(
+                ctx.objects.get(player_id).ok_or(MoveError::NotCarried)?,
+                &item,
+                ctx.objects,
+            )
         } else {
-            remove_from_source(ctx, obj_id, &src)?;
-            apply_destination(ctx, obj_id, &dst)?;
-            (units_to_move, obj_id.clone())
+            u32::MAX
         };
-        let extra = if split_id != *obj_id {
-            Some(split_id)
+        return Err(stack_transfer_failure(&item, &dst, ctx.objects, weight_cap));
+    }
+
+    validate_player_carry_weight(&item, obj_id, &dst, plan.total_units(), ctx.objects)?;
+
+    let (units_transferred, split_object_id) = if item.is_stackable() {
+        let (transferred, primary_id) =
+            execute_stack_transfer_plan(ctx, obj_id, &src, &dst, &plan)?;
+        let extra = if primary_id != *obj_id {
+            Some(primary_id)
         } else {
             None
         };
         (Some(transferred), extra)
+    } else {
+        execute_stack_transfer_plan(ctx, obj_id, &src, &dst, &plan)?;
+        (Some(1), None)
     };
 
     let mut touched = vec![obj_id.clone()];
@@ -977,53 +968,13 @@ pub fn move_to_container(
         return Err(MoveError::SelfContainment);
     }
 
-    verify_at_source(obj_id, &src, ctx.objects)?;
-
-    let item = ctx
-        .objects
-        .get(obj_id)
-        .ok_or_else(|| MoveError::NotFound(obj_id.to_string()))?
-        .clone();
-    let container = ctx
-        .objects
-        .get(container_id)
-        .ok_or(MoveError::NotContainer)?
-        .clone();
-
-    let fit = compute_container_fit(&container, &item, ctx.objects, requested_units)?;
-    if fit.units == 0 {
-        return Err(fit_failure_reason(&container, &item, ctx.objects));
-    }
-
-    validate_player_carry_weight(
-        &item,
+    move_object(
+        ctx,
         obj_id,
-        &LocationRef::Container(container_id.clone(), None),
-        fit.units,
-        ctx.objects,
-    )?;
-
-    let units = place_in_container(ctx, obj_id, container_id, &src, &fit)?;
-
-    let mut touched = vec![obj_id.clone(), container_id.clone()];
-    if let Some(id) = src.holder_id() {
-        touched.push(id.clone());
-    }
-    ctx.mark_dirty(touched);
-
-    let event = MoveEvent {
-        object_id: obj_id.clone(),
-        source: src.clone(),
-        destination: LocationRef::Container(container_id.clone(), None),
-    };
-    ctx.hooks.fire_on_move(&event);
-
-    Ok(MoveResult {
-        object_id: obj_id.clone(),
-        source: src,
-        destination: LocationRef::Container(container_id.clone(), None),
-        units_transferred: Some(units),
-    })
+        src,
+        LocationRef::Container(container_id.clone(), None),
+        requested_units,
+    )
 }
 
 #[cfg(test)]
@@ -1362,5 +1313,59 @@ mod tests {
         .unwrap();
 
         assert!(fired.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn drop_merges_into_ground_stack() {
+        let (anatomy, player_id, room_id, mut objects) = setup().await;
+
+        let mut ground = Object {
+            id: ObjectId::new("item:bars-ground"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: Some(ObjectId::new("item:bar-proto")),
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        ground.apply_stackable_role(&crate::object::StackableSpec {
+            count: 5,
+            max_stack: 99,
+        });
+
+        let mut held = ground.clone();
+        held.id = ObjectId::new("item:bars-held");
+        held.apply_stackable_role(&crate::object::StackableSpec {
+            count: 7,
+            max_stack: 99,
+        });
+        held.location = Some(player_id.clone());
+        let held_id = held.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(ground.id.clone(), ground);
+        objects.insert(held_id.clone(), held);
+
+        let mut ctx = MoveContext {
+            objects: &mut objects,
+            anatomy: Some(&anatomy),
+            hooks: MoveHooks::default(),
+            dirty: None,
+        };
+
+        let result = move_to_room(&mut ctx, &held_id, &room_id, None).unwrap();
+        assert_eq!(result.units_transferred, Some(7));
+        assert!(objects.get(&held_id).is_none());
+
+        let merged = objects.get(&ObjectId::new("item:bars-ground")).unwrap();
+        assert_eq!(merged.stack_count(), 12);
+        assert_eq!(merged.location.as_ref(), Some(&room_id));
     }
 }
