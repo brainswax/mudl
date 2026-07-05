@@ -165,6 +165,28 @@ mod tests {
     }
 
     #[test]
+    fn look_self_finds_carried_slot_when_body_slots_stale() {
+        let anatomy = anatomy();
+        let mut player = bare("player:hero-001", "Hero");
+        player.init_creature_role(anatomy.player_template("default").unwrap());
+
+        let mut bars = bare("item:gold-bar-001", "gold bar");
+        bars.apply_stackable_role(&StackableSpec {
+            count: 6,
+            max_stack: 99,
+        });
+        bars.location = Some(player.id.clone());
+        bars.set_carried_slot(Some("right_hand"));
+
+        let mut objects = HashMap::new();
+        objects.insert(bars.id.clone(), bars);
+        objects.insert(player.id.clone(), player.clone());
+
+        let summary = format_look_self_summary(&player, &objects, &anatomy);
+        assert_eq!(summary, "You are holding 6 gold bars.");
+    }
+
+    #[test]
     fn look_self_uses_an_before_vowel() {
         assert_eq!(
             phrase_with_leading_article(&["apple".to_string()]),

@@ -133,7 +133,7 @@ async fn run_look_command(
             if !builder {
                 ctx = ctx.with_flags(DisplayFlags::BRIEF);
             }
-            if let Some(obj) = cache.get(&id) {
+            if let Some(obj) = ctx.objects.get(&id).or_else(|| cache.get(&id)) {
                 render_object(obj, &ctx, builder, false);
             } else if let Some(target) = target {
                 println!("{}", narrate_target_not_found(target));

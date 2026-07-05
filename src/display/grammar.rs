@@ -17,12 +17,29 @@ pub fn join_natural_list(items: &[String]) -> String {
 /// Join names for prose: first gets a/an, rest chained with "and".
 ///
 /// `["Rusty Sword", "Wooden Sword"]` → `a Rusty Sword and Wooden Sword`
+fn phrase_needs_article(phrase: &str) -> bool {
+    !phrase
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_digit())
+}
+
 pub fn phrase_with_leading_article(items: &[String]) -> String {
     match items.len() {
         0 => String::new(),
-        1 => format!("{} {}", indefinite_article(&items[0]), items[0]),
+        1 => {
+            if phrase_needs_article(&items[0]) {
+                format!("{} {}", indefinite_article(&items[0]), items[0])
+            } else {
+                items[0].clone()
+            }
+        }
         _ => {
-            let first = format!("{} {}", indefinite_article(&items[0]), items[0]);
+            let first = if phrase_needs_article(&items[0]) {
+                format!("{} {}", indefinite_article(&items[0]), items[0])
+            } else {
+                items[0].clone()
+            };
             format!("{first} and {}", items[1..].join(" and "))
         }
     }
@@ -49,6 +66,10 @@ mod tests {
         assert_eq!(
             phrase_with_leading_article(&["Rusty Sword".to_string(), "apple".to_string()]),
             "a Rusty Sword and apple"
+        );
+        assert_eq!(
+            phrase_with_leading_article(&["6 gold bars".to_string()]),
+            "6 gold bars"
         );
     }
 

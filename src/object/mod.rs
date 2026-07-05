@@ -397,10 +397,11 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
     let brief = ctx.flags.contains(DisplayFlags::BRIEF);
 
     if obj.object_type() == "player" && obj.id == ctx.observer {
+        let player = ctx.objects.get(&ctx.observer).unwrap_or(obj);
         if brief {
-            return crate::display::format_look_self_summary(obj, &ctx.objects, &ctx.anatomy);
+            return crate::display::format_look_self_summary(player, &ctx.objects, &ctx.anatomy);
         }
-        return crate::display::format_examine_self(obj, &ctx.objects, &ctx.anatomy);
+        return crate::display::format_examine_self(player, &ctx.objects, &ctx.anatomy);
     }
 
     // In-character `examine`: natural sentences, no leading name, stats when relevant.
@@ -525,6 +526,72 @@ mod tests {
         assert!(examine_out.contains("Shiny gold coins."));
         assert!(examine_out.contains("The stack of 20 coins weighs 20 in total."));
         assert!(!examine_out.starts_with("20 coins"));
+    }
+
+    #[test]
+    fn look_self_uses_fresh_player_from_context() {
+        use crate::display::DisplayFlags;
+        use crate::mudl::load_module;
+
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let owner = ObjectId::new("player:hero-001");
+
+        let mut stale_player = Object {
+            id: owner.clone(),
+            name: "Hero".to_string(),
+            aliases: Vec::new(),
+            location: Some(ObjectId::new("room:void-001")),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        stale_player.init_creature_role(anatomy.player_template("default").unwrap());
+
+        let mut fresh_player = stale_player.clone();
+        let mut bars = Object {
+            id: ObjectId::new("item:gold-bar-001"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(owner.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        bars.apply_stackable_role(&StackableSpec {
+            count: 1,
+            max_stack: 99,
+        });
+        fresh_player.set_body_slot("right_hand", Some(bars.id.clone()));
+
+        let mut objects = HashMap::new();
+        objects.insert(bars.id.clone(), bars);
+        objects.insert(owner.clone(), fresh_player);
+
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_objects(objects)
+            .with_anatomy(anatomy)
+            .with_flags(DisplayFlags::BRIEF);
+
+        let output = stale_player.describe(&ctx);
+        assert!(
+            output.contains("gold bar"),
+            "look self should use updated body slots from context, got: {output}"
+        );
     }
 
     #[test]

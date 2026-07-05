@@ -78,7 +78,8 @@ fn object_visible_in_scope(
     id_in_scope(id, player_id, room_id, objects, scope) || scope == ResolveScope::General
 }
 
-fn location_hint_for_object(
+/// Location/count hint for disambiguation lines (`6 gold bars`, `in your right hand`).
+fn disambiguation_hint(
     obj: &Object,
     obj_id: &ObjectId,
     player_id: &ObjectId,
@@ -86,21 +87,18 @@ fn location_hint_for_object(
     room_id: Option<&ObjectId>,
 ) -> String {
     if let Some(player) = objects.get(player_id) {
-        if let Some(hint) = direct_carry_hint(player, obj_id) {
-            if obj.is_stackable() && obj.stack_count() > 1 {
-                return format!("{}, {hint}", stack_quantity_phrase(obj));
+        if let Some(carry) = direct_carry_hint(player, obj_id) {
+            if obj.is_stackable() {
+                return format!("{}, {carry}", stack_quantity_phrase(obj));
             }
-            return hint;
+            return carry;
         }
+    }
+    if obj.is_stackable() {
+        return stack_quantity_phrase(obj);
     }
     if room_id.is_some_and(|room| obj.location.as_ref() == Some(room)) {
-        if obj.is_stackable() && obj.stack_count() > 1 {
-            return format!("{}, here", stack_quantity_phrase(obj));
-        }
         return "here".to_string();
-    }
-    if obj.is_stackable() && obj.stack_count() > 1 {
-        return stack_quantity_phrase(obj);
     }
     short_id(obj_id)
 }
@@ -138,7 +136,7 @@ fn resolve_by_object_id(
         })
         .map(|(id, obj)| ResolvedMatch {
             id: id.clone(),
-            location_hint: Some(location_hint_for_object(
+            location_hint: Some(disambiguation_hint(
                 obj, id, player_id, objects, room_id,
             )),
         })
@@ -257,7 +255,9 @@ fn collect_possession_matches(
         }
         immediate.push(ResolvedMatch {
             id: item_id.clone(),
-            location_hint: direct_carry_hint(player, &item_id),
+            location_hint: Some(disambiguation_hint(
+                obj, &item_id, player_id, objects, None,
+            )),
         });
     }
 
@@ -289,7 +289,11 @@ fn collect_possession_matches(
         if name_matches(needle, obj) {
             nested.push(ResolvedMatch {
                 id: item_id.clone(),
-                location_hint: Some(format!("in {container_hint}")),
+                location_hint: Some(if obj.is_stackable() {
+                    format!("{}, in {container_hint}", stack_quantity_phrase(obj))
+                } else {
+                    format!("in {container_hint}")
+                }),
             });
         }
 
@@ -321,14 +325,11 @@ fn collect_room_matches(
         if !is_on_ground_in_room(obj, obj_id, room_id, player_id, objects) {
             continue;
         }
-        let hint = if obj.is_stackable() && obj.stack_count() > 1 {
-            format!("{}, here", stack_quantity_phrase(obj))
-        } else {
-            "here".to_string()
-        };
         let m = ResolvedMatch {
             id: obj_id.clone(),
-            location_hint: Some(hint),
+            location_hint: Some(disambiguation_hint(
+                obj, obj_id, player_id, objects, Some(room_id),
+            )),
         };
         if obj.owner == *player_id {
             player_owned.push(m);
@@ -661,9 +662,9 @@ mod tests {
         );
         match result {
             TargetResolution::Ambiguous(msg) => {
-                assert!(msg.contains("gold-bar-001"));
-                assert!(msg.contains("gold-bar-001-s001"));
-                assert!(msg.contains("10 gold bars"));
+                assert!(msg.contains("gold-bar-001 (10 gold bars)"));
+                assert!(msg.contains("gold-bar-001-s001 (gold bar)"));
+                assert!(!msg.contains(", here"));
             }
             other => panic!("expected ambiguous, got {other:?}"),
         }
@@ -710,8 +711,8 @@ mod tests {
         match result {
             TargetResolution::Ambiguous(msg) => {
                 assert!(msg.contains("Which coins do you mean?"));
-                assert!(msg.contains("coins-001 (in purse)"));
-                assert!(msg.contains("coins-002 (in backpack)"));
+                assert!(msg.contains("coins-001 (10 coins, in purse)"));
+                assert!(msg.contains("coins-002 (5 coins, in backpack)"));
             }
             other => panic!("expected ambiguous, got {other:?}"),
         }

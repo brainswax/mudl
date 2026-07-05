@@ -2378,6 +2378,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn look_self_shows_gold_bar_after_take_from_ground() {
+        use crate::display::format_look_self_summary;
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 10)
+            .await
+            .unwrap();
+        bars.name = "gold bar".to_string();
+        bars.location = Some(room_id.clone());
+        objects.insert(bars.id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, "gold bar").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        let summary = format_look_self_summary(player, ctx.objects, &anatomy);
+        assert!(
+            summary.contains("gold bar"),
+            "look self should list held gold bar, got: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn look_self_shows_partial_stack_after_take_by_short_id() {
+        use crate::display::format_look_self_summary;
+        use crate::display::short_id;
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut split = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 6)
+            .await
+            .unwrap();
+        split.name = "gold bar".to_string();
+        split.location = Some(room_id.clone());
+        let split_id = split.id.clone();
+        objects.insert(split_id.clone(), split);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        take_item(&mut ctx, &format!("6 {}", short_id(&split_id))).unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        let summary = format_look_self_summary(player, ctx.objects, &anatomy);
+        assert!(
+            summary.contains("6 gold bars"),
+            "look self should show partial stack count, got: {summary}"
+        );
+    }
+
+    #[tokio::test]
     async fn look_self_shows_stackable_quantity_in_hand() {
         let (factory, anatomy, player_id, _room_id, mut objects) = setup_world().await;
 

@@ -30,6 +30,8 @@ pub fn collect_gear_lists(
     let mut grasp_slots = plan.grasp_slots();
     grasp_slots.sort_by_key(|slot| grasp_slot_sort_key(&slot.name));
 
+    let grasp_names: HashSet<&str> = grasp_slots.iter().map(|s| s.name.as_str()).collect();
+
     for slot in grasp_slots {
         let Some(item_id) = player.body_slot_item(&slot.name) else {
             continue;
@@ -44,6 +46,23 @@ pub fn collect_gear_lists(
             holding.push(gear_item_name(obj));
         }
     }
+
+    // Fallback: items marked carried in grasp slots but missing from body_slots.
+    let mut fallback: Vec<(u8, String)> = Vec::new();
+    for (item_id, obj) in objects {
+        if !obj.is_active() || obj.location.as_ref() != Some(&player.id) {
+            continue;
+        }
+        let Some(slot) = obj.carried_slot() else {
+            continue;
+        };
+        if !grasp_names.contains(slot.as_str()) || !seen_hold.insert(item_id.clone()) {
+            continue;
+        }
+        fallback.push((grasp_slot_sort_key(&slot), gear_item_name(obj)));
+    }
+    fallback.sort_by_key(|(key, _)| *key);
+    holding.extend(fallback.into_iter().map(|(_, name)| name));
 
     let mut wearing = Vec::new();
     let mut seen_wear = HashSet::new();
