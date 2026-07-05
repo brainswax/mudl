@@ -343,6 +343,79 @@ impl Object {
         self.set_property_map("body_slots", slots);
     }
 
+    /// Whether `item_id` is a valid occupant of a body slot on this creature.
+    pub fn body_slot_item_valid(
+        &self,
+        item_id: &ObjectId,
+        objects: &HashMap<ObjectId, Object>,
+    ) -> bool {
+        let Some(item) = objects.get(item_id) else {
+            return false;
+        };
+        if !item.is_active() {
+            return false;
+        }
+        let holder_id = &self.id;
+        let Some(loc) = &item.location else {
+            return false;
+        };
+        if objects.get(loc).is_some_and(|o| o.is_location()) {
+            return false;
+        }
+        if loc == holder_id {
+            return true;
+        }
+        self.item_reachable_in_carried_gear(item_id, objects)
+    }
+
+    fn item_reachable_in_carried_gear(
+        &self,
+        item_id: &ObjectId,
+        objects: &HashMap<ObjectId, Object>,
+    ) -> bool {
+        let Some(item) = objects.get(item_id) else {
+            return false;
+        };
+        let Some(mut loc) = item.location.clone() else {
+            return false;
+        };
+        let mut visited = std::collections::HashSet::new();
+        while visited.insert(loc.clone()) {
+            if loc == self.id {
+                return true;
+            }
+            if self.body_slots().values().any(|id| id == &loc) {
+                return true;
+            }
+            let Some(holder) = objects.get(&loc) else {
+                return false;
+            };
+            let Some(next) = holder.location.clone() else {
+                return false;
+            };
+            loc = next;
+        }
+        false
+    }
+
+    /// Drop body slot entries that point at missing, ground, or otherwise un-carried items.
+    pub fn prune_stale_body_slots(&mut self, objects: &HashMap<ObjectId, Object>) {
+        let stale: Vec<String> = self
+            .body_slots()
+            .into_iter()
+            .filter_map(|(slot, item_id)| {
+                if self.body_slot_item_valid(&item_id, objects) {
+                    None
+                } else {
+                    Some(slot)
+                }
+            })
+            .collect();
+        for slot in stale {
+            self.set_body_slot(&slot, None);
+        }
+    }
+
     pub fn set_property_map(&mut self, name: &str, map: HashMap<String, ObjectId>) {
         let value_map: HashMap<String, Value> = map
             .into_iter()
@@ -526,6 +599,59 @@ mod tests {
         assert!(examine_out.contains("Shiny gold coins."));
         assert!(examine_out.contains("The stack of 20 coins weighs 20 in total."));
         assert!(!examine_out.starts_with("20 coins"));
+    }
+
+    #[test]
+    fn prune_stale_body_slots_removes_ground_referenced_items() {
+        let owner = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("room:void-001");
+
+        let mut player = Object {
+            id: owner.clone(),
+            name: "Hero".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+
+        let mut bars = Object {
+            id: ObjectId::new("item:gold-bar-001"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        bars.apply_stackable_role(&StackableSpec {
+            count: 6,
+            max_stack: 99,
+        });
+
+        let bars_id = bars.id.clone();
+        player.set_body_slot("right_hand", Some(bars_id.clone()));
+
+        let mut objects = HashMap::new();
+        objects.insert(bars_id.clone(), bars);
+        objects.insert(owner.clone(), player.clone());
+
+        assert!(!player.body_slot_item_valid(&bars_id, &objects));
+
+        let mut player = objects.get(&owner).unwrap().clone();
+        player.prune_stale_body_slots(&objects);
+        assert!(player.body_slot_item("right_hand").is_none());
     }
 
     #[test]

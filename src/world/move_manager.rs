@@ -191,8 +191,42 @@ fn player_body_plan<'a>(
     anatomy.body_plan(&plan_name).ok_or(MoveError::NoBodyPlan)
 }
 
-fn grasp_slot_free(player: &Object, slot: &str) -> bool {
-    player.body_slot_item(slot).is_none()
+fn prune_creature_body_slots(
+    creature_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) {
+    let Some(creature) = objects.get(creature_id).cloned() else {
+        return;
+    };
+    if !creature.has_creature_role() {
+        return;
+    }
+    let mut creature = creature;
+    creature.prune_stale_body_slots(objects);
+    objects.insert(creature_id.clone(), creature);
+}
+
+fn clear_creature_slots_for_item(
+    creature_id: &ObjectId,
+    item_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) {
+    let Some(mut creature) = objects.get(creature_id).cloned() else {
+        return;
+    };
+    creature.clear_item_from_body_slots(item_id);
+    objects.insert(creature_id.clone(), creature);
+}
+
+fn grasp_slot_free(
+    player: &Object,
+    slot: &str,
+    objects: &HashMap<ObjectId, Object>,
+) -> bool {
+    match player.body_slot_item(slot) {
+        None => true,
+        Some(item_id) => !player.body_slot_item_valid(&item_id, objects),
+    }
 }
 
 fn max_carry_units_for_weight(
@@ -214,14 +248,20 @@ fn max_carry_units_for_weight(
     (room / unit_w).floor().max(0.0) as u32
 }
 
-fn grasp_slot_available(player: &Object, item: &Object, plan: &BodyPlan) -> bool {
-    select_grasp_slots(player, item, plan).is_ok()
+fn grasp_slot_available(
+    player: &Object,
+    item: &Object,
+    plan: &BodyPlan,
+    objects: &HashMap<ObjectId, Object>,
+) -> bool {
+    select_grasp_slots(player, item, plan, objects).is_ok()
 }
 
 fn select_grasp_slots(
     player: &Object,
     item: &Object,
     plan: &BodyPlan,
+    objects: &HashMap<ObjectId, Object>,
 ) -> Result<(Vec<String>, Option<String>), MoveError> {
     let hand_pref = item.hand_slot();
     let preference = hand_pref.as_deref().unwrap_or("right");
@@ -230,7 +270,9 @@ fn select_grasp_slots(
     let (target_slots, carried_label) = if preference == "both" {
         let left = "left_hand";
         let right = "right_hand";
-        if !grasp_slot_free(player, left) || !grasp_slot_free(player, right) {
+        if !grasp_slot_free(player, left, objects)
+            || !grasp_slot_free(player, right, objects)
+        {
             return Err(MoveError::HandsFull);
         }
         (
@@ -238,23 +280,23 @@ fn select_grasp_slots(
             Some(left.to_string()),
         )
     } else if preference == "left" {
-        if !grasp_slot_free(player, "left_hand") {
+        if !grasp_slot_free(player, "left_hand", objects) {
             return Err(MoveError::HandsFull);
         }
         (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else if grasp_slot_free(player, "right_hand") {
+    } else if grasp_slot_free(player, "right_hand", objects) {
         (
             vec!["right_hand".to_string()],
             Some("right_hand".to_string()),
         )
-    } else if grasp_slot_free(player, "left_hand") {
+    } else if grasp_slot_free(player, "left_hand", objects) {
         (vec!["left_hand".to_string()], Some("left_hand".to_string()))
     } else {
         return Err(MoveError::HandsFull);
     };
 
     for slot in &grasp_names {
-        if target_slots.contains(slot) && !grasp_slot_free(player, slot) {
+        if target_slots.contains(slot) && !grasp_slot_free(player, slot, objects) {
             return Err(MoveError::HandsFull);
         }
     }
@@ -568,21 +610,11 @@ fn detach_from_source(
             container.remove_from_list_property("contents", item_id);
             ctx.objects.insert(container_id.clone(), container);
         }
-        LocationRef::BodySlot(holder, slot) if full_detach => {
-            let mut holder_obj = ctx
-                .objects
-                .get(holder)
-                .ok_or(MoveError::NotCarried)?
-                .clone();
-            holder_obj.set_body_slot(slot, None);
-            ctx.objects.insert(holder.clone(), holder_obj);
+        LocationRef::BodySlot(holder, _) if full_detach => {
+            clear_creature_slots_for_item(holder, item_id, ctx.objects);
         }
-        LocationRef::Inventory(_) if full_detach => {
-            for obj in ctx.objects.values_mut() {
-                if obj.has_creature_role() {
-                    obj.clear_item_from_body_slots(item_id);
-                }
-            }
+        LocationRef::Inventory(holder) if full_detach => {
+            clear_creature_slots_for_item(holder, item_id, ctx.objects);
         }
         _ => {}
     }
@@ -599,27 +631,24 @@ fn remove_from_source(
             // Ground items have no parent list to update.
             Ok(())
         }
-        LocationRef::BodySlot(holder, slot) => {
-            let mut holder_obj = ctx
+        LocationRef::BodySlot(holder, _) => {
+            let holder_obj = ctx
                 .objects
                 .get(holder)
                 .ok_or(MoveError::NotCarried)?
                 .clone();
-            if holder_obj.body_slot_item(slot).as_ref() != Some(obj_id) {
+            if !holder_obj
+                .body_slots()
+                .values()
+                .any(|id| id == obj_id)
+            {
                 return Err(MoveError::NotAtSource);
             }
-            holder_obj.set_body_slot(slot, None);
-            ctx.objects.insert(holder.clone(), holder_obj);
+            clear_creature_slots_for_item(holder, obj_id, ctx.objects);
             Ok(())
         }
         LocationRef::Inventory(holder) => {
-            let mut holder_obj = ctx
-                .objects
-                .get(holder)
-                .ok_or(MoveError::NotCarried)?
-                .clone();
-            holder_obj.clear_item_from_body_slots(obj_id);
-            ctx.objects.insert(holder.clone(), holder_obj);
+            clear_creature_slots_for_item(holder, obj_id, ctx.objects);
             Ok(())
         }
         LocationRef::Container(container_id, _) => {
@@ -647,7 +676,7 @@ fn place_in_grasp_slots(
 ) -> Result<Vec<String>, MoveError> {
     let item = objects.get(item_id).ok_or(MoveError::NotCarried)?.clone();
     let player = objects.get(player_id).ok_or(MoveError::NotCarried)?;
-    let (target_slots, carried_label) = select_grasp_slots(player, &item, plan)?;
+    let (target_slots, carried_label) = select_grasp_slots(player, &item, plan, objects)?;
 
     let mut player = objects.get(player_id).ok_or(MoveError::NotCarried)?.clone();
     for slot in &target_slots {
@@ -681,6 +710,15 @@ fn apply_destination(
             item.location = Some(room_id.clone());
             item.set_carried_slot(None);
             ctx.objects.insert(obj_id.clone(), item);
+            let creature_ids: Vec<ObjectId> = ctx
+                .objects
+                .values()
+                .filter(|o| o.has_creature_role())
+                .map(|o| o.id.clone())
+                .collect();
+            for creature_id in creature_ids {
+                clear_creature_slots_for_item(&creature_id, obj_id, ctx.objects);
+            }
             Ok(())
         }
         LocationRef::Container(container_id, _) => {
@@ -808,6 +846,15 @@ pub fn move_object(
         }
     }
 
+    if let Some(holder_id) = src.holder_id() {
+        prune_creature_body_slots(holder_id, ctx.objects);
+    }
+    if let Some(holder_id) = dst.holder_id() {
+        if dst.holder_id() != src.holder_id() {
+            prune_creature_body_slots(holder_id, ctx.objects);
+        }
+    }
+
     verify_at_source(obj_id, &src, ctx.objects)?;
 
     let item = ctx
@@ -824,7 +871,7 @@ pub fn move_object(
             .ok_or(MoveError::NotCarried)?
             .clone();
         let body_plan = player_body_plan(&player, anatomy)?;
-        grasp_slot_available(&player, &item, body_plan)
+        grasp_slot_available(&player, &item, body_plan, ctx.objects)
     } else {
         false
     };
@@ -900,6 +947,20 @@ pub fn move_object(
         destination: dst.clone(),
     };
     ctx.hooks.fire_on_move(&event);
+
+    let creatures_to_prune: Vec<ObjectId> = touched
+        .iter()
+        .filter(|id| {
+            ctx.objects
+                .get(*id)
+                .is_some_and(|o| o.has_creature_role())
+        })
+        .cloned()
+        .collect();
+    for creature_id in creatures_to_prune {
+        prune_creature_body_slots(&creature_id, ctx.objects);
+    }
+
     ctx.mark_dirty(touched);
 
     Ok(MoveResult {
@@ -1367,5 +1428,45 @@ mod tests {
         let merged = objects.get(&ObjectId::new("item:bars-ground")).unwrap();
         assert_eq!(merged.stack_count(), 12);
         assert_eq!(merged.location.as_ref(), Some(&room_id));
+
+        let player = objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("right_hand").is_none());
+        assert!(player.body_slot_item("left_hand").is_none());
+    }
+
+    #[tokio::test]
+    async fn drop_two_handed_item_clears_both_grasp_slots() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence);
+        let (anatomy, player_id, room_id, mut objects) = setup().await;
+
+        let mut sword = factory
+            .create_item("greatsword", player_id.clone())
+            .await
+            .unwrap();
+        sword.name = "Greatsword".to_string();
+        sword.set_property_string("hand_slot", "both");
+        sword.location = Some(player_id.clone());
+        let sword_id = sword.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("left_hand", Some(sword_id.clone()));
+        player.set_body_slot("right_hand", Some(sword_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(sword_id.clone(), sword);
+
+        let mut ctx = MoveContext {
+            objects: &mut objects,
+            anatomy: Some(&anatomy),
+            hooks: MoveHooks::default(),
+            dirty: None,
+        };
+
+        move_to_room(&mut ctx, &sword_id, &room_id, None).unwrap();
+
+        let player = objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("left_hand").is_none());
+        assert!(player.body_slot_item("right_hand").is_none());
+        assert_eq!(objects.get(&sword_id).unwrap().location.as_ref(), Some(&room_id));
     }
 }
