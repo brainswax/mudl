@@ -208,6 +208,7 @@ pub fn parse_create_options(tokens: &[&str]) -> CreateOptions {
                 "prototype" => opts.prototype = Some(ObjectId::new(value)),
                 "lock_id" => opts.lock_id = Some(value.to_string()),
                 "locked" | "is_locked" => opts.locked = Some(value == "true"),
+                "allowed_types" => opts.mudl_props.allowed_types = Some(value.to_string()),
                 _ => extra_pairs.push((key, value)),
             }
         }
@@ -286,6 +287,12 @@ pub async fn create_at_location_with_options<P: Persistence>(
                         wear_slot: options.wear_slot.clone(),
                         lock_id: options.lock_id.clone(),
                         locked: options.locked.unwrap_or(false),
+                        allowed_types: options
+                            .mudl_props
+                            .allowed_types
+                            .as_ref()
+                            .map(|s| crate::object::parse_allowed_types(s))
+                            .filter(|types| !types.is_empty()),
                         ..crate::object::ContainerSpec::default()
                     },
                     options.prototype.clone(),

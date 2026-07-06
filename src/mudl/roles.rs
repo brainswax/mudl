@@ -28,6 +28,7 @@ pub struct MudlRoleProps {
     pub locked: Option<bool>,
     pub lock_id: Option<String>,
     pub is_key: Option<bool>,
+    pub allowed_types: Option<String>,
 }
 
 impl MudlRoleProps {
@@ -57,6 +58,7 @@ impl MudlRoleProps {
                 "locked" | "is_locked" => props.locked = Some(*value == "true"),
                 "lock_id" => props.lock_id = Some(value.to_string()),
                 "is_key" | "key" => props.is_key = Some(*value == "true"),
+                "allowed_types" => props.allowed_types = Some(value.to_string()),
                 _ => {}
             }
         }
@@ -99,6 +101,11 @@ impl MudlRoleProps {
                 open: self.is_open.unwrap_or(true),
                 lock_id: self.lock_id.clone(),
                 locked: self.locked.unwrap_or(false),
+                allowed_types: self
+                    .allowed_types
+                    .as_ref()
+                    .map(|s| crate::object::parse_allowed_types(s))
+                    .filter(|types| !types.is_empty()),
             });
         } else if let (Some(w), Some(v)) = (self.weight, self.volume) {
             obj.apply_item_phys(&ItemPhysSpec {
@@ -214,6 +221,20 @@ mod tests {
         props.apply_to(&mut obj);
         assert!(obj.is_readable());
         assert_eq!(obj.read_text().as_deref(), Some("Mind the dark."));
+    }
+
+    #[test]
+    fn mudl_role_props_apply_allowed_types_on_container() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("is_container", "true"),
+            ("allowed_types", "key"),
+        ]);
+        let mut obj = bare("item:ring-001");
+        props.apply_to(&mut obj);
+        assert_eq!(
+            obj.container_allowed_types(),
+            Some(vec!["key".to_string()])
+        );
     }
 
     #[test]

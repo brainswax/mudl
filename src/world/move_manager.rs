@@ -36,6 +36,8 @@ pub enum MoveError {
     /// Source or destination container is closed.
     ContainerClosed(String),
     ContainerLocked(String),
+    /// Item type is not permitted in a type-restricted container.
+    TypeNotAllowed { container: String, allowed: Vec<String> },
     NotWearable,
     InvalidTarget(String),
     NoBodyPlan,
@@ -64,6 +66,10 @@ impl std::fmt::Display for MoveError {
             Self::NotContainer => write!(f, "That isn't a container."),
             Self::ContainerClosed(name) => write!(f, "The {name} is closed."),
             Self::ContainerLocked(name) => write!(f, "The {name} is locked."),
+            Self::TypeNotAllowed { container, allowed } => {
+                let types = crate::object::format_allowed_type_labels(allowed);
+                write!(f, "The {container} only holds {types}.")
+            }
             Self::NotWearable => write!(f, "You can't wear that."),
             Self::InvalidTarget(msg) => write!(f, "{msg}"),
             Self::NoBodyPlan => write!(f, "You have no body plan."),
@@ -96,6 +102,9 @@ impl From<MoveError> for crate::inventory::InventoryError {
             MoveError::NotContainer => Self::NotContainer,
             MoveError::ContainerClosed(name) => Self::ContainerClosed(name),
             MoveError::ContainerLocked(name) => Self::ContainerLocked(name),
+            MoveError::TypeNotAllowed { container, allowed } => {
+                Self::TypeNotAllowed { container, allowed }
+            }
             MoveError::NotWearable => Self::NotWearable,
             MoveError::InvalidTarget(m) => Self::InvalidTarget(m),
             MoveError::NoBodyPlan => Self::NoBodyPlan,

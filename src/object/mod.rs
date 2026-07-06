@@ -16,8 +16,8 @@ pub use factory::ObjectFactory;
 pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS};
 pub use location::LocationRef;
 pub use roles::{
-    ContainerSpec, ItemPhysSpec, KeySpec, ObjectRoles, ReadableSpec, RoleKind, StackableSpec,
-    WearableSpec,
+    allowed_type_label, format_allowed_type_labels, parse_allowed_types, ContainerSpec,
+    ItemPhysSpec, KeySpec, ObjectRoles, ReadableSpec, RoleKind, StackableSpec, WearableSpec,
 };
 pub use weight::{
     format_weight_amount, is_unlimited_weight, owner_player_of_container, player_carried_weight,

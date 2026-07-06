@@ -31,6 +31,7 @@ pub enum InventoryError {
     HandsFull,
     SlotFull(String),
     ContainerFull,
+    TypeNotAllowed { container: String, allowed: Vec<String> },
     ContainerClosed(String),
     ContainerLocked(String),
     NoLock(String),
@@ -71,6 +72,10 @@ impl fmt::Display for InventoryError {
                 write!(f, "Your {} is already occupied.", slot_display_name(slot))
             }
             Self::ContainerFull => write!(f, "That won't fit — it's full."),
+            Self::TypeNotAllowed { container, allowed } => {
+                let types = crate::object::format_allowed_type_labels(allowed);
+                write!(f, "The {container} only holds {types}.")
+            }
             Self::ContainerClosed(name) => write!(f, "The {name} is closed."),
             Self::ContainerLocked(name) => write!(f, "The {name} is locked."),
             Self::NoLock(name) => write!(f, "The {name} has no lock."),
@@ -3884,5 +3889,65 @@ mod tests {
         assert!(msg.contains("brass key"));
         assert!(msg.contains("spare brass key"));
         assert!(msg.contains("unlock chest with <key>"));
+    }
+
+    #[tokio::test]
+    async fn put_key_in_key_ring_and_reject_blade() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut ring = factory
+            .create_container_with_spec(
+                "key ring",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 4,
+                    open: true,
+                    allowed_types: Some(vec!["key".to_string()]),
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        ring.location = Some(room_id.clone());
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "demo-lock", None)
+            .await
+            .unwrap();
+        let mut blade = factory
+            .create_item("Chipped Blade", player_id.clone())
+            .await
+            .unwrap();
+        blade.location = Some(room_id.clone());
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(ring.id.clone(), ring);
+        objects.insert(key.id.clone(), key);
+        objects.insert(blade.id.clone(), blade);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let ok = put_item(&mut ctx, "key", "ring", None).unwrap();
+        assert!(ok.contains("key ring"));
+
+        take_item(&mut ctx, "blade").unwrap();
+        let err = put_item(&mut ctx, "blade", "ring", None).unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::TypeNotAllowed {
+                container: "key ring".to_string(),
+                allowed: vec!["key".to_string()],
+            }
+        );
+        assert_eq!(err.to_string(), "The key ring only holds keys.");
     }
 }

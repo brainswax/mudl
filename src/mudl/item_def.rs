@@ -230,6 +230,9 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.is_key.is_some() {
         target.is_key = extra.is_key;
     }
+    if extra.allowed_types.is_some() {
+        target.allowed_types = extra.allowed_types.clone();
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +294,18 @@ mod tests {
             .unwrap();
         assert_eq!(key_proto.props.is_key, Some(true));
         assert_eq!(key_proto.props.lock_id.as_deref(), Some("chest-lock"));
+
+        let ring_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "brass-key-ring")
+            .unwrap();
+        assert_eq!(ring_proto.props.allowed_types.as_deref(), Some("key"));
+
+        let ring = instances
+            .iter()
+            .find(|i| i.base_name == "cottage-key-ring")
+            .unwrap();
+        assert_eq!(ring.location, "cottage-interior");
 
         let note_proto = prototypes
             .iter()

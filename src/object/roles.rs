@@ -39,6 +39,8 @@ pub struct ContainerSpec {
     pub lock_id: Option<String>,
     /// Whether the container starts locked (requires `lock_id`).
     pub locked: bool,
+    /// When set, only items matching at least one type tag may be placed inside (e.g. `key`).
+    pub allowed_types: Option<Vec<String>>,
 }
 
 impl Default for ContainerSpec {
@@ -52,8 +54,45 @@ impl Default for ContainerSpec {
             open: true,
             lock_id: None,
             locked: false,
+            allowed_types: None,
         }
     }
+}
+
+/// Player-facing label for a type tag in restriction messages.
+pub fn allowed_type_label(type_tag: &str) -> String {
+    match type_tag.trim().to_ascii_lowercase().as_str() {
+        "key" => "keys".to_string(),
+        "readable" => "readable items".to_string(),
+        "stackable" => "stackable items".to_string(),
+        "wearable" => "wearable items".to_string(),
+        "container" => "containers".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Join allowed-type labels for messages (`keys`, `keys and tokens`).
+pub fn format_allowed_type_labels(types: &[String]) -> String {
+    let labels: Vec<String> = types.iter().map(|t| allowed_type_label(t)).collect();
+    match labels.len() {
+        0 => String::new(),
+        1 => labels.into_iter().next().unwrap_or_default(),
+        2 => format!("{} and {}", labels[0], labels[1]),
+        _ => {
+            let mut rest = labels;
+            let last = rest.pop().unwrap();
+            format!("{}, and {}", rest.join(", "), last)
+        }
+    }
+}
+
+/// Parse a comma-separated allowed-types field (`key`, `key,token`).
+pub fn parse_allowed_types(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|t| t.trim().to_ascii_lowercase())
+        .filter(|t| !t.is_empty())
+        .collect()
 }
 
 /// Configuration for a key that opens one or more locks sharing the same `lock_id`.
@@ -193,6 +232,33 @@ impl Object {
         self.get_object_list_property("contents")
     }
 
+    /// Type tags this container accepts. `None` means no restriction.
+    pub fn container_allowed_types(&self) -> Option<Vec<String>> {
+        self.get_string_property("allowed_types")
+            .map(|s| parse_allowed_types(&s))
+            .filter(|types| !types.is_empty())
+    }
+
+    /// Whether `item` satisfies a composable type tag (`key`, `stackable`, `readable`, …).
+    pub fn item_has_type(&self, type_tag: &str) -> bool {
+        match type_tag.trim().to_ascii_lowercase().as_str() {
+            "key" => self.is_key(),
+            "stackable" => self.is_stackable(),
+            "readable" => self.is_readable(),
+            "wearable" => self.is_wearable(),
+            "container" => self.is_container(),
+            other => self.object_type().eq_ignore_ascii_case(other),
+        }
+    }
+
+    /// Whether `item` may be placed in this container (allowed-types filter).
+    pub fn container_accepts_item(&self, item: &Object) -> bool {
+        match self.container_allowed_types() {
+            None => true,
+            Some(allowed) => allowed.iter().any(|tag| item.item_has_type(tag)),
+        }
+    }
+
     /// Whether a container's lid is open. Missing property defaults to open (legacy objects).
     pub fn container_is_open(&self) -> bool {
         if !self.has_container_role() {
@@ -295,6 +361,11 @@ impl Object {
         if let Some(ref lock_id) = spec.lock_id {
             self.set_container_lock_id(lock_id);
             self.set_container_locked(spec.locked);
+        }
+        if let Some(ref types) = spec.allowed_types {
+            if !types.is_empty() {
+                self.set_property_string("allowed_types", types.join(","));
+            }
         }
         if self.get_numeric_property("weight").is_none() {
             self.set_property_numeric("weight", 1.0);
@@ -679,6 +750,37 @@ mod tests {
         assert!(obj.is_readable());
         assert_eq!(obj.read_text().as_deref(), Some("Mind the dark."));
         assert!(obj.is_writable());
+    }
+
+    #[test]
+    fn container_allowed_types_restrict_items() {
+        let mut ring = bare_object("item:ring-001");
+        ring.name = "Brass Key Ring".to_string();
+        ring.apply_container_role(&ContainerSpec {
+            capacity: 4,
+            allowed_types: Some(vec!["key".to_string()]),
+            ..ContainerSpec::default()
+        });
+        assert_eq!(
+            ring.container_allowed_types().as_deref(),
+            Some(&["key".to_string()][..])
+        );
+
+        let mut key = bare_object("item:key-001");
+        key.apply_key_role(&KeySpec {
+            lock_id: "demo".to_string(),
+        });
+        let mut blade = bare_object("item:blade-001");
+
+        assert!(ring.container_accepts_item(&key));
+        assert!(!ring.container_accepts_item(&blade));
+        assert!(key.item_has_type("key"));
+        assert!(!blade.item_has_type("key"));
+    }
+
+    #[test]
+    fn parse_allowed_types_splits_comma_list() {
+        assert_eq!(parse_allowed_types("key, token"), vec!["key", "token"]);
     }
 
     #[test]

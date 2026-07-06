@@ -82,6 +82,22 @@
   alias=tinder
 @end
 
+@prototype brass-key-ring
+  name=Brass Key Ring
+  description=A tarnished brass ring on a short chain, meant to keep keys sorted.
+  is_container=true
+  is_open=true
+  capacity=6
+  allowed_types=key
+  is_wearable=true
+  wear_slot=torso
+  weight=0.2
+  volume=0.3
+  pocketable=true
+  alias=key ring
+  alias=ring
+@end
+
 @prototype folded-note
   name=Folded Note
   description=A creased slip of paper, its edges worn soft.
@@ -134,4 +150,9 @@
 @item chest-tinderbox
   prototype=tinderbox
   location=scene-chest
+@end
+
+@item cottage-key-ring
+  prototype=brass-key-ring
+  location=cottage-interior
 @end

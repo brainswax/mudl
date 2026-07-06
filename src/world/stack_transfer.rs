@@ -288,6 +288,12 @@ pub fn compute_container_fit(
     if !container.container_is_open() {
         return Err(MoveError::ContainerClosed(container.name.clone()));
     }
+    if !container.container_accepts_item(item) {
+        return Err(MoveError::TypeNotAllowed {
+            container: container.name.to_lowercase(),
+            allowed: container.container_allowed_types().unwrap_or_default(),
+        });
+    }
 
     let merge_target = find_mergeable_stack_in_container(container, item, objects);
     let stack_count = effective_stack_count(item);
@@ -512,11 +518,17 @@ pub fn fit_failure_reason(
     if !container.container_is_open() {
         return MoveError::ContainerClosed(container.name.clone());
     }
+    if !container.container_accepts_item(item) {
+        return MoveError::TypeNotAllowed {
+            container: container.name.to_lowercase(),
+            allowed: container.container_allowed_types().unwrap_or_default(),
+        };
+    }
 
-    let fit = compute_container_fit(container, item, objects, None).unwrap_or(ContainerFit {
-        units: 0,
-        merge_target: None,
-    });
+    let fit = match compute_container_fit(container, item, objects, None) {
+        Ok(fit) => fit,
+        Err(err) => return err,
+    };
 
     if fit.merge_target.is_none()
         && container.container_contents().len() >= container.container_capacity() as usize
