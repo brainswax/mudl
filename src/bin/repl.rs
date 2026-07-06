@@ -6,14 +6,16 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 use mudl::command::{
     apply_set, apply_unset, bootstrap_active_universe, create_at_location_with_options,
     create_key_for_container, has_wizard_permission, package_module, parse_command_line,
-    parse_create_command, parse_set_command, parse_unset_command, reload_universe,
-    resolve_container_target, soft_delete_object, undelete_object, wizard_access_denied,
+    parse_create_command, parse_dig_command, parse_link_command, parse_set_command,
+    parse_unlink_command, parse_unset_command, reload_universe, resolve_container_target,
+    soft_delete_object, undelete_object, wizard_access_denied,
 };
 use mudl::display::{
     format_examine_output, format_no_parent_message, narrate_create, narrate_field_set,
     narrate_field_unset, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
     narrate_no_location, narrate_no_location_builder,
-    narrate_not_in_cache, narrate_saved, narrate_target_not_found, narrate_wizard_not_found,
+    narrate_dig, narrate_link, narrate_not_in_cache, narrate_saved, narrate_target_not_found,
+    narrate_wizard_not_found,
     parse_examine_request, resolve_examine_request, resolve_target, Describable,
     DisplayContext, DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope,
     TargetResolution,
@@ -28,6 +30,7 @@ use mudl::object::{Object, ObjectFactory, ObjectId};
 use mudl::persistence::{Persistence, SqlitePersistence};
 use mudl::repl::Session;
 use mudl::world::movement_direction_from_line;
+use mudl::world::place_builder::DigRequest;
 use tracing::{error, info, warn};
 
 async fn resolve_in_session(
@@ -392,6 +395,15 @@ async fn main() -> Result<()> {
                         println!("  @delete <target>            - wizard: soft-delete an object");
                         println!(
                             "  @undelete <id>              - wizard: restore soft-deleted object"
+                        );
+                        println!(
+                            "  @dig <dir> <name...>        - wizard: create and link a new place"
+                        );
+                        println!(
+                            "  @link <dir> <target>        - wizard: link exit from here (reciprocal by default)"
+                        );
+                        println!(
+                            "  @unlink <dir>               - wizard: remove an exit from here"
                         );
                         println!("  exit                        - quit");
                     }
@@ -916,6 +928,127 @@ async fn main() -> Result<()> {
                         }
                     }
 
+                    "@dig" => {
+                        let dig_cmd = match parse_dig_command(input) {
+                            Ok(cmd) => cmd,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
+                            }
+                        };
+                        match session
+                            .dig_place(
+                                &factory,
+                                DigRequest {
+                                    direction: dig_cmd.direction,
+                                    name: dig_cmd.name,
+                                    options: dig_cmd.options,
+                                },
+                            )
+                            .await
+                        {
+                            Ok(result) => {
+                                println!(
+                                    "{}",
+                                    narrate_dig(&result.new_place, &result.notes)
+                                );
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after @dig failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "@link" => {
+                        let link_cmd = match parse_link_command(input) {
+                            Ok(cmd) => cmd,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
+                            }
+                        };
+                        let from_resolution = if let Some(from_name) = link_cmd.from.as_deref() {
+                            session.resolve_target(from_name, ResolveScope::General)
+                        } else if let Some(loc) = session.current_location() {
+                            TargetResolution::Found(loc.clone())
+                        } else {
+                            TargetResolution::NotFound
+                        };
+                        let target_resolution =
+                            session.resolve_target(&link_cmd.target, ResolveScope::General);
+
+                        match (from_resolution, target_resolution) {
+                            (TargetResolution::Found(from_id), TargetResolution::Found(target_id)) => {
+                                match session.link_exit(
+                                    &from_id,
+                                    &link_cmd.direction,
+                                    &target_id,
+                                    link_cmd.reciprocal,
+                                ) {
+                                    Ok(notes) => {
+                                        println!("{}", narrate_link(&notes));
+                                        if let Err(e) =
+                                            persist_session(&mut session, &persistence).await
+                                        {
+                                            error!(error = %e, "persist after @link failed");
+                                        }
+                                    }
+                                    Err(e) => println!("{e}"),
+                                }
+                            }
+                            (TargetResolution::Ambiguous(msg), _)
+                            | (_, TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+                            (TargetResolution::NotFound, _) => println!(
+                                "{}",
+                                narrate_no_location_builder(
+                                    "Set a current location or specify @link <from> <dir> <target>."
+                                )
+                            ),
+                            (_, TargetResolution::NotFound) => println!(
+                                "{}",
+                                narrate_target_not_found(&link_cmd.target)
+                            ),
+                        }
+                    }
+                    "@unlink" => {
+                        let unlink_cmd = match parse_unlink_command(input) {
+                            Ok(cmd) => cmd,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
+                            }
+                        };
+                        let from_resolution = if let Some(from_name) = unlink_cmd.from.as_deref() {
+                            session.resolve_target(from_name, ResolveScope::General)
+                        } else if let Some(loc) = session.current_location() {
+                            TargetResolution::Found(loc.clone())
+                        } else {
+                            TargetResolution::NotFound
+                        };
+                        match from_resolution {
+                            TargetResolution::Found(from_id) => {
+                                match session.unlink_exit(&from_id, &unlink_cmd.direction) {
+                                    Ok(msg) => {
+                                        println!("{msg}");
+                                        if let Err(e) =
+                                            persist_session(&mut session, &persistence).await
+                                        {
+                                            error!(error = %e, "persist after @unlink failed");
+                                        }
+                                    }
+                                    Err(e) => println!("{e}"),
+                                }
+                            }
+                            TargetResolution::Ambiguous(msg) => println!("{msg}"),
+                            TargetResolution::NotFound => println!(
+                                "{}",
+                                narrate_no_location_builder(
+                                    "Set a current location or specify @unlink <from> <dir>."
+                                )
+                            ),
+                        }
+                    }
                     "@set" => {
                         let set_cmd = match parse_set_command(&parsed.args) {
                             Ok(cmd) => cmd,

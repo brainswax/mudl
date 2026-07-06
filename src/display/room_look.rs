@@ -115,14 +115,24 @@ fn format_you_see_line(phrases: &[String]) -> String {
     format!("You see {} here.", join_natural_list(phrases))
 }
 
+fn format_room_parent_context(room: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
+    let parent = room.parent_place(objects)?;
+    Some(format!("Inside {}.", parent.name))
+}
+
 /// Player `look` / `examine` for rooms and areas (no leading room name).
 pub fn format_room_look_player(room: &Object, ctx: &DisplayContext) -> String {
     let mut lines = Vec::new();
 
     if ctx.flags.contains(super::DisplayFlags::DARK) {
         lines.push("It is pitch black.".to_string());
-    } else if let Some(desc) = room.get_description() {
-        lines.push(desc);
+    } else {
+        if let Some(context) = format_room_parent_context(room, &ctx.objects) {
+            lines.push(context);
+        }
+        if let Some(desc) = room.get_description() {
+            lines.push(desc);
+        }
     }
 
     let exits = format_exits(room, &ctx.objects);
@@ -287,7 +297,7 @@ mod tests {
         let mut window = bare_item("item:window-001", "Small Window", &room_id);
         window.apply_portal_role(&PortalSpec {
             kind: PortalKind::Window,
-            direction: "east".to_string(),
+            direction: "rear".to_string(),
             destination: "cottage-rear".to_string(),
             open: false,
             lock_id: None,
@@ -305,7 +315,7 @@ mod tests {
         let ctx = DisplayContext::new(ObjectId::new("player:hero-001"), DisplayMode::Player)
             .with_objects(objects);
         let output = format_room_look_player(&room, &ctx);
-        assert!(output.contains("Through the east window you see:"));
+        assert!(output.contains("Through the rear window you see:"));
         assert!(output.contains("stacked firewood"));
     }
 
@@ -323,7 +333,7 @@ mod tests {
         let mut window = bare_item("item:window-001", "Small Window", &room_id);
         window.apply_portal_role(&PortalSpec {
             kind: PortalKind::Window,
-            direction: "east".to_string(),
+            direction: "rear".to_string(),
             destination: "cottage-rear".to_string(),
             open: false,
             lock_id: Some("shutters".to_string()),
@@ -341,7 +351,29 @@ mod tests {
         let ctx = DisplayContext::new(ObjectId::new("player:hero-001"), DisplayMode::Player)
             .with_objects(objects);
         let output = format_room_look_player(&room, &ctx);
-        assert!(!output.contains("Through the east window"));
+        assert!(!output.contains("Through the rear window"));
+    }
+
+    #[test]
+    fn room_look_shows_parent_context_for_nested_rooms() {
+        let area_id = ObjectId::new("area:cottage-interior-001");
+        let area = bare_room(
+            "area:cottage-interior-001",
+            "Cottage Interior",
+            "The main hall.",
+        );
+        let mut room = bare_room("room:bedroom-001", "Bedroom", "A narrow bedroom.");
+        room.location = Some(area_id.clone());
+
+        let mut objects = HashMap::new();
+        objects.insert(area.id.clone(), area);
+        objects.insert(room.id.clone(), room.clone());
+
+        let ctx = DisplayContext::new(ObjectId::new("player:hero-001"), DisplayMode::Player)
+            .with_objects(objects);
+        let output = format_room_look_player(&room, &ctx);
+        assert!(output.starts_with("Inside Cottage Interior."));
+        assert!(output.contains("narrow bedroom"));
     }
 
     #[test]

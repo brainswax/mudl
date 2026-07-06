@@ -142,14 +142,39 @@ Each world uses a flat set of `.mudl` files under `worlds/<name>/`, composed fro
   starting_location=the-void
 @end
 @include map.mudl
+@import expansions/haunted_forest.mudl
 @include creatures.mudl
 @include players.mudl
 @include items.mudl
 @include objects.mudl
 ```
 
-- `@include` paths are relative to the **world** directory.
+- `@include` paths are relative to the **world** directory (built-in content shipped with the world).
+- `@import` loads expansion packs from a **local path** or **URL** (fetched at load time). Resolution order for relative paths: directory of the importing file → world root → universe root. Supports `http://`, `https://`, and `file://` URLs.
 - `@include-world <name>` loads `worlds/<name>/world.mudl` from the universe root.
+
+### Expansion packs
+
+Self-contained `.mudl` files bundle areas, items, and hooks for drop-in world extension. Tag them with `@expansion` metadata:
+
+```mudl
+@expansion haunted_forest
+  name=Haunted Forest
+  version=1
+  integrates=forest-path,the-void,scene-chest
+@end
+```
+
+Import from `world.mudl`:
+
+```mudl
+@import expansions/haunted_forest.mudl
+@import https://example.com/mudl/expansions/haunted_forest.mudl
+```
+
+The host world keeps minimal map hooks (e.g. `forest-path` with `in: haunted-entry`); the expansion places items and defines puzzle areas.
+
+Places may set `loop_to: <base_name>` so entering that room silently returns the player to another place (no movement message). Useful for maze wrong turns.
 - Set `MUDL_MODULE=modules/default` (or `MUDL_UNIVERSE` to a specific file) to load a universe.
 - Set `MUDL_WORLD=<name>` to select which world to bootstrap (defaults to the universe's `default_world`).
 

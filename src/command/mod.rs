@@ -2,6 +2,7 @@
 
 pub mod editor;
 pub mod parse;
+pub mod place;
 
 pub use editor::{
     apply_set, apply_unset, parse_set_command, parse_unset_command, ParsedSetCommand,
@@ -9,6 +10,10 @@ pub use editor::{
 };
 pub use parse::{
     has_wizard_permission, is_meta_command, parse_command_line, wizard_access_denied, CommandLine,
+};
+pub use place::{
+    parse_dig_command, parse_link_command, parse_unlink_command, ParsedDigCommand,
+    ParsedLinkCommand, ParsedUnlinkCommand,
 };
 
 use std::collections::HashMap;

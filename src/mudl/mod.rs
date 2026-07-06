@@ -10,7 +10,7 @@ pub use anatomy::{
 };
 pub use loader::{
     default_module_dir, default_universe_path, load_module, load_universe, LoadedUniverse,
-    LoadedWorld,
+    LoadedWorld, MudlSource,
 };
 pub use item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
 pub use roles::MudlRoleProps;

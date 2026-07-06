@@ -249,6 +249,38 @@ impl<P: Persistence> ObjectFactory<P> {
         self.create_named(type_name, slug, slug, owner).await
     }
 
+    /// Create a navigable place (`area` or `room`) for runtime world building.
+    pub async fn create_place(
+        &self,
+        place_type: &str,
+        display_name: &str,
+        owner: ObjectId,
+        description: Option<&str>,
+        parent: Option<ObjectId>,
+    ) -> anyhow::Result<Object> {
+        let place_type = place_type.to_ascii_lowercase();
+        if place_type != "area" && place_type != "room" {
+            anyhow::bail!("place type must be area or room, got {place_type}");
+        }
+        let slug = id_base_from_display_name(display_name);
+        let mut place = self
+            .create_named(&place_type, &slug, display_name, owner)
+            .await?;
+        if let Some(desc) = description {
+            place.add_property(Property {
+                name: "description".to_string(),
+                value: Value::String(desc.to_string()),
+                permissions: PermissionFlags::EVERYONE,
+                behavior: None,
+            });
+        }
+        if let Some(parent_id) = parent {
+            place.location = Some(parent_id);
+        }
+        self.commit(&place).await?;
+        Ok(place)
+    }
+
     pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
         self.persistence.load_object(id).await
     }

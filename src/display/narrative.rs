@@ -126,6 +126,13 @@ pub fn narrate_no_location_builder(hint: &str) -> String {
 }
 
 /// Successful movement.
+/// Player-facing line when a scatter exit ejects them into the main world.
+pub fn narrate_scatter_exit(destination_name: &str) -> String {
+    format!(
+        "The haunted wood spits you out. You stumble into {destination_name}, disoriented but unharmed."
+    )
+}
+
 pub fn narrate_go(direction: &str) -> String {
     format!("You head {direction}.")
 }
@@ -204,6 +211,30 @@ pub fn narrate_module_reloaded(universe: &str, world: &str) -> String {
 }
 
 /// Builder: module bundled.
+/// Builder feedback after `@dig`.
+pub fn narrate_dig(new_place: &Object, notes: &[String]) -> String {
+    let mut lines = vec![format!(
+        "You open {} into the world{}.",
+        new_place.name,
+        if new_place.is_room() {
+            " as a nested room"
+        } else {
+            ""
+        }
+    )];
+    lines.extend(notes.iter().cloned());
+    lines.join("\n")
+}
+
+/// Builder feedback after `@link`.
+pub fn narrate_link(notes: &[String]) -> String {
+    if notes.is_empty() {
+        "Linked exits.".to_string()
+    } else {
+        notes.join("\n")
+    }
+}
+
 pub fn narrate_module_bundled(module_dir: &str, output_dir: &str, file_count: usize) -> String {
     format!("You bundle {file_count} files from \"{module_dir}\" into \"{output_dir}\".")
 }
