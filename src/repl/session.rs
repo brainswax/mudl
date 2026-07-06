@@ -5,9 +5,10 @@ use std::fmt;
 
 use crate::command::persist_inventory_dirty;
 use crate::display::{
-    narrate_go, narrate_no_exit, narrate_no_location, resolve_object, DisplayContext, DisplayMode,
-    ResolveScope, TargetResolution,
+    format_room_look_player, narrate_go, narrate_no_exit, narrate_no_location, resolve_object,
+    DisplayContext, DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
+use crate::world::navigation::{normalize_direction, resolve_exit};
 use crate::inventory::InventoryContext;
 use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, ObjectId};
@@ -33,7 +34,10 @@ impl std::fmt::Display for SessionError {
                 write!(f, "The ground shifts beneath you — you are nowhere.")
             }
             Self::PlayerMissing => write!(f, "You seem to have lost yourself."),
-            Self::NoExit(dir) => write!(f, "{}", narrate_no_exit(dir)),
+            Self::NoExit(dir) => {
+                let friendly = normalize_direction(dir).unwrap_or(dir.as_str());
+                write!(f, "{}", narrate_no_exit(friendly))
+            }
         }
     }
 }
@@ -185,6 +189,9 @@ impl Session {
     }
 
     /// Move the player along an exit from the current location.
+    ///
+    /// Returns movement narration plus a brief look at the arrival room (description,
+    /// exits, visible items).
     pub fn go(&mut self, direction: &str) -> Result<String, SessionError> {
         let loc_id = self
             .current_location
@@ -198,9 +205,7 @@ impl Session {
             .ok_or(SessionError::LocationMissing)?
             .get_exits();
 
-        let target_id = exits
-            .get(direction)
-            .cloned()
+        let (dir_label, target_id) = resolve_exit(&exits, direction)
             .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
 
         let player = self
@@ -210,8 +215,17 @@ impl Session {
         player.location = Some(target_id.clone());
         self.dirty.mark(&self.player_id);
 
-        self.current_location = Some(target_id);
-        Ok(narrate_go(direction))
+        self.current_location = Some(target_id.clone());
+
+        let mut lines = vec![narrate_go(dir_label)];
+        if let Some(room) = self.objects.get(&target_id) {
+            let ctx = DisplayContext::new(self.player_id.clone(), DisplayMode::Player)
+                .with_objects(self.objects.clone())
+                .with_anatomy(self.anatomy.clone())
+                .with_flags(DisplayFlags::BRIEF);
+            lines.push(format_room_look_player(room, &ctx));
+        }
+        Ok(lines.join("\n"))
     }
 
     /// Persist only dirty objects (no-op count when nothing changed).
@@ -310,7 +324,9 @@ mod tests {
             )]),
         );
 
-        let north = bare("room:north-001", "North Passage");
+        let mut north = bare("room:north-001", "North Passage");
+        north.set_property_string("description", "A narrow passage north.");
+        north.add_exit("south", room_id.clone());
 
         persistence.save_object(&player).await.unwrap();
         persistence.save_object(&room).await.unwrap();
@@ -338,6 +354,8 @@ mod tests {
         let (_persistence, mut session) = sample_session().await;
         let msg = session.go("north").unwrap();
         assert!(msg.contains("north"));
+        assert!(msg.contains("narrow passage"));
+        assert!(msg.contains("Obvious exits"));
         assert_eq!(
             session.current_location().map(|id| id.as_str()),
             Some("room:north-001")
@@ -350,6 +368,17 @@ mod tests {
             Some("room:north-001")
         );
         assert!(session.dirty().is_dirty(&session.player_id));
+    }
+
+    #[tokio::test]
+    async fn go_accepts_direction_aliases() {
+        let (_persistence, mut session) = sample_session().await;
+        let msg = session.go("n").unwrap();
+        assert!(msg.contains("north"));
+        assert_eq!(
+            session.current_location().map(|id| id.as_str()),
+            Some("room:north-001")
+        );
     }
 
     #[tokio::test]

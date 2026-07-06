@@ -27,6 +27,7 @@ use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
 use mudl::persistence::{Persistence, SqlitePersistence};
 use mudl::repl::Session;
+use mudl::world::movement_direction_from_line;
 use tracing::{error, info, warn};
 
 async fn resolve_in_session(
@@ -314,6 +315,25 @@ async fn main() -> Result<()> {
 
                 let parts: Vec<&str> = input.split_whitespace().collect();
                 let cmd = parts[0];
+
+                if cmd == "go" && parts.len() < 2 {
+                    println!("Usage: go <direction>  (or just: north, south, in, …)");
+                    continue;
+                }
+                if let Some(dir) = movement_direction_from_line(cmd, &parts[1..]) {
+                    match session.go(dir) {
+                        Ok(msg) => {
+                            println!("{msg}");
+                            if let Err(e) = persist_session(&mut session, &persistence).await
+                            {
+                                error!(error = %e, "persist after go failed");
+                            }
+                        }
+                        Err(e) => println!("{e}"),
+                    }
+                    continue;
+                }
+
                 match cmd {
                     "help" => {
                         println!("Commands:");
@@ -348,7 +368,7 @@ async fn main() -> Result<()> {
                         println!("  lock <container>            - lock a closed container");
                         println!("  unlock <container> [with <key>] - unlock (auto-finds key if omitted)");
                         println!("  wear <item>                 - wear a container or garment");
-                        println!("  go <dir>                    - move to another location (e.g. go north)");
+                        println!("  go <dir>  (or n/s/e/w/…)    - move; shows room description and exits");
                         println!(
                             "  @set <target> <key> <value>  - wizard: set property/state/verb"
                         );
@@ -891,23 +911,7 @@ async fn main() -> Result<()> {
                             Err(e) => println!("{e}"),
                         }
                     }
-                    "go" => {
-                        if parts.len() < 2 {
-                            println!("Usage: go <direction>");
-                            continue;
-                        }
-                        let dir = parts[1];
-                        match session.go(dir) {
-                            Ok(msg) => {
-                                println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
-                                    error!(error = %e, "persist after go failed");
-                                }
-                            }
-                            Err(e) => println!("{e}"),
-                        }
-                    }
+
                     "@set" => {
                         let set_cmd = match parse_set_command(&parsed.args) {
                             Ok(cmd) => cmd,

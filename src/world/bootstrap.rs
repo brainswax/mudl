@@ -313,6 +313,40 @@ mod tests {
     use crate::persistence::SqlitePersistence;
 
     #[tokio::test]
+    async fn bootstrap_wires_starting_area_exits() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let owner = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        let start = bootstrap_world(&factory, owner.clone(), &world)
+            .await
+            .unwrap();
+
+        let clearing = factory.load_object(&start).await.unwrap().unwrap();
+        assert_eq!(clearing.name, "West Clearing");
+        let exits = clearing.get_exits();
+        assert!(exits.contains_key("north"));
+        assert!(exits.contains_key("east"));
+
+        let objects: Vec<Object> = persistence.list_objects(false).await.unwrap();
+        let forest = objects
+            .iter()
+            .find(|o| o.name == "Forest Path")
+            .expect("forest path area");
+        let cottage_rear = objects
+            .iter()
+            .find(|o| o.name == "Behind the Cottage")
+            .expect("cottage rear area");
+        assert_eq!(exits.get("north").unwrap(), &forest.id);
+        assert_eq!(exits.get("east").unwrap(), &cottage_rear.id);
+
+        let forest_exits = forest.get_exits();
+        assert_eq!(forest_exits.get("south").unwrap(), &start);
+        assert!(forest_exits.contains_key("north"));
+    }
+
+    #[tokio::test]
     async fn bootstrap_spawns_starting_scene_items() {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());

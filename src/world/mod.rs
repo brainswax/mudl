@@ -1,6 +1,7 @@
 pub mod bootstrap;
 pub mod container_fit;
 pub mod dirty;
+pub mod navigation;
 pub mod possession;
 pub mod stack_transfer;
 pub mod module;
@@ -10,6 +11,10 @@ pub mod session;
 pub use bootstrap::bootstrap_world;
 pub use dirty::{persist_dirty, DirtyTracker};
 pub use module::{active_module_dir, bundle_module, list_universe_files, ModuleManifest};
+pub use navigation::{
+    exit_directions, is_direction_verb, movement_direction_from_line, normalize_direction,
+    resolve_exit,
+};
 pub use move_manager::{
     move_object, move_to_container, move_to_grasp, move_to_inventory, move_to_room, resolve_location,
     MoveContext, MoveError, MoveEvent, MoveHooks, MoveResult,

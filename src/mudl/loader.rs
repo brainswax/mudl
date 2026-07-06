@@ -317,6 +317,18 @@ mod tests {
             .find(|d| d.base_name == "the-void")
             .unwrap();
         assert_eq!(void.obj_type, "area");
+        assert!(
+            world
+                .world_defs
+                .iter()
+                .any(|d| d.base_name == "forest-path")
+        );
+        assert!(
+            world
+                .world_defs
+                .iter()
+                .any(|d| d.base_name == "cottage-interior")
+        );
         assert!(world.sources.len() >= 5);
         assert!(!world.item_prototypes.is_empty());
         assert!(!world.item_instances.is_empty());
