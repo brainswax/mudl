@@ -485,14 +485,7 @@ fn partial_stack_transfer(
         }
         LocationRef::Inventory(player_id) => {
             ctx.objects.insert(new_id.clone(), placed);
-            let anatomy = ctx.anatomy.ok_or(MoveError::NoBodyPlan)?;
-            let player = ctx
-                .objects
-                .get(player_id)
-                .ok_or(MoveError::NotCarried)?
-                .clone();
-            let plan = player_body_plan(&player, anatomy)?;
-            place_in_grasp_slots(player_id, &new_id, plan, ctx.objects)?;
+            apply_grasp_to_player(ctx, player_id, &new_id)?;
         }
         LocationRef::BodySlot(holder, slot) => {
             placed.location = Some(holder.clone());
@@ -642,14 +635,7 @@ fn apply_destination(
             Ok(())
         }
         LocationRef::Inventory(holder) => {
-            let anatomy = ctx.anatomy.ok_or(MoveError::NoBodyPlan)?;
-            let player = ctx
-                .objects
-                .get(holder)
-                .ok_or(MoveError::NotCarried)?
-                .clone();
-            let plan = player_body_plan(&player, anatomy)?;
-            place_in_grasp_slots(holder, obj_id, plan, ctx.objects)?;
+            apply_grasp_to_player(ctx, holder, obj_id)?;
             Ok(())
         }
         LocationRef::Nowhere => {
@@ -764,7 +750,7 @@ pub fn move_object(
             .ok_or(MoveError::NotCarried)?
             .clone();
         let body_plan = player_body_plan(&player, anatomy)?;
-        grasp_slot_available(&player, &item, body_plan, ctx.objects)
+        grasp_slot_available(&player, &item, body_plan, ctx.objects, Some(obj_id))
     } else {
         false
     };
@@ -881,8 +867,8 @@ pub fn move_to_room(
     )
 }
 
-/// Convenience: move into a player's inventory (grasp slots).
-pub fn move_to_inventory(
+/// Convenience: move into a player's grasp slots (inventory).
+pub fn move_to_grasp(
     ctx: &mut MoveContext<'_>,
     obj_id: &ObjectId,
     player_id: &ObjectId,
@@ -896,6 +882,32 @@ pub fn move_to_inventory(
         LocationRef::Inventory(player_id.clone()),
         requested_units,
     )
+}
+
+/// Convenience: move into a player's inventory (grasp slots).
+pub fn move_to_inventory(
+    ctx: &mut MoveContext<'_>,
+    obj_id: &ObjectId,
+    player_id: &ObjectId,
+    requested_units: Option<u32>,
+) -> Result<MoveResult, MoveError> {
+    move_to_grasp(ctx, obj_id, player_id, requested_units)
+}
+
+fn apply_grasp_to_player(
+    ctx: &mut MoveContext<'_>,
+    player_id: &ObjectId,
+    obj_id: &ObjectId,
+) -> Result<(), MoveError> {
+    let anatomy = ctx.anatomy.ok_or(MoveError::NoBodyPlan)?;
+    let player = ctx
+        .objects
+        .get(player_id)
+        .ok_or(MoveError::NotCarried)?
+        .clone();
+    let plan = player_body_plan(&player, anatomy)?;
+    place_in_grasp_slots(player_id, obj_id, plan, ctx.objects)?;
+    Ok(())
 }
 
 /// Convenience: move into a container, optionally limiting stackable quantity.

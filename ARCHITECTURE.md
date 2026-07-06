@@ -39,7 +39,7 @@ M1 delivers a working object graph, centralized movement, REPL inventory verbs, 
           ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  MoveManager (src/world/move_manager.rs) — single authority for moves  │
-│  + possession (body slots, carried gear, grasp placement)               │
+│  + possession (body slots, carried gear, anatomy-driven grasp placement)│
 │  + stack_transfer (merge/split plans) + LocationRef resolution          │
 └─────────┬───────────────────────────────┬───────────────────────────────┘
           │                               │
@@ -61,7 +61,7 @@ M1 delivers a working object graph, centralized movement, REPL inventory verbs, 
 
 | Area | What works well |
 |------|-----------------|
-| **Movement** | `MoveManager` owns validation, stack merge/split, capacity/weight/volume, body-slot cleanup |
+| **Movement** | `MoveManager` owns validation, stack merge/split, capacity/weight/volume; `move_to_grasp` / `possession` handle hand placement |
 | **Roles** | Composable properties (`is_container`, `stackable`, `body_slots`, …) + `MudlRoleProps` bridge |
 | **Anatomy** | Creature slots loaded from MUDL; grasp/wear resolution uses `BodyPlan` |
 | **Persistence** | Full JSON roundtrip verified (222 tests); complex graphs (containers, stacks, slots) reload identically |
@@ -318,7 +318,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 ### Do soon (before doc/examples drift)
 
-1. **Unify wield through MoveManager** — `wield` still calls `possession::place_in_grasp_slots` directly; optional thin `move_to_grasp` wrapper.
+1. ~~**Unify wield through MoveManager**~~ — Done: `move_to_grasp` + `possession::select_grasp_slots` (anatomy-driven); `wield` routes through MoveManager.
 2. **REPL session model** — one in-memory `HashMap<ObjectId, Object>` per session; stop `load_all_objects` merge on every command; use `DirtyTracker` + `persist_dirty`.
 3. **Factory ordering** — `create_wearable` should not let `init_item_defaults` overwrite `apply_wearable_role` phys values.
 4. **Populate `items.mudl`** — gold coins, backpack, sword prototypes; spawn from MUDL via bootstrap instead of REPL `create` only.

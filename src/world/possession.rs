@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::mudl::BodyPlan;
+use crate::mudl::{slot_display_name, BodyPlan, BodySlotDef};
 use crate::object::{Object, ObjectId};
 
 /// Errors from grasp-slot placement and possession mutations.
@@ -226,15 +226,65 @@ pub fn is_carried_by(
 
 // --- Grasp slot placement ---
 
-/// Whether a grasp slot can accept a new item (empty or pointing at a stale reference).
+fn left_grasp_slot<'a>(plan: &'a BodyPlan) -> Option<&'a BodySlotDef> {
+    plan.grasp_slots()
+        .into_iter()
+        .find(|s| s.name.contains("left"))
+}
+
+fn right_grasp_slot<'a>(plan: &'a BodyPlan) -> Option<&'a BodySlotDef> {
+    plan.grasp_slots()
+        .into_iter()
+        .find(|s| s.name.contains("right"))
+}
+
+/// Preferred single-hand order: right grasp slot, then left, then any remaining grasp slots.
+fn grasp_slot_preference_order(plan: &BodyPlan) -> Vec<String> {
+    let mut order = Vec::new();
+    if let Some(slot) = right_grasp_slot(plan) {
+        order.push(slot.name.clone());
+    }
+    if let Some(slot) = left_grasp_slot(plan) {
+        if !order.iter().any(|name| name == &slot.name) {
+            order.push(slot.name.clone());
+        }
+    }
+    for slot in plan.grasp_slots() {
+        if !order.iter().any(|name| name == &slot.name) {
+            order.push(slot.name.clone());
+        }
+    }
+    order
+}
+
+/// All grasp slot names from the creature anatomy plan.
+pub fn grasp_slot_names(plan: &BodyPlan) -> Vec<String> {
+    plan.grasp_slots().iter().map(|s| s.name.clone()).collect()
+}
+
+/// Prune stale body slots before placing into grasp (wield/take-to-hands).
+pub fn prepare_grasp_placement(
+    player_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) {
+    prune_creature_body_slots(player_id, objects);
+}
+
+/// Whether a grasp slot can accept a new item (empty, stale, or already holding `relocating_item`).
 pub fn grasp_slot_free(
     player: &Object,
     slot: &str,
     objects: &HashMap<ObjectId, Object>,
+    relocating_item: Option<&ObjectId>,
 ) -> bool {
     match body_slot_item(player, slot) {
         None => true,
-        Some(item_id) => !body_slot_item_valid(player, &item_id, objects),
+        Some(item_id) => {
+            if relocating_item == Some(&item_id) {
+                return true;
+            }
+            !body_slot_item_valid(player, &item_id, objects)
+        }
     }
 }
 
@@ -244,42 +294,43 @@ pub fn select_grasp_slots(
     item: &Object,
     plan: &BodyPlan,
     objects: &HashMap<ObjectId, Object>,
+    relocating_item: Option<&ObjectId>,
 ) -> Result<(Vec<String>, Option<String>), PossessionError> {
+    let grasp = plan.grasp_slots();
+    if grasp.is_empty() {
+        return Err(PossessionError::HandsFull);
+    }
+
     let hand_pref = item.hand_slot();
     let preference = hand_pref.as_deref().unwrap_or("right");
-    let grasp_names: Vec<String> = plan.grasp_slots().iter().map(|s| s.name.clone()).collect();
 
     let (target_slots, carried_label) = if preference == "both" {
-        let left = "left_hand";
-        let right = "right_hand";
-        if !grasp_slot_free(player, left, objects) || !grasp_slot_free(player, right, objects) {
+        let slots: Vec<String> = grasp.iter().map(|s| s.name.clone()).collect();
+        if slots
+            .iter()
+            .any(|slot| !grasp_slot_free(player, slot, objects, relocating_item))
+        {
             return Err(PossessionError::HandsFull);
         }
-        (
-            vec![left.to_string(), right.to_string()],
-            Some(left.to_string()),
-        )
+        let label = left_grasp_slot(plan)
+            .map(|s| s.name.clone())
+            .or_else(|| slots.first().cloned());
+        (slots, label)
     } else if preference == "left" {
-        if !grasp_slot_free(player, "left_hand", objects) {
+        let slot = left_grasp_slot(plan)
+            .or_else(|| grasp.first().copied())
+            .ok_or(PossessionError::HandsFull)?;
+        if !grasp_slot_free(player, &slot.name, objects, relocating_item) {
             return Err(PossessionError::HandsFull);
         }
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else if grasp_slot_free(player, "right_hand", objects) {
-        (
-            vec!["right_hand".to_string()],
-            Some("right_hand".to_string()),
-        )
-    } else if grasp_slot_free(player, "left_hand", objects) {
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
+        (vec![slot.name.clone()], Some(slot.name.clone()))
     } else {
-        return Err(PossessionError::HandsFull);
+        let chosen = grasp_slot_preference_order(plan)
+            .into_iter()
+            .find(|slot| grasp_slot_free(player, slot, objects, relocating_item))
+            .ok_or(PossessionError::HandsFull)?;
+        (vec![chosen.clone()], Some(chosen))
     };
-
-    for slot in &grasp_names {
-        if target_slots.contains(slot) && !grasp_slot_free(player, slot, objects) {
-            return Err(PossessionError::HandsFull);
-        }
-    }
 
     Ok((target_slots, carried_label))
 }
@@ -290,8 +341,39 @@ pub fn grasp_slot_available(
     item: &Object,
     plan: &BodyPlan,
     objects: &HashMap<ObjectId, Object>,
+    relocating_item: Option<&ObjectId>,
 ) -> bool {
-    select_grasp_slots(player, item, plan, objects).is_ok()
+    select_grasp_slots(player, item, plan, objects, relocating_item).is_ok()
+}
+
+/// Verb phrase for wield/take feedback after an item lands in grasp slots.
+pub fn grasp_action_phrase(
+    item: &Object,
+    player: &Object,
+    item_id: &ObjectId,
+    plan: &BodyPlan,
+) -> String {
+    if item.hand_slot().as_deref() == Some("both") {
+        return "wield".to_string();
+    }
+
+    let occupied: Vec<_> = plan
+        .grasp_slots()
+        .iter()
+        .filter(|slot| body_slot_item(player, &slot.name).as_ref() == Some(item_id))
+        .map(|slot| slot.name.as_str())
+        .collect();
+
+    if occupied.len() >= 2 {
+        return "wield".to_string();
+    }
+
+    match occupied.first().copied() {
+        Some(slot) if slot.contains("right") => "hold in your right hand".to_string(),
+        Some(slot) if slot.contains("left") => "hold in your left hand".to_string(),
+        Some(slot) => format!("hold in your {}", slot_display_name(slot)),
+        None => "hold".to_string(),
+    }
 }
 
 /// Place `item_id` into grasp slots on `player_id`, updating location and `carried_slot`.
@@ -301,9 +383,12 @@ pub fn place_in_grasp_slots(
     plan: &BodyPlan,
     objects: &mut HashMap<ObjectId, Object>,
 ) -> Result<Vec<String>, PossessionError> {
+    prepare_grasp_placement(player_id, objects);
+
     let item = objects.get(item_id).ok_or(PossessionError::NotCarried)?.clone();
     let player = objects.get(player_id).ok_or(PossessionError::NotCarried)?;
-    let (target_slots, carried_label) = select_grasp_slots(player, &item, plan, objects)?;
+    let (target_slots, carried_label) =
+        select_grasp_slots(player, &item, plan, objects, Some(item_id))?;
 
     let mut player = objects.get(player_id).ok_or(PossessionError::NotCarried)?.clone();
     for slot in &target_slots {
@@ -401,5 +486,86 @@ mod tests {
         ]);
 
         assert!(is_in_player_possession(&player_id, &gem_id, &objects));
+    }
+
+    fn human_plan() -> BodyPlan {
+        BodyPlan {
+            name: "human".to_string(),
+            slots: vec![
+                crate::mudl::BodySlotDef {
+                    name: "left_hand".to_string(),
+                    capacity: 1,
+                    slot_type: crate::mudl::SlotType::Grasp,
+                    hands: 1,
+                },
+                crate::mudl::BodySlotDef {
+                    name: "right_hand".to_string(),
+                    capacity: 1,
+                    slot_type: crate::mudl::SlotType::Grasp,
+                    hands: 1,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn select_grasp_slots_prefers_right_hand_from_anatomy() {
+        let plan = human_plan();
+        let player = bare("player:hero-001", "Hero");
+        let sword = bare("item:sword-001", "sword");
+        let objects = HashMap::from([(player.id.clone(), player.clone())]);
+
+        let (slots, label) =
+            select_grasp_slots(&player, &sword, &plan, &objects, None).unwrap();
+        assert_eq!(slots, vec!["right_hand"]);
+        assert_eq!(label.as_deref(), Some("right_hand"));
+    }
+
+    #[test]
+    fn select_grasp_slots_two_handed_uses_all_grasp_slots() {
+        let plan = human_plan();
+        let player = bare("player:hero-001", "Hero");
+        let mut greatsword = bare("item:gs-001", "greatsword");
+        greatsword.set_property_string("hand_slot", "both");
+        let objects = HashMap::from([(player.id.clone(), player.clone())]);
+
+        let (slots, _) =
+            select_grasp_slots(&player, &greatsword, &plan, &objects, None).unwrap();
+        assert_eq!(slots, vec!["left_hand", "right_hand"]);
+    }
+
+    #[test]
+    fn select_grasp_slots_allows_repositioning_occupied_item() {
+        let plan = human_plan();
+        let sword_id = ObjectId::new("item:sword-001");
+        let mut player = bare("player:hero-001", "Hero");
+        set_body_slot(&mut player, "right_hand", Some(sword_id.clone()));
+
+        let sword = bare("item:sword-001", "sword");
+        let objects = HashMap::from([
+            (player.id.clone(), player.clone()),
+            (sword_id.clone(), sword.clone()),
+        ]);
+
+        let (slots, _) =
+            select_grasp_slots(&player, &sword, &plan, &objects, Some(&sword_id)).unwrap();
+        assert_eq!(slots, vec!["right_hand"]);
+    }
+
+    #[test]
+    fn grasp_action_phrase_two_handed() {
+        let plan = human_plan();
+        let sword_id = ObjectId::new("item:gs-001");
+        let mut player = bare("player:hero-001", "Hero");
+        set_body_slot(&mut player, "left_hand", Some(sword_id.clone()));
+        set_body_slot(&mut player, "right_hand", Some(sword_id.clone()));
+
+        let mut greatsword = bare("item:gs-001", "greatsword");
+        greatsword.set_property_string("hand_slot", "both");
+
+        assert_eq!(
+            grasp_action_phrase(&greatsword, &player, &sword_id, &plan),
+            "wield"
+        );
     }
 }

@@ -10,11 +10,10 @@ use crate::display::grammar::indefinite_article;
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{LocationRef, Object, ObjectId};
 use crate::world::move_manager::{
-    move_object, move_to_container, move_to_room, MoveContext, MoveError, MoveHooks,
+    move_object, move_to_container, move_to_grasp, move_to_room, MoveContext, MoveError, MoveHooks,
 };
 use crate::world::possession::{
-    clear_creature_slots_for_item, is_carried_by as possession_is_carried_by,
-    place_in_grasp_slots, prune_creature_body_slots, PossessionError,
+    grasp_action_phrase, is_carried_by as possession_is_carried_by, PossessionError,
 };
 
 /// Errors returned by inventory operations.
@@ -738,27 +737,14 @@ pub fn wield_item(
         return Err(InventoryError::NotWieldable);
     }
 
-    clear_creature_slots_for_item(ctx.player_id, &item_id, ctx.objects);
-
-    let player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    let plan = player_body_plan(&player, ctx.anatomy)?;
-    prune_creature_body_slots(ctx.player_id, ctx.objects);
-    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
+    let display = item.name.clone();
+    let player_id = ctx.player_id.clone();
+    with_move_ctx(ctx, |mctx| move_to_grasp(mctx, &item_id, &player_id, None))?;
 
     let item = ctx.objects.get(&item_id).unwrap();
-    let display = item.name.clone();
     let player = ctx.objects.get(ctx.player_id).unwrap();
-    let left = player.body_slot_item("left_hand");
-    let right = player.body_slot_item("right_hand");
-
-    let phrase = if item.hand_slot().as_deref() == Some("both") || (left == right && left.is_some())
-    {
-        "wield"
-    } else if right.as_ref() == Some(&item_id) {
-        "hold in your right hand"
-    } else {
-        "hold in your left hand"
-    };
+    let plan = player_body_plan(player, ctx.anatomy)?;
+    let phrase = grasp_action_phrase(item, player, &item_id, plan);
 
     Ok(format!("You {phrase} the {display}."))
 }
