@@ -53,13 +53,13 @@ impl std::fmt::Display for ObjectId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Behavior {
     pub code: String,
     pub permissions: PermissionFlags,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Property {
     pub name: String,
     pub value: Value,
@@ -67,14 +67,14 @@ pub struct Property {
     pub behavior: Option<Behavior>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Verb {
     pub name: String,
     pub code: String,
     pub permissions: PermissionFlags,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     String(String),
     Int(i64),
@@ -85,7 +85,7 @@ pub enum Value {
     Map(HashMap<String, Value>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Object {
     pub id: ObjectId,
     pub name: String,

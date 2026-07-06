@@ -341,4 +341,225 @@ mod tests {
         assert_eq!(reloaded_bars.stack_count(), 3);
         assert_eq!(reloaded_bars.location.as_ref(), Some(&player_id));
     }
+
+    /// Collect every object id referenced by location, prototype, contents, and body slots.
+    fn referenced_ids(obj: &Object) -> Vec<ObjectId> {
+        let mut refs = Vec::new();
+        if let Some(loc) = &obj.location {
+            refs.push(loc.clone());
+        }
+        if let Some(proto) = &obj.prototype {
+            refs.push(proto.clone());
+        }
+        refs.extend(obj.container_contents());
+        refs.extend(obj.body_slots().into_values());
+        for prop in obj.properties.values() {
+            collect_value_refs(&prop.value, &mut refs);
+        }
+        refs
+    }
+
+    fn collect_value_refs(value: &crate::object::Value, out: &mut Vec<ObjectId>) {
+        use crate::object::Value;
+        match value {
+            Value::ObjectRef(id) => out.push(id.clone()),
+            Value::List(items) => items.iter().for_each(|v| collect_value_refs(v, out)),
+            Value::Map(map) => map.values().for_each(|v| collect_value_refs(v, out)),
+            _ => {}
+        }
+    }
+
+    fn assert_graph_references_resolve(objects: &std::collections::HashMap<ObjectId, Object>) {
+        for obj in objects.values() {
+            for id in referenced_ids(obj) {
+                assert!(
+                    objects.contains_key(&id),
+                    "missing referenced object {} from {}",
+                    id.as_str(),
+                    obj.id.as_str()
+                );
+            }
+        }
+    }
+
+    fn assert_objects_identical(
+        before: &std::collections::HashMap<ObjectId, Object>,
+        after: &std::collections::HashMap<ObjectId, Object>,
+    ) {
+        assert_eq!(
+            before.len(),
+            after.len(),
+            "object count changed after reload"
+        );
+        for (id, original) in before {
+            let reloaded = after
+                .get(id)
+                .unwrap_or_else(|| panic!("object {} missing after reload", id.as_str()));
+            assert_eq!(
+                original, reloaded,
+                "object {} differs after persistence roundtrip",
+                id.as_str()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn milestone1_complex_scene_persist_reload_identical() {
+        use std::collections::HashMap;
+
+        use crate::display::short_id;
+        use crate::inventory::{drop_item, put_item, take_item, wear_item, InventoryContext};
+        use crate::mudl::load_module;
+        use crate::object::ObjectFactory;
+        use crate::world::session::{hydrate_world, persist_all};
+
+        let persistence = memory_persistence().await;
+        let factory = ObjectFactory::new(persistence.clone());
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let owner = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("room:test-001");
+
+        let mut player = factory
+            .create_player("hero", owner.clone(), &anatomy)
+            .await
+            .unwrap();
+        player.location = Some(room_id.clone());
+
+        let mut room = factory.create("room", "test", owner.clone()).await.unwrap();
+        room.name = "Test Room".to_string();
+
+        let mut backpack = factory
+            .create_container("backpack", owner.clone(), 5, true)
+            .await
+            .unwrap();
+        backpack.name = "backpack".to_string();
+        backpack.location = Some(room_id.clone());
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", owner.clone(), None, 10)
+            .await
+            .unwrap();
+        bars.name = "gold bar".to_string();
+        bars.set_property_int("weight", 1);
+        bars.location = Some(room_id.clone());
+        let bars_id = bars.id.clone();
+        let bars_proto = bars.prototype.clone();
+
+        let mut coins = factory
+            .create_stackable_item("coins", owner.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.name = "coins".to_string();
+        coins.set_property_int("weight", 1);
+        coins.location = Some(room_id.clone());
+
+        let mut greatsword = factory
+            .create_item("greatsword", owner.clone())
+            .await
+            .unwrap();
+        greatsword.name = "Greatsword".to_string();
+        greatsword.set_property_string("hand_slot", "both");
+        greatsword.set_property_int("weight", 8);
+        greatsword.location = Some(room_id.clone());
+
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player);
+        objects.insert(room_id.clone(), room);
+        objects.insert(backpack.id.clone(), backpack);
+        objects.insert(bars.id.clone(), bars);
+        objects.insert(coins.id.clone(), coins);
+        objects.insert(greatsword.id.clone(), greatsword);
+
+        let mut ctx = InventoryContext {
+            player_id: &owner,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        // Build a realistic post-play graph: worn container, partial stacks, two-handed wield.
+        take_item(&mut ctx, &format!("1 {}", short_id(&bars_id))).unwrap();
+        wear_item(&mut ctx, "backpack").unwrap();
+        take_item(&mut ctx, "5 coins").unwrap();
+        put_item(&mut ctx, "coins", "backpack", Some(5)).unwrap();
+        drop_item(&mut ctx, "gold bar").unwrap();
+        take_item(&mut ctx, "greatsword").unwrap();
+
+        let mut split_bars = factory
+            .create_stackable_item("gold bar", owner.clone(), bars_proto, 3)
+            .await
+            .unwrap();
+        split_bars.name = "gold bar".to_string();
+        split_bars.set_property_int("weight", 1);
+        split_bars.location = Some(room_id.clone());
+        objects.insert(split_bars.id.clone(), split_bars);
+
+        let before: HashMap<ObjectId, Object> = objects
+            .iter()
+            .map(|(id, obj)| (id.clone(), obj.clone()))
+            .collect();
+
+        assert_graph_references_resolve(&before);
+
+        let player_after = before.get(&owner).unwrap();
+        assert_eq!(
+            player_after.body_slot_item("torso").as_ref(),
+            Some(
+                &before
+                    .values()
+                    .find(|o| o.name == "backpack")
+                    .unwrap()
+                    .id
+            )
+        );
+        assert!(
+            player_after.body_slot_item("left_hand").is_some()
+                && player_after.body_slot_item("right_hand").is_some()
+        );
+
+        let ground_bars: Vec<_> = before
+            .values()
+            .filter(|o| o.name == "gold bar" && o.location.as_ref() == Some(&room_id))
+            .collect();
+        assert_eq!(ground_bars.len(), 2);
+        let ground_counts: Vec<u32> = ground_bars.iter().map(|o| o.stack_count()).collect();
+        assert!(ground_counts.contains(&3), "split ground pile preserved");
+        assert!(ground_counts.contains(&10), "main pile restored after take/drop cycle");
+        let total_on_ground: u32 = ground_counts.iter().sum();
+        assert_eq!(total_on_ground, 13);
+
+        let greatsword_id = before.values().find(|o| o.name == "Greatsword").unwrap().id.clone();
+        assert!(
+            before.get(&greatsword_id).unwrap().carried_slot().is_some(),
+            "wielded item should record carried_slot"
+        );
+
+        let backpack_id = before.values().find(|o| o.name == "backpack").unwrap().id.clone();
+        let stored_coins_id = before
+            .get(&backpack_id)
+            .unwrap()
+            .container_contents()[0]
+            .clone();
+        assert_eq!(before.get(&stored_coins_id).unwrap().stack_count(), 5);
+
+        persist_all(&persistence, &before).await.unwrap();
+
+        let after = hydrate_world(&persistence).await.unwrap();
+        assert_graph_references_resolve(&after);
+        assert_objects_identical(&before, &after);
+
+        let reloaded_player = after.get(&owner).unwrap();
+        assert!(reloaded_player.body_slot_item("torso").is_some());
+        assert!(reloaded_player.body_slot_item("left_hand").is_some());
+        assert!(reloaded_player.body_slot_item("right_hand").is_some());
+        assert!(!reloaded_player
+            .body_slots()
+            .values()
+            .any(|id| !after.contains_key(id)));
+    }
 }
