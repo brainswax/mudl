@@ -126,6 +126,13 @@ pub fn narrate_no_location_builder(hint: &str) -> String {
 }
 
 /// Successful movement.
+/// Player-facing line when a scatter exit ejects them into the main world.
+pub fn narrate_scatter_exit(destination_name: &str) -> String {
+    format!(
+        "The haunted wood spits you out. You stumble into {destination_name}, disoriented but unharmed."
+    )
+}
+
 pub fn narrate_go(direction: &str) -> String {
     format!("You head {direction}.")
 }

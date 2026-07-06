@@ -6,6 +6,7 @@ use std::fmt;
 use crate::command::persist_inventory_dirty;
 use crate::display::{
     format_room_look_player, narrate_go, narrate_go_encumbered, narrate_no_exit,
+    narrate_scatter_exit, object_name,
     narrate_no_location, narrate_overloaded, resolve_object, DisplayContext, DisplayFlags,
     DisplayMode, ResolveScope, TargetResolution,
 };
@@ -14,7 +15,7 @@ use crate::world::portal::{passable_portal_blocks_passage, PortalBlock};
 use crate::world::place_builder::{
     apply_dig_result, dig_place, link_places, unlink_exit, DigRequest, DigResult, PlaceBuildError,
 };
-use crate::world::exits::can_traverse_exit;
+use crate::world::exits::{apply_scatter_exit, can_traverse_exit};
 use crate::world::navigation::{normalize_direction, resolve_exit};
 use crate::inventory::InventoryContext;
 use crate::mudl::AnatomyRegistry;
@@ -235,15 +236,15 @@ impl Session {
             .ok_or(SessionError::LocationMissing)?;
 
         let exits = room.get_exits();
-        let (dir_label, target_id) = resolve_exit(&exits, direction)
+        let (dir_label, map_target_id) = resolve_exit(&exits, direction)
             .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
 
-        if !can_traverse_exit(room, dir_label, target_id, &self.objects) {
+        if !can_traverse_exit(room, dir_label, map_target_id, &self.objects) {
             return Err(SessionError::NoExit(direction.to_string()));
         }
 
         if let Some(block) =
-            passable_portal_blocks_passage(&loc_id, dir_label, target_id, &self.objects)
+            passable_portal_blocks_passage(&loc_id, dir_label, map_target_id, &self.objects)
         {
             let name = self
                 .objects
@@ -272,6 +273,14 @@ impl Session {
             return Err(SessionError::Overloaded);
         }
 
+        let target_id = apply_scatter_exit(
+            room,
+            dir_label,
+            map_target_id,
+            &self.player_id,
+            &self.objects,
+        );
+
         let player = self
             .objects
             .get_mut(&self.player_id)
@@ -281,10 +290,16 @@ impl Session {
 
         self.current_location = Some(target_id.clone());
 
-        let movement_line = match encumbrance {
-            EncumbranceLevel::Encumbered => narrate_go_encumbered(dir_label),
-            EncumbranceLevel::Unencumbered | EncumbranceLevel::Overloaded => {
-                narrate_go(dir_label)
+        let scattered = target_id != *map_target_id;
+        let movement_line = if scattered {
+            let dest_name = object_name(&target_id, &self.objects);
+            narrate_scatter_exit(&dest_name)
+        } else {
+            match encumbrance {
+                EncumbranceLevel::Encumbered => narrate_go_encumbered(dir_label),
+                EncumbranceLevel::Unencumbered | EncumbranceLevel::Overloaded => {
+                    narrate_go(dir_label)
+                }
             }
         };
         let mut lines = vec![movement_line];

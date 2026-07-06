@@ -49,6 +49,7 @@ pub use narrative::{
     narrate_go_encumbered, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
     narrate_no_exit, narrate_overloaded,
     narrate_dig, narrate_field_set, narrate_field_unset, narrate_link, narrate_no_location,
+    narrate_scatter_exit,
     narrate_no_location_builder,
     narrate_not_in_cache, narrate_property_added,
     narrate_restore, narrate_saved, narrate_soft_delete, narrate_target_not_found,

@@ -10,6 +10,9 @@ pub struct WorldDef {
     pub exits: HashMap<String, String>,
     pub location: Option<String>,
     pub starting_location: Option<String>,
+    /// When set, leaving via `scatter_direction` sends the player to one of these places.
+    pub scatter_to: Vec<String>,
+    pub scatter_direction: Option<String>,
 }
 
 /// Parse room/object definitions from MUDL source (legacy declarative format).
@@ -24,6 +27,8 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
         exits: HashMap::new(),
         location: None,
         starting_location: None,
+        scatter_to: Vec::new(),
+        scatter_direction: None,
     };
     let mut in_exits = false;
 
@@ -44,6 +49,8 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
                     exits: HashMap::new(),
                     location: None,
                     starting_location: None,
+                    scatter_to: Vec::new(),
+                    scatter_direction: None,
                 };
                 in_exits = false;
             }
@@ -69,21 +76,31 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
             in_exits = true;
             continue;
         }
-        if in_exits && trimmed.contains(':') {
-            let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
-            if parts.len() == 2 {
-                current
-                    .exits
-                    .insert(parts[0].trim().to_string(), parts[1].trim().to_string());
-            }
-            continue;
-        }
         if trimmed.contains(':') {
-            in_exits = false;
             let parts: Vec<&str> = trimmed.splitn(2, ':').collect();
             if parts.len() == 2 {
                 let key = parts[0].trim().to_lowercase();
                 let value = parts[1].trim().to_string();
+                if key == "scatter_to" || key == "scatter_direction" {
+                    in_exits = false;
+                    match key.as_str() {
+                        "scatter_to" => {
+                            current.scatter_to = value
+                                .split(',')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                        }
+                        "scatter_direction" => current.scatter_direction = Some(value),
+                        _ => {}
+                    }
+                    continue;
+                }
+                if in_exits {
+                    current.exits.insert(parts[0].trim().to_string(), value);
+                    continue;
+                }
+                in_exits = false;
                 match key.as_str() {
                     "type" => current.obj_type = value,
                     "base_name" => current.base_name = value,
@@ -155,6 +172,30 @@ mod tests {
         assert_eq!(
             interior.exits.get("east").map(String::as_str),
             Some("cottage-pantry")
+        );
+    }
+
+    #[test]
+    fn parse_haunted_map_scatter_and_dead_ends() {
+        let content = include_str!("../../modules/default/worlds/default_world/haunted.mudl");
+        let (defs, _) = parse_world_file(content);
+        assert_eq!(defs.len(), 13);
+
+        let heart = defs.iter().find(|d| d.base_name == "haunted-heart").unwrap();
+        assert_eq!(
+            heart.scatter_to,
+            vec![
+                "the-void".to_string(),
+                "forest-path".to_string(),
+                "cottage-rear".to_string()
+            ]
+        );
+        assert_eq!(heart.scatter_direction.as_deref(), Some("out"));
+
+        let wither = defs.iter().find(|d| d.base_name == "haunted-wither").unwrap();
+        assert_eq!(
+            wither.exits.get("out").map(String::as_str),
+            Some("haunted-entry")
         );
     }
 }

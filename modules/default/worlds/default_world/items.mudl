@@ -143,6 +143,55 @@
   alias=cottage key
 @end
 
+@prototype mossy-boulder
+  name=Mossy Boulder
+  description=A waist-high boulder wrapped in green moss. Something is carved into the shaded side.
+  readable=true
+  read_text=The carving is blunt but clear: THE PATH REMEMBERS A HOLLOW OAK. IRON LIGHT HELPS. THE WOOD KEEPS WHISPERS FOR THOSE WHO LISTEN.
+  weight=40.0
+  volume=30.0
+  pocketable=false
+  alias=boulder
+  alias=mossy boulder
+@end
+
+@prototype whisper-charm
+  name=Whisper Charm
+  description=A chip of bark bound with copper wire. It hums faintly when the lantern is near.
+  is_key=true
+  lock_id=oak-whisper
+  weight=0.1
+  volume=0.1
+  pocketable=true
+  alias=charm
+  alias=whisper charm
+@end
+
+@prototype standing-stone
+  name=Standing Stone
+  description=A weathered stone pillar, its face carved with a single word.
+  readable=true
+  weight=50.0
+  volume=40.0
+  pocketable=false
+  alias=stone
+@end
+
+@prototype hollow-oak-portal
+  name=Hollow Oak
+  description=The heartwood is rotted away, leaving a passage large enough to duck through. The opening is shut and bound with invisible thread.
+  is_door=true
+  is_open=false
+  locked=true
+  lock_id=oak-whisper
+  weight=80.0
+  volume=60.0
+  pocketable=false
+  alias=oak
+  alias=split oak
+  alias=hollow oak
+@end
+
 @prototype boots-of-carrying
   name=Boots of Carrying
   description=Sturdy leather boots that lighten your step and somehow broaden your shoulders.
@@ -161,6 +210,11 @@
 
 @item scene-mailbox
   prototype=worn-mailbox
+  location=the-void
+@end
+
+@item scene-boulder
+  prototype=mossy-boulder
   location=the-void
 @end
 
@@ -204,6 +258,11 @@
   location=scene-chest
 @end
 
+@item chest-whisper-charm
+  prototype=whisper-charm
+  location=scene-chest
+@end
+
 @item cottage-key-ring
   prototype=brass-key-ring
   location=cottage-interior
@@ -237,4 +296,39 @@
   location=cottage-interior
   door_direction=rear
   door_destination=cottage-rear
+@end
+
+# --- Haunted forest (hidden portal + puzzle stones) ---
+
+@item forest-hollow-oak
+  prototype=hollow-oak-portal
+  location=forest-path
+  door_direction=in
+  door_destination=haunted-entry
+  locked=true
+  lock_id=oak-whisper
+@end
+
+@item haunted-moon-stone
+  prototype=standing-stone
+  location=haunted-moon
+  read_text=MOON — first, when the silver opens the way.
+@end
+
+@item haunted-ember-stone
+  prototype=standing-stone
+  location=haunted-ember
+  read_text=EMBER — second, follow warmth that left no flame.
+@end
+
+@item haunted-mirror-stone
+  prototype=standing-stone
+  location=haunted-mirror
+  read_text=MIRROR — third, trust the still water's lie.
+@end
+
+@item haunted-ash-stone
+  prototype=standing-stone
+  location=haunted-ash
+  read_text=ASH — fourth, then north to the pale heart. Step OUT when the wood releases you.
 @end

@@ -1,0 +1,108 @@
+# Haunted forest puzzle — hidden off the Forest Path, replayable via dead-end loops.
+
+type: area
+base_name: haunted-entry
+name: Tangled Threshold
+description: The trees close like a held breath. Mist beads on your sleeves. Pale motes drift without wind. Carved into a root, half-swallowed by moss: MOON, EMBER, MIRROR, ASH — then the heart of the wood. Paths tangle in every other direction.
+exits:
+  north: haunted-moon
+  east: haunted-wither
+  south: haunted-mist
+  west: haunted-moss
+
+type: area
+base_name: haunted-moon
+name: Moonlit Glade
+description: A silvered clearing where the canopy breaks. A standing stone warms under moonlight that does not match the sky. The threshold lies south; deeper woods beckon east.
+exits:
+  south: haunted-entry
+  east: haunted-ember
+  north: haunted-shrine
+
+type: area
+base_name: haunted-ember
+name: Ember Copse
+description: Charred stumps ring a hollow where coals once slept. The air tastes of old smoke. Moonlit Glade lies west; south, the ground turns glassy and still.
+exits:
+  west: haunted-moon
+  south: haunted-mirror
+  east: haunted-thicket
+
+type: area
+base_name: haunted-mirror
+name: Mirror Mire
+description: Black water repeats the trees upside down. Every step sounds like two people walking. Ember Copse is north; west, ash-grey reeds rattle without breeze.
+exits:
+  north: haunted-ember
+  west: haunted-ash
+  east: haunted-pool
+
+type: area
+base_name: haunted-ash
+name: Ash Hollow
+description: Fine grey dust coats your boots. Dead branches arch like rib bones. Mirror Mire glimmers east. North, the air thins — something final waits.
+exits:
+  east: haunted-mirror
+  north: haunted-heart
+  south: haunted-bones
+
+type: area
+base_name: haunted-heart
+name: Pale Heart of the Wood
+description: The haunted forest kneels here. A ring of roots frames a patch of sky that looks almost ordinary. The stones' order was not a suggestion. South leads back to ash. There is only one way out — and the world will choose where you land.
+exits:
+  south: haunted-ash
+  out: haunted-entry
+scatter_to: the-void, forest-path, cottage-rear
+scatter_direction: out
+
+# --- Dead ends (loop back to the threshold) ---
+
+type: area
+base_name: haunted-wither
+name: Withering Reach
+description: Branches knit overhead until the light dies. You turn in place twice before the path spits you back toward the threshold.
+exits:
+  out: haunted-entry
+
+type: area
+base_name: haunted-mist
+name: Breathless Mist
+description: White mist swallows the trail. Somewhere a branch snaps — behind you, beside you, impossible to tell. You retreat by instinct.
+exits:
+  out: haunted-entry
+
+type: area
+base_name: haunted-moss
+name: Moss Choke
+description: Soft moss climbs every trunk and blurs every landmark. Hours might pass in minutes. The way back finds you before panic does.
+exits:
+  out: haunted-entry
+
+type: area
+base_name: haunted-thicket
+name: Bramble Thicket
+description: Thorns catch cloth and skin alike. Progress is a lie here. Eventually you stumble backward into familiar gloom.
+exits:
+  out: haunted-entry
+
+type: area
+base_name: haunted-pool
+name: Drowned Glare
+description: The pool's reflection shows a path that is not there. When you reach for it, the image shatters and the forest reclaims you.
+exits:
+  out: haunted-entry
+
+type: area
+base_name: haunted-bones
+name: Bone Snarl
+description: Bleached roots tangle like old teeth. A windless voice seems to count your steps. You do not finish the count.
+exits:
+  out: haunted-entry
+
+type: area
+base_name: haunted-shrine
+name: Forgotten Shrine
+description: A stone bowl holds rainwater and fallen needles. Whoever left offerings stopped long ago. The glade behind you feels suddenly far.
+exits:
+  out: haunted-entry

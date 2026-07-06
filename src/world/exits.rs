@@ -2,8 +2,70 @@
 
 use std::collections::HashMap;
 
-use crate::object::{Object, ObjectId};
+use crate::object::{Object, ObjectId, Value};
 use crate::world::navigation::{normalize_direction, resolve_exit};
+
+/// Pick a scatter destination from `scatter_to` on `from` (deterministic per player).
+pub fn pick_scatter_destination(
+    from: &Object,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<ObjectId> {
+    let prop = from.get_property("scatter_to")?;
+    let Value::List(items) = &prop.value else {
+        return None;
+    };
+    let candidates: Vec<ObjectId> = items
+        .iter()
+        .filter_map(|value| {
+            let Value::ObjectRef(id) = value else {
+                return None;
+            };
+            objects
+                .get(id)
+                .filter(|place| place.is_active() && place.is_location())
+                .map(|_| id.clone())
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let mut hash = 0usize;
+    for byte in player_id.as_str().bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as usize);
+    }
+    for byte in from.id.as_str().bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as usize);
+    }
+    Some(candidates[hash % candidates.len()].clone())
+}
+
+/// Apply scatter exit redirection when leaving `from` along `direction`.
+pub fn apply_scatter_exit(
+    from: &Object,
+    direction: &str,
+    resolved_target: &ObjectId,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> ObjectId {
+    let scatter_dir = from
+        .get_property("scatter_direction")
+        .and_then(|prop| {
+            if let Value::String(dir) = &prop.value {
+                normalize_direction(dir)
+            } else {
+                None
+            }
+        })
+        .unwrap_or("out");
+    let Some(dir) = normalize_direction(direction) else {
+        return resolved_target.clone();
+    };
+    if dir != scatter_dir {
+        return resolved_target.clone();
+    }
+    pick_scatter_destination(from, player_id, objects).unwrap_or_else(|| resolved_target.clone())
+}
 
 /// Canonical opposite direction for paired exits (north↔south, in↔out, etc.).
 pub fn reverse_direction(direction: &str) -> Option<&'static str> {
@@ -239,6 +301,66 @@ mod tests {
         ]);
         let errors = validate_reciprocal_exits(&a, &objects).unwrap_err();
         assert!(errors[0].contains("points elsewhere"));
+    }
+
+    #[test]
+    fn pick_scatter_destination_is_deterministic_per_player() {
+        let player = ObjectId::new("player:admin-001");
+        let mut heart = bare_place("area:heart-001", "Heart", None);
+        let void_id = ObjectId::new("area:void-001");
+        let path_id = ObjectId::new("area:path-001");
+        heart.add_property(crate::object::Property {
+            name: "scatter_to".to_string(),
+            value: Value::List(vec![
+                Value::ObjectRef(void_id.clone()),
+                Value::ObjectRef(path_id.clone()),
+            ]),
+            permissions: crate::object::PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+        let void = bare_place("area:void-001", "Void", None);
+        let path = bare_place("area:path-001", "Path", None);
+        let objects = HashMap::from([
+            (heart.id.clone(), heart.clone()),
+            (void.id.clone(), void),
+            (path.id.clone(), path),
+        ]);
+        let first = pick_scatter_destination(&heart, &player, &objects).unwrap();
+        let second = pick_scatter_destination(&heart, &player, &objects).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn apply_scatter_exit_only_on_configured_direction() {
+        let player = ObjectId::new("player:hero-001");
+        let mut heart = bare_place("area:heart-001", "Heart", None);
+        let spill = ObjectId::new("area:spill-001");
+        let void_id = ObjectId::new("area:void-001");
+        heart.add_property(crate::object::Property {
+            name: "scatter_to".to_string(),
+            value: Value::List(vec![Value::ObjectRef(void_id.clone())]),
+            permissions: crate::object::PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+        heart.add_property(crate::object::Property {
+            name: "scatter_direction".to_string(),
+            value: Value::String("out".to_string()),
+            permissions: crate::object::PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+        let void = bare_place("area:void-001", "Void", None);
+        let objects = HashMap::from([
+            (heart.id.clone(), heart.clone()),
+            (void.id.clone(), void),
+        ]);
+        assert_eq!(
+            apply_scatter_exit(&heart, "out", &spill, &player, &objects),
+            void_id
+        );
+        assert_eq!(
+            apply_scatter_exit(&heart, "south", &spill, &player, &objects),
+            spill
+        );
     }
 
     #[test]

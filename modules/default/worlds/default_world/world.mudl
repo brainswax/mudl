@@ -3,6 +3,7 @@
   starting_location=the-void
 @end
 @include map.mudl
+@include haunted.mudl
 @include creatures.mudl
 @include players.mudl
 @include items.mudl

@@ -1,7 +1,7 @@
 type: area
 base_name: the-void
 name: West Clearing
-description: A small clearing at the edge of nowhere. Packed earth shows recent footfalls. A weathered mailbox and a banded travel chest wait side by side. A worn path leads north into the trees, and eastward the rear wall of a small white cottage peeks through the brush.
+description: A small clearing at the edge of nowhere. Packed earth shows recent footfalls. A weathered mailbox and a banded travel chest wait side by side. West of the path, a mossy boulder hunches in the brush. A worn path leads north into the trees, and eastward the rear wall of a small white cottage peeks through the brush.
 exits:
   north: forest-path
   east: cottage-rear
@@ -9,10 +9,11 @@ exits:
 type: area
 base_name: forest-path
 name: Forest Path
-description: Pine needles soften your steps along a winding path. Sunlight filters through the canopy in pale shafts. The clearing lies south, and north you glimpse the front of a small white cottage through the trees.
+description: Pine needles soften your steps along a winding path. Sunlight filters through the canopy in pale shafts. An ancient split oak hunches beside the trail, its hollow trunk large enough to step into. The clearing lies south, and north you glimpse the front of a small white cottage through the trees.
 exits:
   south: the-void
   north: cottage-front
+  in: haunted-entry
 
 type: area
 base_name: cottage-front

@@ -284,6 +284,29 @@ pub async fn bootstrap_world<P: Persistence>(
                 })?;
                 obj.add_exit(dir, target_id.clone());
             }
+            if !def.scatter_to.is_empty() {
+                let scatter_ids: Vec<Value> = def
+                    .scatter_to
+                    .iter()
+                    .filter_map(|base| name_to_id.get(base).map(|id| Value::ObjectRef(id.clone())))
+                    .collect();
+                if !scatter_ids.is_empty() {
+                    obj.add_property(Property {
+                        name: "scatter_to".to_string(),
+                        value: Value::List(scatter_ids),
+                        permissions: PermissionFlags::EVERYONE,
+                        behavior: None,
+                    });
+                }
+                if let Some(dir) = &def.scatter_direction {
+                    obj.add_property(Property {
+                        name: "scatter_direction".to_string(),
+                        value: Value::String(dir.clone()),
+                        permissions: PermissionFlags::EVERYONE,
+                        behavior: None,
+                    });
+                }
+            }
             factory.persistence().save_object(&obj).await?;
         }
     }
@@ -856,6 +879,137 @@ mod tests {
                 .object(session.current_location().unwrap())
                 .map(|o| o.name.as_str()),
             Some("Cottage Interior")
+        );
+    }
+
+    #[tokio::test]
+    async fn haunted_forest_full_adventure() {
+        use crate::inventory::read_item;
+        use crate::world::exits::{apply_scatter_exit, pick_scatter_destination};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        validate_world_places(&objects).expect("haunted map validates");
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&start),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let boulder_hint = read_item(&ctx, "boulder").unwrap();
+        assert!(boulder_hint.contains("HOLLOW OAK"));
+
+        open_container(&mut ctx, "mailbox").unwrap();
+        take_item(&mut ctx, "brass key").unwrap();
+        unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
+        open_container(&mut ctx, "chest").unwrap();
+        take_item(&mut ctx, "whisper charm").unwrap();
+        drop(ctx);
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            objects,
+            Some(start.clone()),
+        );
+
+        session.go("north").unwrap();
+
+        unlock_container(&mut session.inventory_context(), "oak", None).unwrap();
+        open_container(&mut session.inventory_context(), "oak").unwrap();
+
+        let entry_msg = session.go("in").unwrap();
+        assert!(entry_msg.contains("Tangled Threshold") || entry_msg.contains("held breath"));
+
+        session.go("east").unwrap();
+        session.go("out").unwrap();
+        assert_eq!(
+            session.object(session.current_location().unwrap()).unwrap().name,
+            "Tangled Threshold"
+        );
+
+        session.go("north").unwrap();
+        let moon_read = read_item(&mut session.inventory_context(), "stone").unwrap();
+        assert!(moon_read.contains("MOON"));
+
+        session.go("east").unwrap();
+        session.go("south").unwrap();
+        session.go("west").unwrap();
+        session.go("north").unwrap();
+        assert_eq!(
+            session.object(session.current_location().unwrap()).unwrap().name,
+            "Pale Heart of the Wood"
+        );
+
+        let heart = session
+            .object(session.current_location().unwrap())
+            .unwrap()
+            .clone();
+        let scatter_dest = pick_scatter_destination(&heart, &player_id, session.objects())
+            .expect("scatter destination");
+        let main_world = ["West Clearing", "Forest Path", "Behind the Cottage"];
+        assert!(
+            session
+                .objects()
+                .get(&scatter_dest)
+                .map(|o| main_world.contains(&o.name.as_str()))
+                .unwrap_or(false),
+            "scatter lands in main world"
+        );
+
+        let exit_msg = session.go("out").unwrap();
+        assert!(exit_msg.contains("spits you out"));
+        assert_eq!(session.current_location(), Some(&scatter_dest));
+
+        let heart_exits = heart.get_exits();
+        let map_target = heart_exits.get("out").unwrap();
+        assert_eq!(
+            apply_scatter_exit(&heart, "out", map_target, &player_id, session.objects()),
+            scatter_dest
+        );
+
+        match session
+            .object(session.current_location().unwrap())
+            .map(|o| o.name.as_str())
+        {
+            Some("West Clearing") => {
+                session.go("north").unwrap();
+            }
+            Some("Behind the Cottage") => {
+                session.go("west").unwrap();
+                session.go("north").unwrap();
+            }
+            Some("Forest Path") => {}
+            Some(other) => panic!("unexpected scatter landing: {other}"),
+            None => panic!("nowhere after scatter"),
+        }
+
+        unlock_container(&mut session.inventory_context(), "oak", None).unwrap();
+        open_container(&mut session.inventory_context(), "oak").unwrap();
+        session.go("in").unwrap();
+        assert_eq!(
+            session.object(session.current_location().unwrap()).unwrap().name,
+            "Tangled Threshold",
+            "haunted forest is replayable"
         );
     }
 }
