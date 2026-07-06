@@ -81,7 +81,7 @@ impl<P: Persistence> ObjectFactory<P> {
                 } else {
                     None
                 },
-                ..ContainerSpec::default()
+                ..crate::object::ContainerSpec::default()
             },
             None,
         )
@@ -170,6 +170,7 @@ impl<P: Persistence> ObjectFactory<P> {
             "weight",
             "volume",
             "is_container",
+            "is_open",
             "is_wearable",
             "is_pocketable",
             "capacity",
@@ -416,6 +417,7 @@ mod tests {
                     max_volume: Some(30),
                     wearable: false,
                     wear_slot: None,
+            ..crate::object::ContainerSpec::default()
                 },
                 None,
             )

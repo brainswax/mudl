@@ -14,6 +14,7 @@
   name=Travel Chest
   description=A sturdy wooden chest banded with iron. The lid is shut but not locked.
   is_container=true
+  is_open=false
   capacity=8
   max_weight=100
   weight=18.0

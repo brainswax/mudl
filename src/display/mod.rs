@@ -485,6 +485,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut backpack = Object {
@@ -507,6 +508,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         player.set_body_slot("right_hand", Some(purse.id.clone()));
@@ -552,6 +554,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut objects = HashMap::new();
@@ -587,6 +590,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = Object {
@@ -652,6 +656,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = Object {
@@ -717,6 +722,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = Object {
@@ -776,6 +782,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut objects = HashMap::new();

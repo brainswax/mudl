@@ -345,6 +345,10 @@ mod tests {
             .iter()
             .find(|o| o.name == "Travel Chest")
             .unwrap();
+        assert!(
+            !chest.container_is_open(),
+            "starting chest should be closed"
+        );
         let contents: Vec<_> = chest
             .container_contents()
             .iter()

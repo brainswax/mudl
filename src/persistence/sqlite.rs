@@ -292,6 +292,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = sample_object("item:coins-001", "coins");

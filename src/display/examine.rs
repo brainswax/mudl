@@ -414,6 +414,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let ctx = DisplayContext::new(owner, DisplayMode::Builder)
@@ -443,6 +444,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = bare("item:coins-001", "coins");

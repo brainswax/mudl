@@ -279,6 +279,7 @@ pub async fn create_at_location_with_options<P: Persistence>(
                         max_volume: options.max_volume,
                         wearable: options.wearable.unwrap_or(true),
                         wear_slot: options.wear_slot.clone(),
+            ..crate::object::ContainerSpec::default()
                     },
                     options.prototype.clone(),
                 )
@@ -1069,6 +1070,7 @@ mod tests {
                     max_volume: None,
                     wearable: true,
                     wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
                 },
                 None,
             )

@@ -33,6 +33,8 @@ pub struct ContainerSpec {
     pub max_volume: Option<i64>,
     pub wearable: bool,
     pub wear_slot: Option<String>,
+    /// When false, contents are hidden and inaccessible until opened.
+    pub open: bool,
 }
 
 impl Default for ContainerSpec {
@@ -43,6 +45,7 @@ impl Default for ContainerSpec {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            open: true,
         }
     }
 }
@@ -171,6 +174,18 @@ impl Object {
         self.get_object_list_property("contents")
     }
 
+    /// Whether a container's lid is open. Missing property defaults to open (legacy objects).
+    pub fn container_is_open(&self) -> bool {
+        if !self.has_container_role() {
+            return true;
+        }
+        self.get_bool_property("is_open").unwrap_or(true)
+    }
+
+    pub fn set_container_open(&mut self, open: bool) {
+        self.set_property_bool("is_open", open);
+    }
+
     /// Items worn on body slots (subset of `body_slots` for wear-type slots).
     pub fn worn_items(&self) -> HashMap<String, ObjectId> {
         self.body_slots()
@@ -192,6 +207,7 @@ impl Object {
             self.set_property_string("wear_slot", slot);
         }
         self.set_property_bool("is_pocketable", false);
+        self.set_property_bool("is_open", spec.open);
         if self.get_numeric_property("weight").is_none() {
             self.set_property_numeric("weight", 1.0);
         }
@@ -287,6 +303,7 @@ impl Object {
             } else {
                 None
             },
+            ..crate::object::ContainerSpec::default()
         });
     }
 
@@ -482,6 +499,25 @@ mod tests {
     }
 
     #[test]
+    fn container_defaults_to_open() {
+        let mut obj = bare_object("item:bag-001");
+        obj.apply_container_role(&ContainerSpec::default());
+        assert!(obj.container_is_open());
+    }
+
+    #[test]
+    fn container_can_start_closed() {
+        let mut obj = bare_object("item:chest-001");
+        obj.apply_container_role(&ContainerSpec {
+            open: false,
+            ..ContainerSpec::default()
+        });
+        assert!(!obj.container_is_open());
+        obj.set_container_open(true);
+        assert!(obj.container_is_open());
+    }
+
+    #[test]
     fn container_role_sets_expected_properties() {
         let mut obj = bare_object("item:bag-001");
         obj.apply_container_role(&ContainerSpec {
@@ -490,6 +526,7 @@ mod tests {
             max_volume: Some(50),
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         assert!(obj.has_container_role());

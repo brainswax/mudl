@@ -151,6 +151,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         player.set_body_slot("right_hand", Some(rusty.id.clone()));

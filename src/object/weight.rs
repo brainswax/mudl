@@ -225,6 +225,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut pouch = bare("item:pouch-001");
@@ -236,6 +237,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = bare("item:coins-001");
@@ -312,6 +314,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut objects = HashMap::new();
@@ -341,6 +344,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = bare("item:coins-001");

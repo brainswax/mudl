@@ -19,8 +19,8 @@ use mudl::display::{
     TargetResolution,
 };
 use mudl::inventory::{
-    describe_inventory, drop_item, parse_put_args, put_item, remove_item, take_item, wear_item,
-    wield_item,
+    close_container, describe_inventory, drop_item, open_container, parse_put_args, put_item,
+    remove_item, take_item, wear_item, wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
@@ -635,6 +635,42 @@ async fn main() -> Result<()> {
                             }
                         } else {
                             println!("Usage: remove <item> from <container>");
+                        }
+                    }
+                    "open" => {
+                        if parts.len() < 2 {
+                            println!("Usage: open <container>");
+                            continue;
+                        }
+                        let container_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match open_container(&mut ctx, &container_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after open failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "close" => {
+                        if parts.len() < 2 {
+                            println!("Usage: close <container>");
+                            continue;
+                        }
+                        let container_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match close_container(&mut ctx, &container_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after close failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
                         }
                     }
                     "wield" => {

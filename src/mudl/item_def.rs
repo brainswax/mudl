@@ -170,6 +170,9 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.is_container.is_some() {
         target.is_container = extra.is_container;
     }
+    if extra.is_open.is_some() {
+        target.is_open = extra.is_open;
+    }
     if extra.capacity.is_some() {
         target.capacity = extra.capacity;
     }
@@ -233,5 +236,11 @@ mod tests {
             .find(|i| i.base_name == "chest-chipped-blade")
             .unwrap();
         assert_eq!(blade.location, "scene-chest");
+
+        let chest_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "travel-chest")
+            .unwrap();
+        assert_eq!(chest_proto.props.is_open, Some(false));
     }
 }

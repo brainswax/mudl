@@ -282,6 +282,9 @@ pub fn compute_container_fit(
     if !container.is_container() {
         return Err(MoveError::NotContainer);
     }
+    if !container.container_is_open() {
+        return Err(MoveError::ContainerClosed(container.name.clone()));
+    }
 
     let merge_target = find_mergeable_stack_in_container(container, item, objects);
     let stack_count = effective_stack_count(item);
@@ -500,6 +503,10 @@ pub fn fit_failure_reason(
     item: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> MoveError {
+    if !container.container_is_open() {
+        return MoveError::ContainerClosed(container.name.clone());
+    }
+
     let fit = compute_container_fit(container, item, objects, None).unwrap_or(ContainerFit {
         units: 0,
         merge_target: None,
@@ -602,6 +609,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
         p
     }

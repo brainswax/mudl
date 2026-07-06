@@ -6,6 +6,7 @@ use crate::object::{ContainerSpec, ItemPhysSpec, Object, StackableSpec, Wearable
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MudlRoleProps {
     pub is_container: Option<bool>,
+    pub is_open: Option<bool>,
     pub capacity: Option<u32>,
     pub max_weight: Option<i64>,
     pub max_volume: Option<i64>,
@@ -27,6 +28,7 @@ impl MudlRoleProps {
         for (key, value) in pairs {
             match *key {
                 "is_container" => props.is_container = Some(*value == "true"),
+                "is_open" | "open" => props.is_open = Some(*value == "true"),
                 "capacity" => props.capacity = value.parse().ok(),
                 "max_weight" => props.max_weight = value.parse().ok(),
                 "max_volume" => props.max_volume = value.parse().ok(),
@@ -78,6 +80,7 @@ impl MudlRoleProps {
                 max_volume: self.max_volume,
                 wearable: self.is_wearable.unwrap_or(false),
                 wear_slot: self.wear_slot.clone(),
+                open: self.is_open.unwrap_or(true),
             });
         } else if let (Some(w), Some(v)) = (self.weight, self.volume) {
             obj.apply_item_phys(&ItemPhysSpec {
@@ -138,6 +141,17 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         }
+    }
+
+    #[test]
+    fn mudl_role_props_parse_is_open() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("is_container", "true"),
+            ("is_open", "false"),
+        ]);
+        let mut obj = bare("item:chest-001");
+        props.apply_to(&mut obj);
+        assert!(!obj.container_is_open());
     }
 
     #[test]

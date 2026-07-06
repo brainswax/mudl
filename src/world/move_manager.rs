@@ -33,6 +33,8 @@ pub enum MoveError {
     TooHeavy(String),
     VolumeExceeded,
     NotContainer,
+    /// Source or destination container is closed.
+    ContainerClosed(String),
     NotWearable,
     InvalidTarget(String),
     NoBodyPlan,
@@ -59,6 +61,7 @@ impl std::fmt::Display for MoveError {
             Self::TooHeavy(name) => write!(f, "The {name} is too heavy for you to carry."),
             Self::VolumeExceeded => write!(f, "That would take up too much space."),
             Self::NotContainer => write!(f, "That isn't a container."),
+            Self::ContainerClosed(name) => write!(f, "The {name} is closed."),
             Self::NotWearable => write!(f, "You can't wear that."),
             Self::InvalidTarget(msg) => write!(f, "{msg}"),
             Self::NoBodyPlan => write!(f, "You have no body plan."),
@@ -89,6 +92,7 @@ impl From<MoveError> for crate::inventory::InventoryError {
             MoveError::SlotFull(s) => Self::SlotFull(s),
             MoveError::ContainerFull => Self::ContainerFull,
             MoveError::NotContainer => Self::NotContainer,
+            MoveError::ContainerClosed(name) => Self::ContainerClosed(name),
             MoveError::NotWearable => Self::NotWearable,
             MoveError::InvalidTarget(m) => Self::InvalidTarget(m),
             MoveError::NoBodyPlan => Self::NoBodyPlan,
@@ -727,6 +731,25 @@ pub fn move_object(
 
     verify_at_source(obj_id, &src, ctx.objects)?;
 
+    if let LocationRef::Container(container_id, _) = &src {
+        let container = ctx
+            .objects
+            .get(container_id)
+            .ok_or(MoveError::NotContainer)?;
+        if !container.container_is_open() {
+            return Err(MoveError::ContainerClosed(container.name.clone()));
+        }
+    }
+    if let LocationRef::Container(container_id, _) = &dst {
+        let container = ctx
+            .objects
+            .get(container_id)
+            .ok_or(MoveError::NotContainer)?;
+        if !container.container_is_open() {
+            return Err(MoveError::ContainerClosed(container.name.clone()));
+        }
+    }
+
     if let Some(holder_id) = src.holder_id() {
         prune_creature_body_slots(holder_id, ctx.objects);
     }
@@ -1000,6 +1023,7 @@ mod tests {
                     max_volume: Some(20),
                     wearable: true,
                     wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -1392,6 +1416,7 @@ mod tests {
                     max_volume: None,
                     wearable: false,
                     wear_slot: None,
+            ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
