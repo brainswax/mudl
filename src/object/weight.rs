@@ -146,7 +146,8 @@ pub fn player_effective_max_weight(
     if is_unlimited_weight(base) {
         return Some(base);
     }
-    let bonus = collect_worn_carry_modifiers(player, objects).max_weight_bonus;
+    let bonus = collect_worn_carry_modifiers(player, objects).max_weight_bonus
+        + crate::creature::effect_max_weight_bonus(player);
     Some(base.saturating_add(bonus))
 }
 
@@ -228,7 +229,8 @@ pub fn player_encumbrance_fraction(
     objects: &HashMap<ObjectId, Object>,
 ) -> Option<f64> {
     let base = player_carry_fraction(player, objects)?;
-    let factor = collect_worn_carry_modifiers(player, objects).encumbrance_factor;
+    let factor = collect_worn_carry_modifiers(player, objects).encumbrance_factor
+        * crate::creature::effect_encumbrance_factor(player);
     Some(base * factor)
 }
 

@@ -4,7 +4,9 @@ use std::path::{Component, Path, PathBuf};
 
 use super::anatomy::{parse_anatomy_file, AnatomyRegistry};
 use super::item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
+use super::npc_def::parse_npc_file;
 use super::world_def::{parse_world_file, WorldDef};
+use crate::mudl::NpcDef;
 
 /// A loaded MUDL source — local file or remote URL fetched at load time.
 #[derive(Debug, Clone)]
@@ -34,6 +36,7 @@ pub struct LoadedWorld {
     pub world_defs: Vec<WorldDef>,
     pub item_prototypes: Vec<ItemPrototypeDef>,
     pub item_instances: Vec<ItemInstanceDef>,
+    pub npc_defs: Vec<NpcDef>,
     pub starting_location: Option<String>,
 }
 
@@ -193,6 +196,7 @@ fn load_world(
     let mut world_defs = Vec::new();
     let mut item_prototypes = Vec::new();
     let mut item_instances = Vec::new();
+    let mut npc_defs = Vec::new();
     let mut resolved_start = starting_location;
 
     for source in &sources {
@@ -203,6 +207,7 @@ fn load_world(
         let (protos, items) = parse_item_file(&file_content);
         item_prototypes.extend(protos);
         item_instances.extend(items);
+        npc_defs.extend(parse_npc_file(&file_content));
         if start.is_some() {
             resolved_start = start;
         }
@@ -225,6 +230,7 @@ fn load_world(
         world_defs,
         item_prototypes,
         item_instances,
+        npc_defs,
         starting_location: resolved_start,
     })
 }

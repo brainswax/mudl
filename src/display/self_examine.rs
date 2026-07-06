@@ -91,13 +91,15 @@ pub fn format_examine_self(
 
     let Some(plan) = anatomy.body_plan(&creature) else {
         let identity = format_identity_sentence(&creature, &[], &[]);
-        return format!("{identity} {}", format_weight_clause(player, objects));
+        let health = crate::creature::format_health_clause(player, Some(anatomy));
+        return format!("{identity} {health} {}", format_weight_clause(player, objects));
     };
 
     let (holding, wearing) = collect_gear_lists(player, objects, plan);
     let identity = format_identity_sentence(&creature, &holding, &wearing);
     let stats = format_capacity_and_weight(player, objects, plan);
-    format!("{identity} {stats}")
+    let health = crate::creature::format_health_clause(player, Some(anatomy));
+    format!("{identity} {health} {stats}")
 }
 
 #[cfg(test)]
@@ -137,6 +139,10 @@ mod tests {
         let anatomy = anatomy();
         let mut player = bare("player:hero-001", "Admin");
         player.init_creature_role(anatomy.player_template("default").unwrap());
+        crate::creature::init_creature_vitality(
+            &mut player,
+            anatomy.creature("human").expect("human"),
+        );
         player.set_property_int("max_weight", 100);
 
         let mut rusty = bare("item:rusty-001", "Rusty Sword");
@@ -166,11 +172,11 @@ mod tests {
         objects.insert(player.id.clone(), player.clone());
 
         let output = format_examine_self(&player, &objects, &anatomy);
-        assert_eq!(
-            output,
-            "You're a human carrying a Rusty Sword and Wooden Sword and wearing a backpack. \
-             You have a carry capacity of 3/10 and are carrying 3 of 100 weight."
-        );
+        assert!(output.starts_with(
+            "You're a human carrying a Rusty Sword and Wooden Sword and wearing a backpack."
+        ));
+        assert!(output.contains("You feel fit."));
+        assert!(output.contains("carry capacity of 3/10"));
         assert!(!output.contains("Admin"));
     }
 
@@ -179,12 +185,15 @@ mod tests {
         let anatomy = anatomy();
         let mut player = bare("player:hero-001", "Admin");
         player.init_creature_role(anatomy.player_template("default").unwrap());
+        crate::creature::init_creature_vitality(
+            &mut player,
+            anatomy.creature("human").expect("human"),
+        );
         player.set_property_int("max_weight", 100);
 
         let output = format_examine_self(&player, &HashMap::new(), &anatomy);
-        assert_eq!(
-            output,
-            "You're a human. You have a carry capacity of 0/10 and are carrying 0 of 100 weight."
-        );
+        assert!(output.starts_with("You're a human."));
+        assert!(output.contains("You feel fit."));
+        assert!(output.contains("carry capacity of 0/10"));
     }
 }

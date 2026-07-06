@@ -815,6 +815,77 @@ impl Object {
         })
     }
 
+    pub fn get_float_property(&self, name: &str) -> Option<f64> {
+        self.get_numeric_property(name)
+    }
+
+    pub fn set_int_map(&mut self, name: &str, map: HashMap<String, i64>) {
+        let value_map: HashMap<String, Value> = map
+            .into_iter()
+            .map(|(k, v)| (k, Value::Int(v)))
+            .collect();
+        self.add_property(Property {
+            name: name.to_string(),
+            value: Value::Map(value_map),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+    }
+
+    pub fn get_int_map(&self, name: &str) -> HashMap<String, i64> {
+        self.get_property(name)
+            .and_then(|p| {
+                if let Value::Map(map) = &p.value {
+                    Some(
+                        map.iter()
+                            .filter_map(|(k, v)| {
+                                if let Value::Int(n) = v {
+                                    Some((k.clone(), *n))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn set_string_list(&mut self, name: &str, items: Vec<String>) {
+        self.add_property(Property {
+            name: name.to_string(),
+            value: Value::List(items.into_iter().map(Value::String).collect()),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+    }
+
+    pub fn get_string_list(&self, name: &str) -> Vec<String> {
+        self.get_property(name)
+            .and_then(|p| {
+                if let Value::List(items) = &p.value {
+                    Some(
+                        items
+                            .iter()
+                            .filter_map(|v| {
+                                if let Value::String(s) = v {
+                                    Some(s.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
     pub fn set_property_numeric(&mut self, name: &str, value: f64) {
         let stored = if value.fract().abs() < 1e-9
             && value >= i64::MIN as f64

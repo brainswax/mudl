@@ -218,6 +218,25 @@ pub async fn bootstrap_world_items<P: Persistence>(
     Ok(placements)
 }
 
+/// Spawn MUDL-defined NPCs into persistence.
+pub async fn bootstrap_world_npcs<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    owner: &ObjectId,
+    world: &LoadedWorld,
+    area_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    for def in &world.npc_defs {
+        if def.location.is_empty() {
+            anyhow::bail!("NPC '{}' missing location", def.base_name);
+        }
+        let location = area_ids.get(&def.location).cloned();
+        factory
+            .create_npc(def, owner.clone(), &world.anatomy, location)
+            .await?;
+    }
+    Ok(())
+}
+
 /// Bootstrap world objects from a loaded MUDL world into persistence.
 pub async fn bootstrap_world<P: Persistence>(
     factory: &ObjectFactory<P>,
@@ -332,6 +351,7 @@ pub async fn bootstrap_world<P: Persistence>(
     })?;
 
     bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
+    bootstrap_world_npcs(factory, &owner, world, &name_to_id).await?;
 
     if factory.load_object(&owner).await?.is_none() {
         let mut player = factory
@@ -1028,6 +1048,68 @@ mod tests {
             session.object(session.current_location().unwrap()).unwrap().name,
             "Tangled Threshold",
             "haunted forest is replayable"
+        );
+    }
+
+    #[tokio::test]
+    async fn milestone3_creature_systems_initial() {
+        use crate::creature::{apply_effect, creature_health, creature_stat, run_on_enter_behaviors};
+        use crate::display::format_examine_self;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let player = factory.load_object(&player_id).await.unwrap().unwrap();
+        assert_eq!(creature_health(&player), 100);
+        assert_eq!(creature_stat(&player, "strength"), 10);
+        assert_eq!(player.get_int_property("max_weight"), Some(100));
+
+        let npc_id = ObjectId::new("npc:path-watcher-001");
+        let npc = factory.load_object(&npc_id).await.unwrap().expect("path watcher");
+        assert_eq!(npc.name, "Path Watcher");
+        assert_eq!(npc.location.as_ref().map(|id| id.as_str()), Some("area:forest-path-001"));
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let self_examine = format_examine_self(&player, &objects, &world.anatomy);
+        assert!(self_examine.contains("You feel fit."));
+
+        let forest_path = ObjectId::new("area:forest-path-001");
+        let behavior_lines = run_on_enter_behaviors(&forest_path, &player_id, &objects);
+        assert_eq!(behavior_lines.len(), 1);
+        assert!(behavior_lines[0].contains("trees seem to lean closer"));
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(start),
+        );
+        let move_out = session.go("north").unwrap();
+        assert!(move_out.contains("trees seem to lean closer"));
+
+        let mut encumbered_player = session
+            .object(&player_id)
+            .expect("player")
+            .clone();
+        apply_effect(&mut encumbered_player, "weary", &world.anatomy);
+        session.objects_mut().insert(player_id.clone(), encumbered_player);
+        let weary_player = session.object(&player_id).unwrap();
+        assert_eq!(
+            crate::creature::effect_encumbrance_factor(weary_player),
+            1.1
         );
     }
 }

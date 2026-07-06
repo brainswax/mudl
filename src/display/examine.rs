@@ -162,7 +162,18 @@ fn format_object_state_entries(obj: &Object, ctx: &DisplayContext) -> Vec<String
         entries.push(format!("aliases: {}", obj.aliases.join(", ")));
     }
 
-    for name in ["contents", "body_slots", "stack_count", "carried_slot"] {
+    for name in [
+        "contents",
+        "body_slots",
+        "stack_count",
+        "carried_slot",
+        "health",
+        "max_health",
+        "stats",
+        "skills",
+        "active_effects",
+        "stat_mods",
+    ] {
         if let Some(prop) = obj.get_property(name) {
             entries.push(format!(
                 "{name}: {}",
@@ -214,11 +225,16 @@ fn format_status_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> V
         }
     }
 
-    if obj.object_type() == "player" {
+    if obj.object_type() == "player" || obj.object_type() == "npc" {
         entries.push(format!(
             "carried_weight: {}",
             format_carried_weight_status(obj, objects)
         ));
+        if obj.has_creature_role() {
+            let health = crate::creature::creature_health(obj);
+            let max = crate::creature::creature_max_health(obj, None);
+            entries.push(format!("health: {health}/{max}"));
+        }
     }
 
     entries

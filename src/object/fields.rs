@@ -1,7 +1,15 @@
 //! Field classification for builder tools and `@examine`.
 
 /// Runtime properties stored in `Object.properties` but shown under `state:`.
-pub const STATE_PROPERTY_KEYS: &[&str] = &["contents", "body_slots", "stack_count", "carried_slot"];
+pub const STATE_PROPERTY_KEYS: &[&str] = &[
+    "contents",
+    "body_slots",
+    "stack_count",
+    "carried_slot",
+    "health",
+    "active_effects",
+    "stat_mods",
+];
 
 /// Top-level object fields shown under `state:`.
 /// Computed examine lines; never writable via `@set`.

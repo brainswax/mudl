@@ -200,6 +200,41 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
 @end
 ```
 
+**Creature vitals and stats** (Milestone 3):
+
+```mudl
+@creature human
+  max_health=100
+  base_max_weight=90
+  @stat strength 10
+  @skill survival 0
+  @slot left_hand capacity=1 type=grasp hands=1
+@end
+
+@effect weary
+  mod_encumbrance=1.1
+  mod_max_weight=-5
+  mod_stat_dexterity=-2
+@end
+```
+
+- `base_max_weight` plus `strength` sets starting carry capacity at bootstrap.
+- `@effect` defines reusable conditions; creatures track `active_effects` at runtime.
+- `@slot` may set `effect=` for slot-tagged body-plan conditions (future wound hooks).
+
+**NPCs and behaviors**:
+
+```mudl
+@npc path-watcher
+  name=Path Watcher
+  creature=human
+  location=forest-path
+  @behavior on_enter say The trees seem to lean closer when you pass.
+@end
+```
+
+Supported behavior actions: `say`, `say_to`, `emote`. `on_enter` runs when a player enters the NPC's room.
+
 **Slot types** (MVP):
 - `grasp` — hands; items with `hand_slot: left`, `right`, or `both` occupy these
 - `wear` — clothing/armor/containers worn on the body

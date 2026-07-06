@@ -11,7 +11,8 @@
 
 use std::collections::HashMap;
 
-use crate::mudl::{AnatomyRegistry, MudlRoleProps, PlayerTemplate};
+use crate::creature::init_creature_vitality;
+use crate::mudl::{behaviors_to_values, AnatomyRegistry, MudlRoleProps, NpcDef, PlayerTemplate};
 use crate::object::{
     constrain_id_base, generate_object_id, id_base_from_display_name,
     roles::{ContainerSpec, KeySpec, StackableSpec, WearableSpec},
@@ -51,8 +52,63 @@ impl<P: Persistence> ObjectFactory<P> {
         let slug = id_base_from_display_name(display_name);
         let mut player = self.allocate_named("player", &slug, display_name, owner).await?;
         player.init_creature_role(&template);
+        if let Some(def) = anatomy.creature(&template.creature) {
+            init_creature_vitality(&mut player, def);
+        }
         self.commit(&player).await?;
         Ok(player)
+    }
+
+    /// Create an NPC from a MUDL `@npc` definition (idempotent via fixed `npc:<base>-001` id).
+    pub async fn create_npc(
+        &self,
+        def: &NpcDef,
+        owner: ObjectId,
+        anatomy: &AnatomyRegistry,
+        location: Option<ObjectId>,
+    ) -> anyhow::Result<Object> {
+        let npc_id = ObjectId::new(format!("npc:{}-001", def.base_name));
+        if let Some(existing) = self.persistence.load_object(&npc_id).await? {
+            return Ok(existing);
+        }
+        let display_name = def.name.as_deref().unwrap_or(&def.base_name);
+        let mut npc = Object {
+            id: npc_id,
+            name: display_name.to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner,
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        self.persistence.save_object(&npc).await?;
+        let template = PlayerTemplate {
+            name: def.base_name.clone(),
+            creature: def.creature.clone(),
+            gender: "neutral".to_string(),
+        };
+        npc.init_creature_role(&template);
+        if let Some(creature_def) = anatomy.creature(&def.creature) {
+            init_creature_vitality(&mut npc, creature_def);
+        }
+        if let Some(loc) = location {
+            npc.location = Some(loc);
+        }
+        if !def.behaviors.is_empty() {
+            npc.add_property(Property {
+                name: "npc_behaviors".to_string(),
+                value: Value::List(behaviors_to_values(&def.behaviors)),
+                permissions: PermissionFlags::EVERYONE,
+                behavior: None,
+            });
+        }
+        self.commit(&npc).await?;
+        Ok(npc)
     }
 
     pub async fn create_item(&self, display_name: &str, owner: ObjectId) -> anyhow::Result<Object> {

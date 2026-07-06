@@ -1,0 +1,8 @@
+# NPC instances — creatures with simple scripted behaviors.
+
+@npc path-watcher
+  name=Path Watcher
+  creature=human
+  location=forest-path
+  @behavior on_enter say The trees seem to lean closer when you pass.
+@end

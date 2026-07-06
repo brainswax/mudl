@@ -497,14 +497,20 @@ mod tests {
                     capacity: 1,
                     slot_type: crate::mudl::SlotType::Grasp,
                     hands: 1,
+                    effect: None,
                 },
                 crate::mudl::BodySlotDef {
                     name: "right_hand".to_string(),
                     capacity: 1,
                     slot_type: crate::mudl::SlotType::Grasp,
                     hands: 1,
+                    effect: None,
                 },
             ],
+            max_health: 100,
+            base_max_weight: Some(100),
+            stats: HashMap::new(),
+            skills: HashMap::new(),
         }
     }
 
