@@ -9,8 +9,8 @@ use crate::world::possession::{
 };
 use crate::object::LocationRef;
 use crate::object::{
-    is_unlimited_weight, player_carried_weight, transfer_weight, player_weight_bearer,
-    would_exceed_player_max_weight, Object, ObjectId,
+    is_unlimited_weight, player_carried_weight, player_effective_max_weight, transfer_weight,
+    player_weight_bearer, would_exceed_player_max_weight, Object, ObjectId,
 };
 use crate::world::stack_transfer::{
     compute_stack_transfer_plan, cap_stack_transfer_plan_to_weight, fit_failure_reason,
@@ -33,6 +33,11 @@ pub enum MoveError {
     TooHeavy(String),
     VolumeExceeded,
     NotContainer,
+    /// Source or destination container is closed.
+    ContainerClosed(String),
+    ContainerLocked(String),
+    /// Item type is not permitted in a type-restricted container.
+    TypeNotAllowed { container: String, allowed: Vec<String> },
     NotWearable,
     InvalidTarget(String),
     NoBodyPlan,
@@ -59,6 +64,12 @@ impl std::fmt::Display for MoveError {
             Self::TooHeavy(name) => write!(f, "The {name} is too heavy for you to carry."),
             Self::VolumeExceeded => write!(f, "That would take up too much space."),
             Self::NotContainer => write!(f, "That isn't a container."),
+            Self::ContainerClosed(name) => write!(f, "The {name} is closed."),
+            Self::ContainerLocked(name) => write!(f, "The {name} is locked."),
+            Self::TypeNotAllowed { container, allowed } => {
+                let types = crate::object::format_allowed_type_labels(allowed);
+                write!(f, "The {container} only holds {types}.")
+            }
             Self::NotWearable => write!(f, "You can't wear that."),
             Self::InvalidTarget(msg) => write!(f, "{msg}"),
             Self::NoBodyPlan => write!(f, "You have no body plan."),
@@ -89,6 +100,11 @@ impl From<MoveError> for crate::inventory::InventoryError {
             MoveError::SlotFull(s) => Self::SlotFull(s),
             MoveError::ContainerFull => Self::ContainerFull,
             MoveError::NotContainer => Self::NotContainer,
+            MoveError::ContainerClosed(name) => Self::ContainerClosed(name),
+            MoveError::ContainerLocked(name) => Self::ContainerLocked(name),
+            MoveError::TypeNotAllowed { container, allowed } => {
+                Self::TypeNotAllowed { container, allowed }
+            }
             MoveError::NotWearable => Self::NotWearable,
             MoveError::InvalidTarget(m) => Self::InvalidTarget(m),
             MoveError::NoBodyPlan => Self::NoBodyPlan,
@@ -209,7 +225,7 @@ fn max_carry_units_for_weight(
     item: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> u32 {
-    let Some(max_w) = player.get_int_property("max_weight") else {
+    let Some(max_w) = player_effective_max_weight(player, objects) else {
         return u32::MAX;
     };
     if is_unlimited_weight(max_w) {
@@ -727,6 +743,31 @@ pub fn move_object(
 
     verify_at_source(obj_id, &src, ctx.objects)?;
 
+    if let LocationRef::Container(container_id, _) = &src {
+        let container = ctx
+            .objects
+            .get(container_id)
+            .ok_or(MoveError::NotContainer)?;
+        if container.container_is_locked() {
+            return Err(MoveError::ContainerLocked(container.name.clone()));
+        }
+        if !container.container_is_open() {
+            return Err(MoveError::ContainerClosed(container.name.clone()));
+        }
+    }
+    if let LocationRef::Container(container_id, _) = &dst {
+        let container = ctx
+            .objects
+            .get(container_id)
+            .ok_or(MoveError::NotContainer)?;
+        if container.container_is_locked() {
+            return Err(MoveError::ContainerLocked(container.name.clone()));
+        }
+        if !container.container_is_open() {
+            return Err(MoveError::ContainerClosed(container.name.clone()));
+        }
+    }
+
     if let Some(holder_id) = src.holder_id() {
         prune_creature_body_slots(holder_id, ctx.objects);
     }
@@ -1000,6 +1041,7 @@ mod tests {
                     max_volume: Some(20),
                     wearable: true,
                     wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -1392,6 +1434,7 @@ mod tests {
                     max_volume: None,
                     wearable: false,
                     wear_slot: None,
+            ..crate::object::ContainerSpec::default()
                 },
                 None,
             )

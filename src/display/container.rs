@@ -6,7 +6,7 @@ use crate::object::{
     format_weight_amount, is_unlimited_weight, Object, ObjectId,
 };
 
-use super::grammar::join_natural_list;
+use super::grammar::{join_natural_list, phrase_with_leading_article};
 pub use super::stackable::format_stackable_label;
 
 /// Labels for each object in a container's `contents` list.
@@ -34,8 +34,14 @@ pub fn format_look_container_player(
     container: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> String {
-    let labels = container_content_labels(container, objects);
     let name = container.name.to_lowercase();
+    if !container.container_is_open() {
+        if container.container_is_locked() {
+            return format!("The {name} is closed and locked.");
+        }
+        return format!("The {name} is closed.");
+    }
+    let labels = container_content_labels(container, objects);
     if labels.is_empty() {
         return format!("The {name} is empty.");
     }
@@ -48,6 +54,26 @@ pub fn format_look_container_player(
 /// Legacy alias — prefer [`format_look_container_player`].
 pub fn format_inside_container(container: &Object, objects: &HashMap<ObjectId, Object>) -> String {
     format_look_container_player(container, objects)
+}
+
+/// Player feedback after successfully opening a container.
+///
+/// Example: `You open the mailbox. Inside you see a folded note.`
+pub fn format_open_container_message(
+    container: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> String {
+    let name = container.name.to_lowercase();
+    let opener = format!("You open the {name}.");
+    let labels: Vec<String> = container_content_labels(container, objects)
+        .into_iter()
+        .map(|label| label.to_lowercase())
+        .collect();
+    if labels.is_empty() {
+        return format!("{opener} It is empty.");
+    }
+    let contents = phrase_with_leading_article(&labels);
+    format!("{opener} Inside you see {contents}.")
 }
 
 fn container_used_slots(container: &Object, objects: &HashMap<ObjectId, Object>) -> u32 {
@@ -66,6 +92,12 @@ pub fn format_examine_container_player(
     objects: &HashMap<ObjectId, Object>,
 ) -> String {
     let name = container.name.to_lowercase();
+    if !container.container_is_open() {
+        if container.container_is_locked() {
+            return format!("The {name} is closed and locked.");
+        }
+        return format!("The {name} is closed.");
+    }
     let labels = container_content_labels(container, objects);
     let used = container_used_slots(container, objects);
     let max_slots = container.container_capacity();
@@ -113,6 +145,9 @@ pub fn format_container_contents_builder(
     container: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> String {
+    if !container.container_is_open() {
+        return "Contents: (closed)".to_string();
+    }
     let labels = container_content_labels(container, objects);
     if labels.is_empty() {
         "Contents: (empty)".to_string()
@@ -172,6 +207,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let line = format_look_container_player(&backpack, &HashMap::new());
@@ -187,6 +223,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
         let mut coins = bare("item:coins-001", "coins");
         coins.apply_stackable_role(&crate::object::StackableSpec {
@@ -205,6 +242,108 @@ mod tests {
     }
 
     #[test]
+    fn open_container_message_lists_contents() {
+        let mut mailbox = bare("item:mailbox-001", "mailbox");
+        mailbox.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 2,
+            max_weight: None,
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+            open: true,
+            ..crate::object::ContainerSpec::default()
+        });
+        let mut note = bare("item:note-001", "Folded Note");
+        mailbox.set_property_list("contents", vec![note.id.clone()]);
+
+        let mut objects = HashMap::new();
+        objects.insert(note.id.clone(), note);
+
+        assert_eq!(
+            format_open_container_message(&mailbox, &objects),
+            "You open the mailbox. Inside you see a folded note."
+        );
+    }
+
+    #[test]
+    fn open_container_message_empty() {
+        let mut chest = bare("item:chest-001", "travel chest");
+        chest.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 8,
+            max_weight: None,
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+            open: true,
+            ..crate::object::ContainerSpec::default()
+        });
+
+        assert_eq!(
+            format_open_container_message(&chest, &HashMap::new()),
+            "You open the travel chest. It is empty."
+        );
+    }
+
+    #[test]
+    fn look_closed_container_hides_contents() {
+        let mut chest = bare("item:chest-001", "travel chest");
+        chest.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 8,
+            max_weight: Some(100),
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+            open: false,
+            ..crate::object::ContainerSpec::default()
+        });
+        let mut lantern = bare("item:lantern-001", "iron lantern");
+        chest.set_property_list("contents", vec![lantern.id.clone()]);
+
+        let mut objects = HashMap::new();
+        objects.insert(lantern.id.clone(), lantern);
+
+        assert_eq!(
+            format_look_container_player(&chest, &objects),
+            "The travel chest is closed."
+        );
+    }
+
+    #[test]
+    fn examine_closed_container_hides_contents() {
+        let mut chest = bare("item:chest-001", "travel chest");
+        chest.apply_container_role(&crate::object::ContainerSpec {
+            capacity: 8,
+            max_weight: Some(100),
+            max_volume: None,
+            wearable: false,
+            wear_slot: None,
+            open: false,
+            ..crate::object::ContainerSpec::default()
+        });
+
+        assert_eq!(
+            format_examine_container_player(&chest, &HashMap::new()),
+            "The travel chest is closed."
+        );
+    }
+
+    #[test]
+    fn look_closed_locked_container() {
+        let mut chest = bare("item:chest-001", "travel chest");
+        chest.apply_container_role(&crate::object::ContainerSpec {
+            open: false,
+            lock_id: Some("demo-lock".to_string()),
+            locked: true,
+            ..crate::object::ContainerSpec::default()
+        });
+
+        assert_eq!(
+            format_look_container_player(&chest, &HashMap::new()),
+            "The travel chest is closed and locked."
+        );
+    }
+
+    #[test]
     fn examine_container_natural_paragraph() {
         let mut backpack = bare("item:backpack-001", "backpack");
         backpack.apply_container_role(&crate::object::ContainerSpec {
@@ -213,6 +352,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
         let mut coins = bare("item:coins-001", "coins");
         coins.set_property_int("weight", 1);

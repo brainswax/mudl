@@ -170,6 +170,9 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.is_container.is_some() {
         target.is_container = extra.is_container;
     }
+    if extra.is_open.is_some() {
+        target.is_open = extra.is_open;
+    }
     if extra.capacity.is_some() {
         target.capacity = extra.capacity;
     }
@@ -206,6 +209,57 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.hand_slot.is_some() {
         target.hand_slot = extra.hand_slot.clone();
     }
+    if extra.readable.is_some() {
+        target.readable = extra.readable;
+    }
+    if extra.read_text.is_some() {
+        target.read_text = extra.read_text.clone();
+    }
+    if extra.writable.is_some() {
+        target.writable = extra.writable;
+    }
+    if extra.write_text.is_some() {
+        target.write_text = extra.write_text.clone();
+    }
+    if extra.locked.is_some() {
+        target.locked = extra.locked;
+    }
+    if extra.lock_id.is_some() {
+        target.lock_id = extra.lock_id.clone();
+    }
+    if extra.is_key.is_some() {
+        target.is_key = extra.is_key;
+    }
+    if extra.allowed_types.is_some() {
+        target.allowed_types = extra.allowed_types.clone();
+    }
+    if extra.is_door.is_some() {
+        target.is_door = extra.is_door;
+    }
+    if extra.door_direction.is_some() {
+        target.door_direction = extra.door_direction.clone();
+    }
+    if extra.door_destination.is_some() {
+        target.door_destination = extra.door_destination.clone();
+    }
+    if extra.is_window.is_some() {
+        target.is_window = extra.is_window;
+    }
+    if extra.portal_kind.is_some() {
+        target.portal_kind = extra.portal_kind.clone();
+    }
+    if extra.portal_passable.is_some() {
+        target.portal_passable = extra.portal_passable;
+    }
+    if extra.portal_transparent.is_some() {
+        target.portal_transparent = extra.portal_transparent;
+    }
+    if extra.mod_max_weight.is_some() {
+        target.mod_max_weight = extra.mod_max_weight;
+    }
+    if extra.mod_encumbrance.is_some() {
+        target.mod_encumbrance = extra.mod_encumbrance;
+    }
 }
 
 #[cfg(test)]
@@ -228,10 +282,72 @@ mod tests {
         assert_eq!(mailbox.location, "the-void");
         assert_eq!(mailbox.prototype.as_deref(), Some("worn-mailbox"));
 
+        let key = instances
+            .iter()
+            .find(|i| i.base_name == "mailbox-brass-key")
+            .unwrap();
+        assert_eq!(key.location, "scene-mailbox");
+
+        let note = instances
+            .iter()
+            .find(|i| i.base_name == "mailbox-folded-note")
+            .unwrap();
+        assert_eq!(note.location, "scene-mailbox");
+
         let blade = instances
             .iter()
             .find(|i| i.base_name == "chest-chipped-blade")
             .unwrap();
         assert_eq!(blade.location, "scene-chest");
+
+        let mailbox_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "worn-mailbox")
+            .unwrap();
+        assert_eq!(mailbox_proto.props.is_container, Some(true));
+        assert_eq!(mailbox_proto.props.is_open, Some(false));
+
+        let chest_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "travel-chest")
+            .unwrap();
+        assert_eq!(chest_proto.props.is_open, Some(false));
+        assert_eq!(chest_proto.props.locked, Some(true));
+        assert_eq!(chest_proto.props.lock_id.as_deref(), Some("chest-lock"));
+
+        let key_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "brass-key")
+            .unwrap();
+        assert_eq!(key_proto.props.is_key, Some(true));
+        assert_eq!(key_proto.props.lock_id.as_deref(), Some("chest-lock"));
+
+        let ring_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "brass-key-ring")
+            .unwrap();
+        assert_eq!(ring_proto.props.allowed_types.as_deref(), Some("key"));
+
+        let ring = instances
+            .iter()
+            .find(|i| i.base_name == "cottage-key-ring")
+            .unwrap();
+        assert_eq!(ring.location, "cottage-interior");
+
+        let note_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "folded-note")
+            .unwrap();
+        assert_eq!(note_proto.props.readable, Some(true));
+        assert_eq!(
+            note_proto.props.read_text.as_deref(),
+            Some("Mind the dark below — take the lantern first.")
+        );
+
+        let mailbox_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "worn-mailbox")
+            .unwrap();
+        assert!(mailbox_proto.props.read_text.is_some());
     }
 }

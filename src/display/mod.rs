@@ -13,6 +13,7 @@ pub mod examine_target;
 pub mod grammar;
 pub mod narrative;
 pub mod object_look;
+pub mod readable;
 pub mod resolve;
 pub mod room_look;
 pub mod self_examine;
@@ -21,7 +22,7 @@ pub mod weight;
 pub use carried::format_look_self_summary;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_examine_container_player,
-    format_inside_container, format_look_container_player,
+    format_inside_container, format_look_container_player, format_open_container_message,
 };
 pub use stackable::{
     format_examine_stack_weight, format_examine_stackable_fallback, format_look_stackable_sentence,
@@ -30,6 +31,7 @@ pub use stackable::{
     stack_quantity_phrase, StackRemainderLocation,
 };
 pub use object_look::{format_look_item_player, format_look_object_player};
+pub use readable::{effective_read_text, format_read_message};
 pub use room_look::format_room_look_player;
 pub use weight::format_examine_item_player;
 pub use body_plan::{creature_definition, format_body_detail_player};
@@ -44,7 +46,8 @@ pub use examine_target::{
 };
 pub use narrative::{
     format_property_value, location_label, narrate_create, narrate_create_builder, narrate_go,
-    narrate_loaded, narrate_module_bundled, narrate_module_reloaded, narrate_no_exit,
+    narrate_go_encumbered, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
+    narrate_no_exit, narrate_overloaded,
     narrate_field_set, narrate_field_unset, narrate_no_location, narrate_no_location_builder,
     narrate_not_in_cache, narrate_property_added,
     narrate_restore, narrate_saved, narrate_soft_delete, narrate_target_not_found,
@@ -485,6 +488,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut backpack = Object {
@@ -507,6 +511,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         player.set_body_slot("right_hand", Some(purse.id.clone()));
@@ -552,6 +557,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut objects = HashMap::new();
@@ -587,6 +593,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = Object {
@@ -652,6 +659,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = Object {
@@ -717,6 +725,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins = Object {
@@ -776,6 +785,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut objects = HashMap::new();

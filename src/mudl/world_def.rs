@@ -119,4 +119,22 @@ mod tests {
         assert!(defs.is_empty());
         assert!(start.is_none());
     }
+
+    #[test]
+    fn parse_default_map_locations_and_exits() {
+        let content = include_str!("../../modules/default/worlds/default_world/map.mudl");
+        let (defs, _) = parse_world_file(content);
+        let bases: Vec<_> = defs.iter().map(|d| d.base_name.as_str()).collect();
+        assert_eq!(bases.len(), 5);
+        assert!(bases.contains(&"the-void"));
+        assert!(bases.contains(&"forest-path"));
+        assert!(bases.contains(&"cottage-interior"));
+
+        let clearing = defs.iter().find(|d| d.base_name == "the-void").unwrap();
+        assert_eq!(clearing.exits.get("north").map(String::as_str), Some("forest-path"));
+        assert_eq!(clearing.exits.get("east").map(String::as_str), Some("cottage-rear"));
+
+        let front = defs.iter().find(|d| d.base_name == "cottage-front").unwrap();
+        assert_eq!(front.exits.get("in").map(String::as_str), Some("cottage-interior"));
+    }
 }

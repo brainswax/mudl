@@ -15,11 +15,19 @@ pub use editor::{parse_value_literal, resolve_object_ref, set_field, unset_field
 pub use factory::ObjectFactory;
 pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS};
 pub use location::LocationRef;
-pub use roles::{ContainerSpec, ItemPhysSpec, ObjectRoles, RoleKind, StackableSpec, WearableSpec};
+pub use roles::{
+    allowed_type_label, format_allowed_type_labels, parse_allowed_types, ContainerSpec,
+    DoorSpec, ItemPhysSpec, KeySpec, ObjectRoles, PortalKind, PortalSpec, ReadableSpec,
+    RoleKind, StackableSpec,
+    WearableSpec,
+};
 pub use weight::{
-    format_weight_amount, is_unlimited_weight, owner_player_of_container, player_carried_weight,
+    collect_worn_carry_modifiers, format_weight_amount, is_unlimited_weight,
+    owner_player_of_container, player_base_max_weight, player_carried_weight, player_carry_fraction,
+    player_effective_max_weight, player_encumbrance_fraction, player_encumbrance_level,
     player_weight_bearer, transfer_weight, weight_limit_applies, would_exceed_player_max_weight,
-    DEFAULT_PLAYER_MAX_WEIGHT, UNLIMITED_WEIGHT,
+    CarryModifiers, EncumbranceLevel, DEFAULT_PLAYER_MAX_WEIGHT, ENCUMBRANCE_BLOCK_THRESHOLD,
+    ENCUMBRANCE_SLOW_THRESHOLD, UNLIMITED_WEIGHT,
 };
 
 bitflags! {

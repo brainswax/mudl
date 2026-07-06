@@ -1,19 +1,38 @@
-# Starting scene — clearing with mailbox and supply chest (evocative, not Zork).
+# Starting scene — West Clearing (evocative Zork feel, not a clone).
 # Prototypes are templates; @item blocks place instances via bootstrap + Factory.
 
 @prototype worn-mailbox
   name=Worn Mailbox
   description=An old wooden mailbox, slightly askew. The metal flag rests in the down position.
+  is_container=true
+  is_open=false
+  capacity=2
+  readable=true
+  read_text=The faded lettering reads: WEST CLEARING — Edge of Nowhere. For wanderers without a return address.
   weight=8.0
   volume=6.0
   pocketable=false
   alias=mailbox
 @end
 
+@prototype brass-key
+  name=Brass Key
+  description=A small brass key, tarnished but well cut.
+  is_key=true
+  lock_id=chest-lock
+  weight=0.1
+  volume=0.1
+  pocketable=true
+  alias=key
+@end
+
 @prototype travel-chest
   name=Travel Chest
-  description=A sturdy wooden chest banded with iron. The lid is shut but not locked.
+  description=A sturdy wooden chest banded with iron. The lid is shut and a heavy lock secures it.
   is_container=true
+  is_open=false
+  locked=true
+  lock_id=chest-lock
   capacity=8
   max_weight=100
   weight=18.0
@@ -63,9 +82,27 @@
   alias=tinder
 @end
 
+@prototype brass-key-ring
+  name=Brass Key Ring
+  description=A tarnished brass ring on a short chain, meant to keep keys sorted.
+  is_container=true
+  is_open=true
+  capacity=6
+  allowed_types=key
+  is_wearable=true
+  wear_slot=torso
+  weight=0.2
+  volume=0.3
+  pocketable=true
+  alias=key ring
+  alias=ring
+@end
+
 @prototype folded-note
   name=Folded Note
-  description=A creased slip of paper. Faint ink reads: "Supplies within — mind the dark."
+  description=A creased slip of paper, its edges worn soft.
+  readable=true
+  read_text=Mind the dark below — take the lantern first.
   weight=0.1
   volume=0.1
   pocketable=true
@@ -73,11 +110,73 @@
   alias=paper
 @end
 
+@prototype wooden-door
+  name=Wooden Door
+  description=A sturdy wooden door set in the wall.
+  is_door=true
+  is_open=false
+  weight=5.0
+  volume=4.0
+  pocketable=false
+  alias=door
+@end
+
+@prototype cottage-window
+  name=Small Window
+  description=A small paned window set high in the wall.
+  is_window=true
+  is_open=false
+  weight=2.0
+  volume=1.0
+  pocketable=false
+  alias=window
+@end
+
+@prototype cottage-key
+  name=Cottage Key
+  description=A small iron key on a frayed string.
+  is_key=true
+  lock_id=cottage-door
+  weight=0.1
+  volume=0.1
+  pocketable=true
+  alias=cottage key
+@end
+
+@prototype boots-of-carrying
+  name=Boots of Carrying
+  description=Sturdy leather boots that lighten your step and somehow broaden your shoulders.
+  is_wearable=true
+  wear_slot=left_foot
+  mod_max_weight=25
+  mod_encumbrance=0.85
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=boots
+  alias=carrying boots
+@end
+
 # --- Instances in the starting clearing (the-void) ---
 
 @item scene-mailbox
   prototype=worn-mailbox
   location=the-void
+@end
+
+@item mailbox-brass-key
+  prototype=brass-key
+  location=scene-mailbox
+@end
+
+@item mailbox-folded-note
+  prototype=folded-note
+  location=scene-mailbox
+@end
+
+@item mailbox-cottage-key
+  prototype=cottage-key
+  location=scene-mailbox
 @end
 
 @item scene-chest
@@ -105,7 +204,37 @@
   location=scene-chest
 @end
 
-@item chest-folded-note
-  prototype=folded-note
-  location=scene-chest
+@item cottage-key-ring
+  prototype=brass-key-ring
+  location=cottage-interior
+@end
+
+@item cottage-carrying-boots
+  prototype=boots-of-carrying
+  location=cottage-interior
+@end
+
+# --- Cottage doors (lockable exits) ---
+
+@item cottage-front-door
+  prototype=wooden-door
+  location=cottage-front
+  door_direction=in
+  door_destination=cottage-interior
+  locked=true
+  lock_id=cottage-door
+@end
+
+@item cottage-interior-door
+  prototype=wooden-door
+  location=cottage-interior
+  door_direction=out
+  door_destination=cottage-front
+@end
+
+@item cottage-interior-window
+  prototype=cottage-window
+  location=cottage-interior
+  door_direction=east
+  door_destination=cottage-rear
 @end

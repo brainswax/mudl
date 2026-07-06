@@ -6,7 +6,8 @@ use crate::display::equipment::{collect_gear_lists, occupied_body_slots};
 use crate::display::grammar::phrase_with_leading_article;
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan};
 use crate::object::{
-    format_weight_amount, is_unlimited_weight, player_carried_weight, Object, ObjectId,
+    format_weight_amount, is_unlimited_weight, player_carried_weight, player_effective_max_weight,
+    Object, ObjectId,
 };
 
 /// Placement label for equipped items (torso → "back", per common MUD convention).
@@ -46,7 +47,7 @@ fn format_identity_sentence(creature: &str, holding: &[String], wearing: &[Strin
 
 fn format_weight_clause(player: &Object, objects: &HashMap<ObjectId, Object>) -> String {
     let carried = player_carried_weight(player, objects);
-    match player.get_int_property("max_weight") {
+    match player_effective_max_weight(player, objects) {
         Some(max) if is_unlimited_weight(max) => format!(
             "are carrying {}/unlimited weight.",
             format_weight_amount(carried)
@@ -151,6 +152,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         player.set_body_slot("right_hand", Some(rusty.id.clone()));

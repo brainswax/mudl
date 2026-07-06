@@ -139,6 +139,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
         backpack.location = Some(ObjectId::new("room:ground-001"));
 

@@ -184,6 +184,105 @@ fn is_on_ground_in_room(
     obj.location.as_ref() == Some(room_id) && !is_in_player_possession(player_id, obj_id, objects)
 }
 
+/// Whether an item is on the ground in `room_id`, including inside open containers there.
+pub fn is_accessible_in_room(
+    item_id: &ObjectId,
+    room_id: &ObjectId,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> bool {
+    let Some(obj) = objects.get(item_id) else {
+        return false;
+    };
+    if is_on_ground_in_room(obj, item_id, room_id, player_id, objects) {
+        return true;
+    }
+
+    let mut current = item_id;
+    loop {
+        let Some(obj) = objects.get(current) else {
+            return false;
+        };
+        let Some(parent_id) = obj.location.as_ref() else {
+            return false;
+        };
+        let Some(parent) = objects.get(parent_id) else {
+            return false;
+        };
+        if !parent.is_container() || !parent.container_contents().contains(current) {
+            return false;
+        }
+        if !parent.container_is_open() {
+            return false;
+        }
+        if is_on_ground_in_room(parent, parent_id, room_id, player_id, objects) {
+            return true;
+        }
+        current = parent_id;
+    }
+}
+
+fn collect_open_container_matches(
+    needle: &str,
+    container_id: &ObjectId,
+    container_hint: &str,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+    player_owned: &mut Vec<ResolvedMatch>,
+    other: &mut Vec<ResolvedMatch>,
+) {
+    let mut queue: VecDeque<(ObjectId, String)> = VecDeque::new();
+    let mut visited = HashMap::new();
+
+    let Some(container) = objects.get(container_id) else {
+        return;
+    };
+    if !container.is_container() || !container.container_is_open() {
+        return;
+    }
+
+    for content_id in container.container_contents() {
+        queue.push_back((content_id, container_hint.to_string()));
+    }
+    visited.insert(container_id.clone(), ());
+
+    while let Some((item_id, hint)) = queue.pop_front() {
+        let Some(obj) = objects.get(&item_id) else {
+            continue;
+        };
+        if !obj.is_active() {
+            continue;
+        }
+
+        if name_matches(needle, obj) {
+            let m = ResolvedMatch {
+                id: item_id.clone(),
+                location_hint: Some(if obj.is_stackable() {
+                    format!("{}, in {hint}", stack_quantity_phrase(obj))
+                } else {
+                    format!("in {hint}")
+                }),
+            };
+            if obj.owner == *player_id {
+                player_owned.push(m);
+            } else {
+                other.push(m);
+            }
+        }
+
+        if obj.is_container()
+            && obj.container_is_open()
+            && !visited.contains_key(&item_id)
+        {
+            visited.insert(item_id.clone(), ());
+            let inner_hint = obj.name.to_lowercase();
+            for inner_id in obj.container_contents() {
+                queue.push_back((inner_id, inner_hint.clone()));
+            }
+        }
+    }
+}
+
 fn direct_carry_hint(player: &Object, item_id: &ObjectId) -> Option<String> {
     for (slot, id) in player.body_slots() {
         if id == *item_id {
@@ -227,7 +326,7 @@ fn collect_possession_matches(
         let Some(container) = objects.get(&container_id) else {
             continue;
         };
-        if !container.is_container() {
+        if !container.is_container() || !container.container_is_open() {
             continue;
         }
         let hint = container.name.to_lowercase();
@@ -256,7 +355,10 @@ fn collect_possession_matches(
             });
         }
 
-        if obj.is_container() && !visited.contains_key(&item_id) {
+        if obj.is_container()
+            && obj.container_is_open()
+            && !visited.contains_key(&item_id)
+        {
             visited.insert(item_id.clone(), ());
             let hint = obj.name.to_lowercase();
             for inner_id in obj.container_contents() {
@@ -295,6 +397,26 @@ fn collect_room_matches(
         } else {
             other.push(m);
         }
+    }
+
+    for (obj_id, obj) in objects {
+        if !obj.is_active()
+            || !obj.is_container()
+            || !obj.container_is_open()
+            || !is_on_ground_in_room(obj, obj_id, room_id, player_id, objects)
+        {
+            continue;
+        }
+        let hint = obj.name.to_lowercase();
+        collect_open_container_matches(
+            needle,
+            obj_id,
+            &hint,
+            player_id,
+            objects,
+            &mut player_owned,
+            &mut other,
+        );
     }
 
     (player_owned, other)
@@ -404,7 +526,7 @@ fn id_in_scope(
     match scope {
         ResolveScope::PossessionOnly => is_in_player_possession(player_id, id, objects),
         ResolveScope::RoomOnly => room_id.is_some_and(|room| {
-            is_on_ground_in_room(obj, id, room, player_id, objects)
+            is_accessible_in_room(id, room, player_id, objects)
         }),
         ResolveScope::PossessionOrRoom => {
             is_in_player_possession(player_id, id, objects)
@@ -480,6 +602,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut backpack = bare("item:backpack-001", "backpack", &player_id);
@@ -489,6 +612,7 @@ mod tests {
             max_volume: None,
             wearable: true,
             wear_slot: Some("torso".to_string()),
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut coins_purse = bare("item:coins-001", "coins", &player_id);
@@ -737,6 +861,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut pouch = bare("item:pouch-001", "pouch", &player_id);
@@ -746,6 +871,7 @@ mod tests {
             max_volume: None,
             wearable: false,
             wear_slot: None,
+            ..crate::object::ContainerSpec::default()
         });
 
         let mut gem = bare("item:gem-001", "gem", &player_id);

@@ -1,33 +1,38 @@
 type: area
 base_name: the-void
 name: West Clearing
-description: A small clearing at the edge of nowhere. Packed earth shows recent footfalls. A weathered mailbox and a travel chest sit side by side, as if left for the next wanderer. Mist gathers to the north.
-
+description: A small clearing at the edge of nowhere. Packed earth shows recent footfalls. A weathered mailbox and a banded travel chest wait side by side. A worn path leads north into the trees, and eastward the rear wall of a small white cottage peeks through the brush.
 exits:
-  north: north-passage
+  north: forest-path
+  east: cottage-rear
 
 type: area
-base_name: north-passage
-name: North Passage
-description: A narrow passage leading north from the void.
-
+base_name: forest-path
+name: Forest Path
+description: Pine needles soften your steps along a winding path. Sunlight filters through the canopy in pale shafts. The clearing lies south, and north you glimpse the front of a small white cottage through the trees.
 exits:
   south: the-void
-  north: central-hub
+  north: cottage-front
 
 type: area
-base_name: central-hub
-name: Central Hub
-description: The central hub of the world. Paths lead in all directions.
-
+base_name: cottage-front
+name: Front of Small Cottage
+description: A small white cottage, tidy and slightly weathered. A sturdy wooden door faces you, shut and locked. The forest path continues south, and behind the cottage a narrow way leads east.
 exits:
-  south: north-passage
+  south: forest-path
+  in: cottage-interior
+
+type: area
+base_name: cottage-rear
+name: Behind the Cottage
+description: You stand in the clutter behind the cottage. A rain barrel, stacked firewood, and a boarded window set high in the wall. West leads back to the clearing, and north you can round the corner to the front door.
+exits:
   west: the-void
+  north: cottage-front
 
 type: area
-base_name: south-garden
-name: South Garden
-description: A peaceful garden full of flowers and plants to the south.
-
+base_name: cottage-interior
+name: Cottage Interior
+description: A single room, warm despite its emptiness. Dust motes turn in a sunbeam from a small window. A folded blanket rests on a plain bedframe. Someone lived here, once. The front door leads out.
 exits:
-  north: central-hub
+  out: cottage-front

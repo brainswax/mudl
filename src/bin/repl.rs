@@ -5,9 +5,9 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
     apply_set, apply_unset, bootstrap_active_universe, create_at_location_with_options,
-    has_wizard_permission, package_module, parse_command_line, parse_create_command,
-    parse_set_command, parse_unset_command, reload_universe, soft_delete_object,
-    undelete_object, wizard_access_denied,
+    create_key_for_container, has_wizard_permission, package_module, parse_command_line,
+    parse_create_command, parse_set_command, parse_unset_command, reload_universe,
+    resolve_container_target, soft_delete_object, undelete_object, wizard_access_denied,
 };
 use mudl::display::{
     format_examine_output, format_no_parent_message, narrate_create, narrate_field_set,
@@ -19,13 +19,15 @@ use mudl::display::{
     TargetResolution,
 };
 use mudl::inventory::{
-    describe_inventory, drop_item, parse_put_args, put_item, remove_item, take_item, wear_item,
-    wield_item,
+    close_container, describe_inventory, drop_item, lock_container, open_container,
+    parse_put_args, parse_unlock_args, put_item, read_item, remove_item, take_item,
+    unlock_container, wear_item, wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
 use mudl::persistence::{Persistence, SqlitePersistence};
 use mudl::repl::Session;
+use mudl::world::movement_direction_from_line;
 use tracing::{error, info, warn};
 
 async fn resolve_in_session(
@@ -313,6 +315,25 @@ async fn main() -> Result<()> {
 
                 let parts: Vec<&str> = input.split_whitespace().collect();
                 let cmd = parts[0];
+
+                if cmd == "go" && parts.len() < 2 {
+                    println!("Usage: go <direction>  (or just: north, south, in, …)");
+                    continue;
+                }
+                if let Some(dir) = movement_direction_from_line(cmd, &parts[1..]) {
+                    match session.go(dir) {
+                        Ok(msg) => {
+                            println!("{msg}");
+                            if let Err(e) = persist_session(&mut session, &persistence).await
+                            {
+                                error!(error = %e, "persist after go failed");
+                            }
+                        }
+                        Err(e) => println!("{e}"),
+                    }
+                    continue;
+                }
+
                 match cmd {
                     "help" => {
                         println!("Commands:");
@@ -337,14 +358,21 @@ async fn main() -> Result<()> {
                         println!("  get/take <item>             - pick up an item from the room");
                         println!("  drop <item>                 - drop a carried item");
                         println!(
-                            "  put [count] <item> in <container> - stow items (e.g. put 10 coins in purse)"
+                            "  put [count] <item> in <container> - stow items in hand or nearby containers"
                         );
                         println!(
                             "  remove <item> from <container> - take an item out of a container"
                         );
                         println!("  wield <item>                - hold/wield an item in your hand");
+                        println!("  read <object>               - read text on a note, sign, or mailbox");
+                        println!(
+                            "  open/close <container|door|window> - open or close a container or portal"
+                        );
+                        println!(
+                            "  lock/unlock <container|door|window> [with <key>] - lock or unlock (auto-finds key)"
+                        );
                         println!("  wear <item>                 - wear a container or garment");
-                        println!("  go <dir>                    - move to another location (e.g. go north)");
+                        println!("  go <dir>  (or n/s/e/w/…)    - move; shows room description and exits");
                         println!(
                             "  @set <target> <key> <value>  - wizard: set property/state/verb"
                         );
@@ -357,6 +385,9 @@ async fn main() -> Result<()> {
                         );
                         println!(
                             "  @create <type> <name...> [key=value...] - wizard create with roles"
+                        );
+                        println!(
+                            "  @keyfor <container> [name]  - wizard: create a key for a container"
                         );
                         println!("  @delete <target>            - wizard: soft-delete an object");
                         println!(
@@ -637,6 +668,144 @@ async fn main() -> Result<()> {
                             println!("Usage: remove <item> from <container>");
                         }
                     }
+                    "open" => {
+                        if parts.len() < 2 {
+                            println!("Usage: open <container>");
+                            continue;
+                        }
+                        let container_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match open_container(&mut ctx, &container_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after open failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "close" => {
+                        if parts.len() < 2 {
+                            println!("Usage: close <container>");
+                            continue;
+                        }
+                        let container_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match close_container(&mut ctx, &container_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after close failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "read" => {
+                        if parts.len() < 2 {
+                            println!("Usage: read <object>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let ctx = session.inventory_context();
+                        match read_item(&ctx, &item_name) {
+                            Ok(msg) => println!("{msg}"),
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "lock" => {
+                        if parts.len() < 2 {
+                            println!("Usage: lock <container>");
+                            continue;
+                        }
+                        let container_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match lock_container(&mut ctx, &container_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after lock failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "unlock" => {
+                        let rest = parts[1..].join(" ");
+                        match parse_unlock_args(&rest) {
+                            Ok((container, key)) => {
+                                let mut ctx = session.inventory_context();
+                                match unlock_container(&mut ctx, &container, key.as_deref()) {
+                                    Ok(msg) => {
+                                        println!("{msg}");
+                                        if let Err(e) =
+                                            persist_session(&mut session, &persistence).await
+                                        {
+                                            error!(error = %e, "persist after unlock failed");
+                                        }
+                                    }
+                                    Err(e) => println!("{e}"),
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "@keyfor" => {
+                        if parts.len() < 2 {
+                            println!("Usage: @keyfor <container> [key name]");
+                            continue;
+                        }
+                        let container_name = parts[1].to_string();
+                        let key_name = if parts.len() > 2 {
+                            parts[2..].join(" ")
+                        } else {
+                            format!("{} Key", container_name)
+                        };
+                        let container_id = match resolve_container_target(
+                            &container_name,
+                            session.player_id(),
+                            session.current_location(),
+                            session.objects(),
+                        ) {
+                            Some(id) => id,
+                            None => {
+                                println!("{}", narrate_wizard_not_found());
+                                continue;
+                            }
+                        };
+                        let mut container = session
+                            .object(&container_id)
+                            .cloned()
+                            .expect("resolved container");
+                        let location = session.current_location().cloned();
+                        match create_key_for_container(
+                            &factory,
+                            &mut container,
+                            &key_name,
+                            player_id.clone(),
+                            location,
+                        )
+                        .await
+                        {
+                            Ok(key) => {
+                                session.upsert_object(container);
+                                session.upsert_object(key.clone());
+                                println!(
+                                    "You conjure {} (lock_id: {}).",
+                                    key.name,
+                                    key.key_lock_id().unwrap_or_default()
+                                );
+                            }
+                            Err(e) => {
+                                error!(error = %e, "@keyfor failed");
+                                println!("The key refuses to take shape.");
+                            }
+                        }
+                    }
                     "wield" => {
                         if parts.len() < 2 {
                             println!("Usage: wield <item>");
@@ -746,23 +915,7 @@ async fn main() -> Result<()> {
                             Err(e) => println!("{e}"),
                         }
                     }
-                    "go" => {
-                        if parts.len() < 2 {
-                            println!("Usage: go <direction>");
-                            continue;
-                        }
-                        let dir = parts[1];
-                        match session.go(dir) {
-                            Ok(msg) => {
-                                println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
-                                    error!(error = %e, "persist after go failed");
-                                }
-                            }
-                            Err(e) => println!("{e}"),
-                        }
-                    }
+
                     "@set" => {
                         let set_cmd = match parse_set_command(&parsed.args) {
                             Ok(cmd) => cmd,
