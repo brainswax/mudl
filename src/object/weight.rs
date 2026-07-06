@@ -23,6 +23,23 @@ pub const DEFAULT_PLAYER_MAX_WEIGHT: i64 = 100;
 /// `max_weight` value meaning unlimited capacity.
 pub const UNLIMITED_WEIGHT: i64 = -1;
 
+/// Carried-weight fraction of `max_weight` at which movement becomes laborious.
+pub const ENCUMBRANCE_SLOW_THRESHOLD: f64 = 0.90;
+
+/// Carried-weight fraction of `max_weight` at which movement is blocked.
+pub const ENCUMBRANCE_BLOCK_THRESHOLD: f64 = 1.0;
+
+/// How encumbrance affects player movement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncumbranceLevel {
+    /// Below the slow threshold — normal movement.
+    Unencumbered,
+    /// Near capacity — movement allowed with extra narration.
+    Encumbered,
+    /// At or over capacity — movement blocked.
+    Overloaded,
+}
+
 /// Whether a weight limit value denotes unlimited capacity.
 pub fn is_unlimited_weight(limit: i64) -> bool {
     limit < 0
@@ -133,6 +150,32 @@ impl Object {
             .filter_map(|id| objects.get(id))
             .map(|child| child.total_weight(objects))
             .sum()
+    }
+}
+
+/// Fraction of the player's `max_weight` currently carried (`None` if unlimited or unset).
+pub fn player_carry_fraction(player: &Object, objects: &HashMap<ObjectId, Object>) -> Option<f64> {
+    let max = player.get_int_property("max_weight")?;
+    if is_unlimited_weight(max) {
+        return None;
+    }
+    let max_f = max as f64;
+    if max_f <= 0.0 {
+        return None;
+    }
+    Some(player_carried_weight(player, objects) / max_f)
+}
+
+/// Encumbrance tier from carried weight vs `max_weight`.
+pub fn player_encumbrance_level(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> EncumbranceLevel {
+    match player_carry_fraction(player, objects) {
+        None => EncumbranceLevel::Unencumbered,
+        Some(ratio) if ratio >= ENCUMBRANCE_BLOCK_THRESHOLD => EncumbranceLevel::Overloaded,
+        Some(ratio) if ratio >= ENCUMBRANCE_SLOW_THRESHOLD => EncumbranceLevel::Encumbered,
+        Some(_) => EncumbranceLevel::Unencumbered,
     }
 }
 
@@ -280,6 +323,77 @@ mod tests {
         let w = a.total_weight(&objects);
         assert!(w >= 1.0);
         assert!(w < 1000.0);
+    }
+
+    #[test]
+    fn player_encumbrance_level_thresholds() {
+        let mut player = bare("player:hero-001");
+        player.set_property_int("max_weight", 100);
+
+        assert_eq!(
+            player_encumbrance_level(&player, &HashMap::new()),
+            EncumbranceLevel::Unencumbered
+        );
+
+        let item_id = ObjectId::new("item:anvil-001");
+        let mut heavy = bare("item:anvil-001");
+        heavy.set_property_numeric("weight", 89.0);
+        heavy.location = Some(player.id.clone());
+        player.set_property_map(
+            "body_slots",
+            HashMap::from([("right_hand".to_string(), item_id.clone())]),
+        );
+        let objects = HashMap::from([
+            (player.id.clone(), player.clone()),
+            (item_id.clone(), heavy),
+        ]);
+        assert_eq!(
+            player_encumbrance_level(&player, &objects),
+            EncumbranceLevel::Unencumbered
+        );
+
+        let mut heavier = objects.get(&item_id).unwrap().clone();
+        heavier.set_property_numeric("weight", 92.0);
+        let objects = HashMap::from([
+            (player.id.clone(), player.clone()),
+            (item_id.clone(), heavier),
+        ]);
+        assert_eq!(
+            player_encumbrance_level(&player, &objects),
+            EncumbranceLevel::Encumbered
+        );
+
+        let mut maxed = objects.get(&item_id).unwrap().clone();
+        maxed.set_property_numeric("weight", 100.0);
+        let objects = HashMap::from([
+            (player.id.clone(), player.clone()),
+            (item_id.clone(), maxed),
+        ]);
+        assert_eq!(
+            player_encumbrance_level(&player, &objects),
+            EncumbranceLevel::Overloaded
+        );
+    }
+
+    #[test]
+    fn player_encumbrance_ignored_when_unlimited() {
+        let mut player = bare("player:hero-001");
+        player.set_property_int("max_weight", UNLIMITED_WEIGHT);
+        let mut heavy = bare("item:anvil-001");
+        heavy.set_property_numeric("weight", 500.0);
+        heavy.location = Some(player.id.clone());
+        player.set_property_map(
+            "body_slots",
+            HashMap::from([("right_hand".to_string(), heavy.id.clone())]),
+        );
+        let objects = HashMap::from([
+            (player.id.clone(), player.clone()),
+            (heavy.id.clone(), heavy),
+        ]);
+        assert_eq!(
+            player_encumbrance_level(&player, &objects),
+            EncumbranceLevel::Unencumbered
+        );
     }
 
     #[test]

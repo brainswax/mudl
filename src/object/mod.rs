@@ -23,8 +23,10 @@ pub use roles::{
 };
 pub use weight::{
     format_weight_amount, is_unlimited_weight, owner_player_of_container, player_carried_weight,
-    player_weight_bearer, transfer_weight, weight_limit_applies, would_exceed_player_max_weight,
-    DEFAULT_PLAYER_MAX_WEIGHT, UNLIMITED_WEIGHT,
+    player_carry_fraction, player_encumbrance_level, player_weight_bearer, transfer_weight,
+    weight_limit_applies, would_exceed_player_max_weight, EncumbranceLevel,
+    DEFAULT_PLAYER_MAX_WEIGHT, ENCUMBRANCE_BLOCK_THRESHOLD, ENCUMBRANCE_SLOW_THRESHOLD,
+    UNLIMITED_WEIGHT,
 };
 
 bitflags! {

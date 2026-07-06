@@ -5,9 +5,11 @@ use std::fmt;
 
 use crate::command::persist_inventory_dirty;
 use crate::display::{
-    format_room_look_player, narrate_go, narrate_no_exit, narrate_no_location, resolve_object,
-    DisplayContext, DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
+    format_room_look_player, narrate_go, narrate_go_encumbered, narrate_no_exit,
+    narrate_no_location, narrate_overloaded, resolve_object, DisplayContext, DisplayFlags,
+    DisplayMode, ResolveScope, TargetResolution,
 };
+use crate::object::{player_encumbrance_level, EncumbranceLevel};
 use crate::world::portal::{
     portal_for_direction, portal_passage_block, portal_permits_exit, PortalBlock,
 };
@@ -29,6 +31,7 @@ pub enum SessionError {
     NoExit(String),
     DoorClosed(String),
     DoorLocked(String),
+    Overloaded,
 }
 
 impl std::fmt::Display for SessionError {
@@ -45,6 +48,7 @@ impl std::fmt::Display for SessionError {
             }
             Self::DoorClosed(name) => write!(f, "The {name} is closed."),
             Self::DoorLocked(name) => write!(f, "The {name} is locked."),
+            Self::Overloaded => write!(f, "{}", narrate_overloaded()),
         }
     }
 }
@@ -244,6 +248,15 @@ impl Session {
             }
         }
 
+        let encumbrance = self
+            .objects
+            .get(&self.player_id)
+            .map(|player| player_encumbrance_level(player, &self.objects))
+            .ok_or(SessionError::PlayerMissing)?;
+        if encumbrance == EncumbranceLevel::Overloaded {
+            return Err(SessionError::Overloaded);
+        }
+
         let player = self
             .objects
             .get_mut(&self.player_id)
@@ -253,7 +266,13 @@ impl Session {
 
         self.current_location = Some(target_id.clone());
 
-        let mut lines = vec![narrate_go(dir_label)];
+        let movement_line = match encumbrance {
+            EncumbranceLevel::Encumbered => narrate_go_encumbered(dir_label),
+            EncumbranceLevel::Unencumbered | EncumbranceLevel::Overloaded => {
+                narrate_go(dir_label)
+            }
+        };
+        let mut lines = vec![movement_line];
         if let Some(room) = self.objects.get(&target_id) {
             let ctx = DisplayContext::new(self.player_id.clone(), DisplayMode::Player)
                 .with_objects(self.objects.clone())
@@ -404,6 +423,56 @@ mod tests {
             Some("room:north-001")
         );
         assert!(session.dirty().is_dirty(&session.player_id));
+    }
+
+    #[tokio::test]
+    async fn go_blocks_when_overloaded() {
+        let (_persistence, mut session) = sample_session().await;
+        let player_id = session.player_id.clone();
+        let mut heavy = bare("item:anvil-001", "Anvil");
+        heavy.set_property_numeric("weight", 100.0);
+        heavy.location = Some(player_id.clone());
+
+        let player = session.object_mut(&player_id).unwrap();
+        player.set_property_int("max_weight", 100);
+        player.set_property_map(
+            "body_slots",
+            HashMap::from([("right_hand".to_string(), heavy.id.clone())]),
+        );
+        session.objects.insert(heavy.id.clone(), heavy);
+
+        let err = session.go("north").unwrap_err();
+        assert_eq!(err, SessionError::Overloaded);
+        assert!(err.to_string().contains("too overloaded"));
+        assert_eq!(
+            session.current_location().map(|id| id.as_str()),
+            Some("room:void-001")
+        );
+    }
+
+    #[tokio::test]
+    async fn go_warns_when_encumbered_but_allows_movement() {
+        let (_persistence, mut session) = sample_session().await;
+        let player_id = session.player_id.clone();
+        let mut heavy = bare("item:crate-001", "Crate");
+        heavy.set_property_numeric("weight", 92.0);
+        heavy.location = Some(player_id.clone());
+
+        let player = session.object_mut(&player_id).unwrap();
+        player.set_property_int("max_weight", 100);
+        player.set_property_map(
+            "body_slots",
+            HashMap::from([("right_hand".to_string(), heavy.id.clone())]),
+        );
+        session.objects.insert(heavy.id.clone(), heavy);
+
+        let msg = session.go("north").unwrap();
+        assert!(msg.contains("too encumbered to move easily"));
+        assert!(msg.contains("head north"));
+        assert_eq!(
+            session.current_location().map(|id| id.as_str()),
+            Some("room:north-001")
+        );
     }
 
     #[tokio::test]

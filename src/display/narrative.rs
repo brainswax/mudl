@@ -130,6 +130,19 @@ pub fn narrate_go(direction: &str) -> String {
     format!("You head {direction}.")
 }
 
+/// Movement while heavily laden (still succeeds).
+pub fn narrate_go_encumbered(direction: &str) -> String {
+    format!(
+        "You are too encumbered to move easily.\n{}",
+        narrate_go(direction)
+    )
+}
+
+/// Movement blocked at or over carry capacity.
+pub fn narrate_overloaded() -> String {
+    "You are too overloaded to move.".to_string()
+}
+
 /// Blocked movement — no exit in that direction.
 pub fn narrate_no_exit(direction: &str) -> String {
     format!("You can't go {direction} from here.")
