@@ -253,11 +253,26 @@ impl Object {
 
     /// Default item properties (backward-compatible with pre-M1 objects).
     pub fn init_item_defaults(&mut self, pocketable: bool) {
-        self.apply_item_phys(&ItemPhysSpec {
-            weight: 1.0,
-            volume: 1.0,
-            pocketable,
-        });
+        self.init_item_defaults_if_unset(pocketable);
+    }
+
+    /// Fill generic item fields only when not already set by a prototype or role.
+    pub fn init_item_defaults_if_unset(&mut self, pocketable: bool) {
+        if self.get_numeric_property("weight").is_none() {
+            self.set_property_numeric("weight", 1.0);
+        }
+        if self.get_numeric_property("volume").is_none() {
+            self.set_property_numeric("volume", 1.0);
+        }
+        if self.get_bool_property("is_pocketable").is_none() {
+            self.set_property_bool("is_pocketable", pocketable);
+        }
+        if !self.has_container_role() && self.get_property("is_container").is_none() {
+            self.set_property_bool("is_container", false);
+        }
+        if !self.has_wearable_role() && self.get_property("is_wearable").is_none() {
+            self.set_property_bool("is_wearable", false);
+        }
     }
 
     /// Default container properties (backward-compatible with pre-M1 objects).
@@ -494,6 +509,21 @@ mod tests {
         });
         assert!((obj.weight() - 20.0).abs() < f64::EPSILON);
         assert!((obj.unit_weight() - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn init_item_defaults_if_unset_preserves_role_phys() {
+        let mut obj = bare_object("item:cloak-001");
+        obj.apply_wearable_role(&WearableSpec {
+            wear_slot: "back".to_string(),
+            weight: 2.5,
+            volume: 3.0,
+        });
+        obj.init_item_defaults_if_unset(false);
+
+        assert!((obj.weight() - 2.5).abs() < f64::EPSILON);
+        assert!((obj.volume() - 3.0).abs() < f64::EPSILON);
+        assert_eq!(obj.get_bool_property("is_pocketable"), Some(false));
     }
 
     #[test]

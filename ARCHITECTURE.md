@@ -321,7 +321,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 1. ~~**Unify wield through MoveManager**~~ — Done: `move_to_grasp` + `possession::select_grasp_slots` (anatomy-driven); `wield` routes through MoveManager.
 2. ~~**REPL session model**~~ — Done: `repl::Session` owns the object graph, location, anatomy, and `DirtyTracker`; REPL uses incremental `persist_changes`.
-3. **Factory ordering** — `create_wearable` should not let `init_item_defaults` overwrite `apply_wearable_role` phys values.
+3. ~~**Factory ordering**~~ — Done: fixed pipeline (allocate → prototype → role → defaults-if-unset → commit).
 4. **Populate `items.mudl`** — gold coins, backpack, sword prototypes; spawn from MUDL via bootstrap instead of REPL `create` only.
 
 ### Defer (next milestones)

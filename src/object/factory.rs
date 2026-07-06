@@ -1,4 +1,13 @@
 //! Object creation via the Factory pattern with role composition and prototype linking.
+//!
+//! Creation follows a fixed pipeline so IDs, prototypes, roles, and defaults never
+//! clobber one another:
+//!
+//! 1. **Allocate** — reserve ID counter, persist empty shell
+//! 2. **Prototype** — optional link + inherit role-relevant properties from DB
+//! 3. **Role** — apply container / wearable / stackable / creature / plain item
+//! 4. **Defaults** — fill unset generic item fields (`init_item_defaults_if_unset`)
+//! 5. **Commit** — persist final object
 
 use std::collections::HashMap;
 
@@ -23,6 +32,8 @@ impl<P: Persistence> ObjectFactory<P> {
         &self.persistence
     }
 
+    // --- Public creators ---
+
     pub async fn create_player(
         &self,
         display_name: &str,
@@ -38,21 +49,17 @@ impl<P: Persistence> ObjectFactory<P> {
                 gender: "neutral".to_string(),
             });
         let slug = id_base_from_display_name(display_name);
-        let mut player = self
-            .create_named("player", &slug, display_name, owner)
-            .await?;
+        let mut player = self.allocate_named("player", &slug, display_name, owner).await?;
         player.init_creature_role(&template);
-        self.persistence.save_object(&player).await?;
+        self.commit(&player).await?;
         Ok(player)
     }
 
     pub async fn create_item(&self, display_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self
-            .create_named("item", &slug, display_name, owner)
-            .await?;
-        item.init_item_defaults(true);
-        self.persistence.save_object(&item).await?;
+        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        Self::fill_item_defaults(&mut item, true);
+        self.commit(&item).await?;
         Ok(item)
     }
 
@@ -90,14 +97,10 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut container = self
-            .create_named("item", &slug, display_name, owner)
-            .await?;
-        if let Some(proto) = prototype {
-            container.prototype = Some(proto);
-        }
+        let mut container = self.allocate_named("item", &slug, display_name, owner).await?;
+        self.attach_prototype(&mut container, prototype).await?;
         container.apply_container_role(&spec);
-        self.persistence.save_object(&container).await?;
+        self.commit(&container).await?;
         Ok(container)
     }
 
@@ -110,15 +113,11 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self
-            .create_named("item", &slug, display_name, owner)
-            .await?;
-        if let Some(proto) = prototype {
-            item.prototype = Some(proto);
-        }
+        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        self.attach_prototype(&mut item, prototype).await?;
         item.apply_wearable_role(&spec);
-        item.init_item_defaults(false);
-        self.persistence.save_object(&item).await?;
+        Self::fill_item_defaults(&mut item, false);
+        self.commit(&item).await?;
         Ok(item)
     }
 
@@ -131,21 +130,14 @@ impl<P: Persistence> ObjectFactory<P> {
         count: u32,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self
-            .create_named("item", &slug, display_name, owner)
-            .await?;
-        if let Some(proto) = &prototype {
-            item.prototype = Some(proto.clone());
-            if let Some(proto_obj) = self.persistence.load_object(proto).await? {
-                self.apply_prototype_defaults(&mut item, &proto_obj);
-            }
-        }
-        item.init_item_defaults(true);
+        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        self.attach_prototype(&mut item, prototype).await?;
+        Self::fill_item_defaults(&mut item, true);
         item.apply_stackable_role(&StackableSpec {
             count: count.max(1),
             max_stack: 99,
         });
-        self.persistence.save_object(&item).await?;
+        self.commit(&item).await?;
         Ok(item)
     }
 
@@ -161,17 +153,11 @@ impl<P: Persistence> ObjectFactory<P> {
         for _ in 0..count.max(1) {
             let slug = id_base_from_display_name(display_name);
             let mut item = self
-                .create_named("item", &slug, display_name, owner.clone())
+                .allocate_named("item", &slug, display_name, owner.clone())
                 .await?;
-            if let Some(proto) = &prototype {
-                item.prototype = Some(proto.clone());
-                if let Some(proto_obj) = self.persistence.load_object(proto).await? {
-                    self.apply_prototype_defaults(&mut item, &proto_obj);
-                }
-            } else {
-                item.init_item_defaults(true);
-            }
-            self.persistence.save_object(&item).await?;
+            self.attach_prototype(&mut item, prototype.clone()).await?;
+            Self::fill_item_defaults(&mut item, true);
+            self.commit(&item).await?;
             items.push(item);
         }
         Ok(items)
@@ -209,6 +195,36 @@ impl<P: Persistence> ObjectFactory<P> {
         display_name: &str,
         owner: ObjectId,
     ) -> anyhow::Result<Object> {
+        let object = self
+            .allocate_named(type_name, slug, display_name, owner)
+            .await?;
+        Ok(object)
+    }
+
+    /// Create an object where the slug and display name are the same (bootstrap/tests).
+    pub async fn create(
+        &self,
+        type_name: &str,
+        slug: &str,
+        owner: ObjectId,
+    ) -> anyhow::Result<Object> {
+        self.create_named(type_name, slug, slug, owner).await
+    }
+
+    pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
+        self.persistence.load_object(id).await
+    }
+
+    // --- Pipeline stages ---
+
+    /// Stage 1: reserve ID counter and persist an empty shell.
+    async fn allocate_named(
+        &self,
+        type_name: &str,
+        slug: &str,
+        display_name: &str,
+        owner: ObjectId,
+    ) -> anyhow::Result<Object> {
         let slug = constrain_id_base(&slugify_display_name(slug));
         let type_name = type_name.to_ascii_lowercase();
         let counter = self
@@ -239,18 +255,31 @@ impl<P: Persistence> ObjectFactory<P> {
         Ok(object)
     }
 
-    /// Create an object where the slug and display name are the same (bootstrap/tests).
-    pub async fn create(
+    /// Stage 2: link prototype and inherit stored properties when present.
+    async fn attach_prototype(
         &self,
-        type_name: &str,
-        slug: &str,
-        owner: ObjectId,
-    ) -> anyhow::Result<Object> {
-        self.create_named(type_name, slug, slug, owner).await
+        object: &mut Object,
+        prototype: Option<ObjectId>,
+    ) -> anyhow::Result<()> {
+        let Some(proto_id) = prototype else {
+            return Ok(());
+        };
+        object.prototype = Some(proto_id.clone());
+        if let Some(proto_obj) = self.persistence.load_object(&proto_id).await? {
+            self.apply_prototype_defaults(object, &proto_obj);
+        }
+        Ok(())
     }
 
-    pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
-        self.persistence.load_object(id).await
+    /// Stage 4: generic item defaults that do not override prototype or role values.
+    fn fill_item_defaults(object: &mut Object, pocketable: bool) {
+        object.init_item_defaults_if_unset(pocketable);
+    }
+
+    /// Stage 5: persist the finalized object.
+    async fn commit(&self, object: &Object) -> anyhow::Result<()> {
+        self.persistence.save_object(object).await?;
+        Ok(())
     }
 }
 
@@ -280,6 +309,24 @@ mod tests {
         assert_eq!(stack.stack_count(), 25);
         assert!(stack.is_stackable());
         assert_eq!(stack.prototype.as_ref(), Some(&proto.id));
+    }
+
+    #[tokio::test]
+    async fn create_stackable_inherits_prototype_weight_without_overwrite() {
+        let factory = memory_factory().await;
+        let owner = ObjectId::new("player:hero-001");
+
+        let mut proto = factory.create_item("Gold Coin", owner.clone()).await.unwrap();
+        proto.set_property_numeric("weight", 0.25);
+        factory.persistence().save_object(&proto).await.unwrap();
+
+        let stack = factory
+            .create_stackable_item("Gold Coin", owner, Some(proto.id.clone()), 4)
+            .await
+            .unwrap();
+
+        assert!((stack.unit_weight() - 0.25).abs() < f64::EPSILON);
+        assert!((stack.weight() - 1.0).abs() < f64::EPSILON);
     }
 
     #[tokio::test]
@@ -365,9 +412,36 @@ mod tests {
 
         assert!(cloak.is_wearable());
         assert_eq!(cloak.wear_slot().as_deref(), Some("back"));
-        // init_item_defaults runs after apply_wearable_role and sets standard phys defaults.
-        assert!((cloak.weight() - 1.0).abs() < f64::EPSILON);
-        assert!((cloak.volume() - 1.0).abs() < f64::EPSILON);
+        assert!((cloak.weight() - 2.5).abs() < f64::EPSILON);
+        assert!((cloak.volume() - 3.0).abs() < f64::EPSILON);
+        assert!(!cloak.get_bool_property("is_pocketable").unwrap_or(true));
+    }
+
+    #[tokio::test]
+    async fn create_wearable_role_wins_over_prototype_phys() {
+        let factory = memory_factory().await;
+        let owner = ObjectId::new("player:hero-001");
+
+        let mut proto = factory.create_item("Robe Template", owner.clone()).await.unwrap();
+        proto.set_property_numeric("weight", 5.0);
+        factory.persistence().save_object(&proto).await.unwrap();
+
+        let robe = factory
+            .create_wearable(
+                "Silk Robe",
+                owner,
+                WearableSpec {
+                    wear_slot: "torso".to_string(),
+                    weight: 1.2,
+                    volume: 2.0,
+                },
+                Some(proto.id.clone()),
+            )
+            .await
+            .unwrap();
+
+        assert!((robe.weight() - 1.2).abs() < f64::EPSILON);
+        assert!((robe.volume() - 2.0).abs() < f64::EPSILON);
     }
 
     #[tokio::test]
