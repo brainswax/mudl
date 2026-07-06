@@ -1,7 +1,7 @@
 type: area
 base_name: the-void
 name: West Clearing
-description: A small clearing at the edge of nowhere. Packed earth shows recent footfalls. A weathered mailbox and a travel chest sit side by side, as if left for the next wanderer. Mist gathers to the north.
+description: A small clearing at the edge of nowhere. Packed earth shows recent footfalls. A weathered mailbox and a banded travel chest wait side by side — someone meant for you to find them. Mist gathers to the north.
 
 exits:
   north: north-passage

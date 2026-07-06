@@ -305,6 +305,9 @@ pub async fn bootstrap_world<P: Persistence>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inventory::{
+        close_container, open_container, put_item, read_item, take_item, InventoryContext,
+    };
     use crate::mudl::load_module;
     use crate::persistence::SqlitePersistence;
 
@@ -341,32 +344,38 @@ mod tests {
             "chest on ground"
         );
 
-        let chest = ground
+        let mailbox = ground
             .iter()
-            .find(|o| o.name == "Travel Chest")
+            .find(|o| o.name == "Worn Mailbox")
             .unwrap();
-        assert!(
-            !chest.container_is_open(),
-            "starting chest should be closed"
-        );
-        let contents: Vec<_> = chest
+        assert!(mailbox.is_container());
+        assert!(!mailbox.container_is_open(), "starting mailbox should be closed");
+        assert!(mailbox.is_readable());
+        assert!(mailbox.read_text().is_some());
+        let mailbox_contents: Vec<_> = mailbox
             .container_contents()
             .iter()
             .filter_map(|id| objects.iter().find(|o| &o.id == id))
             .map(|o| o.name.as_str())
             .collect();
-        assert!(contents.contains(&"Chipped Blade"));
-        assert!(contents.contains(&"Iron Lantern"));
-        assert!(contents.contains(&"Trail Rations"));
-        assert!(contents.contains(&"Tinderbox"));
-        assert!(contents.contains(&"Folded Note"));
+        assert_eq!(mailbox_contents, vec!["Folded Note"]);
 
-        let mailbox = ground
+        let chest = ground
             .iter()
-            .find(|o| o.name == "Worn Mailbox")
+            .find(|o| o.name == "Travel Chest")
             .unwrap();
-        assert!(mailbox.is_readable());
-        assert!(mailbox.read_text().is_some());
+        assert!(!chest.container_is_open(), "starting chest should be closed");
+        let chest_contents: Vec<_> = chest
+            .container_contents()
+            .iter()
+            .filter_map(|id| objects.iter().find(|o| &o.id == id))
+            .map(|o| o.name.as_str())
+            .collect();
+        assert!(chest_contents.contains(&"Chipped Blade"));
+        assert!(chest_contents.contains(&"Iron Lantern"));
+        assert!(chest_contents.contains(&"Trail Rations"));
+        assert!(chest_contents.contains(&"Tinderbox"));
+        assert!(!chest_contents.contains(&"Folded Note"));
 
         let note = objects
             .iter()
@@ -375,7 +384,66 @@ mod tests {
         assert!(note.is_readable());
         assert_eq!(
             note.read_text().as_deref(),
-            Some("Supplies within — mind the dark.")
+            Some("Supplies within the chest — mind the dark.")
         );
+    }
+
+    #[tokio::test]
+    async fn starting_scene_mailbox_open_read_take_put_flow() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let anatomy = world.anatomy.clone();
+
+        let room_id = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        assert_eq!(
+            read_item(&ctx, "mailbox").unwrap(),
+            "You read the worn mailbox:\n\nThe faded lettering reads: WEST CLEARING — Edge of Nowhere. For wanderers without a return address."
+        );
+
+        let err = read_item(&ctx, "note").unwrap_err();
+        assert!(err.to_string().contains("don't see"));
+
+        let open_msg = open_container(&mut ctx, "mailbox").unwrap();
+        assert_eq!(open_msg, "You open the worn mailbox.");
+
+        let read_note = read_item(&ctx, "note").unwrap();
+        assert!(read_note.contains("Supplies within the chest"));
+
+        let take_msg = take_item(&mut ctx, "note").unwrap();
+        assert!(take_msg.contains("pick up"));
+
+        open_container(&mut ctx, "chest").unwrap();
+        let put_msg = put_item(&mut ctx, "note", "chest", None).unwrap();
+        assert!(put_msg.contains("in the travel chest"));
+        assert!(put_msg.contains("Folded Note") || put_msg.contains("folded note"));
+
+        close_container(&mut ctx, "mailbox").unwrap();
+        let mailbox = ctx
+            .objects
+            .values()
+            .find(|o| o.name == "Worn Mailbox")
+            .unwrap();
+        assert!(!mailbox.container_is_open());
     }
 }

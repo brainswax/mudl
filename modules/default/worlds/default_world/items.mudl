@@ -1,9 +1,12 @@
-# Starting scene — clearing with mailbox and supply chest (evocative, not Zork).
+# Starting scene — West Clearing (evocative Zork feel, not a clone).
 # Prototypes are templates; @item blocks place instances via bootstrap + Factory.
 
 @prototype worn-mailbox
   name=Worn Mailbox
   description=An old wooden mailbox, slightly askew. The metal flag rests in the down position.
+  is_container=true
+  is_open=false
+  capacity=2
   readable=true
   read_text=The faded lettering reads: WEST CLEARING — Edge of Nowhere. For wanderers without a return address.
   weight=8.0
@@ -70,7 +73,7 @@
   name=Folded Note
   description=A creased slip of paper, its edges worn soft.
   readable=true
-  read_text=Supplies within — mind the dark.
+  read_text=Supplies within the chest — mind the dark.
   weight=0.1
   volume=0.1
   pocketable=true
@@ -83,6 +86,11 @@
 @item scene-mailbox
   prototype=worn-mailbox
   location=the-void
+@end
+
+@item mailbox-folded-note
+  prototype=folded-note
+  location=scene-mailbox
 @end
 
 @item scene-chest
@@ -107,10 +115,5 @@
 
 @item chest-tinderbox
   prototype=tinderbox
-  location=scene-chest
-@end
-
-@item chest-folded-note
-  prototype=folded-note
   location=scene-chest
 @end
