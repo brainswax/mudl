@@ -70,7 +70,7 @@ M1 delivers a working object graph, centralized movement, REPL inventory verbs, 
 
 ### M1 known gaps (see review priorities below)
 
-- **Dual graph state** in REPL (`cache` + DB reload per command) — not a single `WorldSession` authority
+- ~~**Dual graph state** in REPL~~ — resolved: `repl::Session` is the single authority (IRC still needs per-connection registry)
 - **`object` → `display` coupling** (`Describable` on `Object`) — core imports presentation
 - **`items.mudl` empty** — prototypes still created via Rust `create` / factory, not world data
 - **No gateway, events, or multi-user session isolation** yet
@@ -180,8 +180,9 @@ mudl/
 │   ├── command/            # Shared command/bootstrap helpers
 │   ├── display/            # Player/builder/debug presentation
 │   ├── inventory/          # Body-slot inventory (delegates to MoveManager)
+│   ├── repl/               # Per-player Session (REPL + future IRC)
 │   ├── persistence/        # SQLite abstraction
-│   └── bin/repl.rs         # Development REPL
+│   └── bin/repl.rs         # Development REPL (thin adapter over repl::Session)
 ├── modules/                # MUDL game data (not Rust)
 │   └── default/            # Official baseline universe
 │       ├── universe.mudl   # Universe entrypoint (@universe, @include-world)
@@ -319,7 +320,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 ### Do soon (before doc/examples drift)
 
 1. ~~**Unify wield through MoveManager**~~ — Done: `move_to_grasp` + `possession::select_grasp_slots` (anatomy-driven); `wield` routes through MoveManager.
-2. **REPL session model** — one in-memory `HashMap<ObjectId, Object>` per session; stop `load_all_objects` merge on every command; use `DirtyTracker` + `persist_dirty`.
+2. ~~**REPL session model**~~ — Done: `repl::Session` owns the object graph, location, anatomy, and `DirtyTracker`; REPL uses incremental `persist_changes`.
 3. **Factory ordering** — `create_wearable` should not let `init_item_defaults` overwrite `apply_wearable_role` phys values.
 4. **Populate `items.mudl`** — gold coins, backpack, sword prototypes; spawn from MUDL via bootstrap instead of REPL `create` only.
 

@@ -83,6 +83,8 @@ pub struct InventoryContext<'a> {
     pub room_id: Option<&'a ObjectId>,
     pub objects: &'a mut HashMap<ObjectId, Object>,
     pub anatomy: &'a AnatomyRegistry,
+    /// When set, move operations mark touched object IDs for incremental persist.
+    pub dirty: Option<&'a mut crate::world::DirtyTracker>,
 }
 
 fn with_move_ctx<'a, 'b, F, T>(ctx: &'a mut InventoryContext<'b>, f: F) -> Result<T, InventoryError>
@@ -93,7 +95,7 @@ where
         objects: ctx.objects,
         anatomy: Some(ctx.anatomy),
         hooks: MoveHooks::default(),
-        dirty: None,
+        dirty: ctx.dirty.as_deref_mut(),
     };
     f(&mut move_ctx).map_err(Into::into)
 }
@@ -1104,6 +1106,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let err = take_item(&mut ctx, "boulder").unwrap_err();
@@ -1157,6 +1160,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "iron ingot").unwrap();
@@ -1173,6 +1177,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "coin").unwrap();
@@ -1213,6 +1218,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "boulder").unwrap();
@@ -1252,6 +1258,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = take_item(&mut ctx, "gold bar").unwrap();
@@ -1297,6 +1304,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = take_item(&mut ctx, "gold bars").unwrap();
@@ -1340,6 +1348,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = take_item(&mut ctx, "10 gold bars").unwrap();
@@ -1392,6 +1401,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = take_item(&mut ctx, "gold bars").unwrap();
@@ -1446,6 +1456,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = take_item(&mut ctx, "gold bar").unwrap();
@@ -1491,6 +1502,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         drop_item(&mut ctx, "gold bars").unwrap();
@@ -1594,6 +1606,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let err = take_item(&mut ctx, "gold bars").unwrap_err();
@@ -1621,6 +1634,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         drop_item(&mut ctx, "gold bars").unwrap();
@@ -1652,6 +1666,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "gold bar").unwrap();
@@ -1696,6 +1711,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         drop_item(&mut ctx, "gold bars").unwrap();
@@ -1739,6 +1755,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = drop_item(&mut ctx, "gold bar").unwrap();
@@ -1784,6 +1801,7 @@ mod tests {
             room_id: Some(&area_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "coin").unwrap();
@@ -1803,6 +1821,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "coin").unwrap();
@@ -1822,6 +1841,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "rusty").unwrap();
@@ -1843,6 +1863,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "greatsword").unwrap();
@@ -1868,6 +1889,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
         take_item(&mut ctx, "rusty").unwrap();
 
@@ -1901,6 +1923,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "rusty").unwrap();
@@ -1978,6 +2001,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "sword").unwrap();
@@ -2014,6 +2038,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, sword1.id.as_str()).unwrap();
@@ -2052,6 +2077,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let err = take_item(&mut ctx, "sword").unwrap_err();
@@ -2080,6 +2106,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         wear_item(&mut ctx, "backpack").unwrap();
@@ -2149,6 +2176,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = put_item(&mut ctx, "coins", "purse", None).unwrap();
@@ -2281,6 +2309,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let err = put_item(&mut ctx, "coins", "backpack", None).unwrap_err();
@@ -2321,6 +2350,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let err = put_item(&mut ctx, "coins", "backpack", None).unwrap_err();
@@ -2352,6 +2382,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let err = take_item(&mut ctx, "coins").unwrap_err();
@@ -2402,6 +2433,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = put_item(&mut ctx, "coins", "purse", Some(10)).unwrap();
@@ -2433,6 +2465,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "gold bar").unwrap();
@@ -2466,6 +2499,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, &format!("6 {}", short_id(&split_id))).unwrap();
@@ -2562,6 +2596,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         wear_item(&mut ctx, "backpack").unwrap();
@@ -2636,6 +2671,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         put_item(&mut ctx, "coins", "purse", None).unwrap();
@@ -2689,6 +2725,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let msg = put_item(&mut ctx, "gold bars", "chest", None).unwrap();

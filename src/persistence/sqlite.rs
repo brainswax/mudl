@@ -480,6 +480,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         // Build a realistic post-play graph: worn container, partial stacks, two-handed wield.

@@ -363,6 +363,7 @@ pub fn take_from_location(
         room_id: location_id,
         objects,
         anatomy,
+        dirty: None,
     };
     take_item(&mut ctx, item_name)
 }

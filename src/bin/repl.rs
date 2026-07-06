@@ -6,81 +6,51 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 use mudl::command::{
     apply_set, apply_unset, bootstrap_active_universe, create_at_location_with_options,
     has_wizard_permission, package_module, parse_command_line, parse_create_command,
-    parse_set_command, parse_unset_command, persist_inventory_changes, reload_universe,
-    soft_delete_object, take_from_location, undelete_object, wizard_access_denied,
+    parse_set_command, parse_unset_command, reload_universe, soft_delete_object,
+    undelete_object, wizard_access_denied,
 };
 use mudl::display::{
     format_examine_output, format_no_parent_message, narrate_create, narrate_field_set,
-    narrate_field_unset, narrate_go, narrate_loaded, narrate_module_bundled,
-    narrate_module_reloaded, narrate_no_exit, narrate_no_location, narrate_no_location_builder,
+    narrate_field_unset, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
+    narrate_no_location, narrate_no_location_builder,
     narrate_not_in_cache, narrate_saved, narrate_target_not_found, narrate_wizard_not_found,
-    parse_examine_request, resolve_examine_request, resolve_object, resolve_target, Describable,
+    parse_examine_request, resolve_examine_request, resolve_target, Describable,
     DisplayContext, DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope,
     TargetResolution,
 };
 use mudl::inventory::{
-    describe_inventory, drop_item, parse_put_args, put_item, remove_item, wear_item, wield_item,
-    InventoryContext,
+    describe_inventory, drop_item, parse_put_args, put_item, remove_item, take_item, wear_item,
+    wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
 use mudl::persistence::{Persistence, SqlitePersistence};
-use mudl::world::restore_session;
+use mudl::repl::Session;
 use tracing::{error, info, warn};
 
-async fn load_all_objects(
+async fn resolve_in_session(
+    session: &mut Session,
     persistence: &SqlitePersistence,
-    cache: &HashMap<ObjectId, Object>,
-) -> Result<HashMap<ObjectId, Object>> {
-    let mut objects: HashMap<ObjectId, Object> = HashMap::new();
-    for obj in persistence.list_objects(false).await? {
-        objects.insert(obj.id.clone(), obj);
-    }
-    for (id, obj) in cache {
-        objects.insert(id.clone(), obj.clone());
-    }
-    Ok(objects)
-}
-
-async fn resolve_and_load(
     target: Option<&str>,
-    current_location: &Option<ObjectId>,
-    observer: &ObjectId,
-    persistence: &SqlitePersistence,
-    cache: &mut HashMap<ObjectId, Object>,
 ) -> Result<TargetResolution> {
-    let objects = load_all_objects(persistence, cache).await?;
-
     let resolution = if let Some(name) = target {
-        resolve_object(
-            name,
-            observer,
-            current_location.as_ref(),
-            &objects,
-            ResolveScope::General,
-        )
-    } else if let Some(loc) = current_location {
+        session.resolve_target(name, ResolveScope::General)
+    } else if let Some(loc) = session.current_location() {
         TargetResolution::Found(loc.clone())
     } else {
         TargetResolution::NotFound
     };
 
     if let TargetResolution::Found(ref id) = resolution {
-        if !cache.contains_key(id) {
-            if let Some(obj) = persistence.load_object(id).await? {
-                cache.insert(id.clone(), obj);
-            }
-        }
+        session.ensure_object(persistence, id).await?;
     }
 
     Ok(resolution)
 }
 
-async fn save_all_objects(
-    persistence: &SqlitePersistence,
-    objects: &HashMap<ObjectId, Object>,
-) -> Result<()> {
-    persist_inventory_changes(persistence, objects).await
+async fn persist_session(session: &mut Session, persistence: &SqlitePersistence) -> Result<()> {
+    let _ = session.persist_changes(persistence).await?;
+    Ok(())
 }
 
 fn init_tracing() {
@@ -111,29 +81,23 @@ fn render_object(obj: &Object, ctx: &DisplayContext, detailed: bool, debug: bool
 }
 
 async fn run_look_command(
+    session: &mut Session,
+    persistence: &SqlitePersistence,
     target: Option<&str>,
     builder: bool,
-    current_location: &Option<ObjectId>,
-    observer: &ObjectId,
-    anatomy: &mudl::mudl::AnatomyRegistry,
-    persistence: &SqlitePersistence,
-    cache: &mut HashMap<ObjectId, Object>,
 ) -> Result<(), anyhow::Error> {
-    match resolve_and_load(target, current_location, observer, persistence, cache).await {
+    match resolve_in_session(session, persistence, target).await {
         Ok(TargetResolution::Found(id)) => {
-            let objects = load_all_objects(persistence, cache).await?;
             let mode = if builder {
                 DisplayMode::Builder
             } else {
                 DisplayMode::Player
             };
-            let mut ctx = DisplayContext::new(observer.clone(), mode)
-                .with_objects(objects)
-                .with_anatomy(anatomy.clone());
+            let mut ctx = session.display_context(mode);
             if !builder {
                 ctx = ctx.with_flags(DisplayFlags::BRIEF);
             }
-            if let Some(obj) = ctx.objects.get(&id).or_else(|| cache.get(&id)) {
+            if let Some(obj) = ctx.objects.get(&id) {
                 render_object(obj, &ctx, builder, false);
             } else if let Some(target) = target {
                 println!("{}", narrate_target_not_found(target));
@@ -179,33 +143,27 @@ async fn run_look_command(
 }
 
 async fn run_examine_command(
+    session: &mut Session,
+    persistence: &SqlitePersistence,
     args: &[&str],
     mode: DisplayMode,
-    current_location: &Option<ObjectId>,
-    observer: &ObjectId,
-    anatomy: &mudl::mudl::AnatomyRegistry,
-    persistence: &SqlitePersistence,
-    cache: &mut HashMap<ObjectId, Object>,
     builder: bool,
 ) -> Result<(), anyhow::Error> {
     let request = parse_examine_request(args);
-    let objects = load_all_objects(persistence, cache).await?;
-    let ctx = DisplayContext::new(observer.clone(), mode)
-        .with_objects(objects)
-        .with_anatomy(anatomy.clone());
+    let ctx = session.display_context(mode.clone());
 
-    match resolve_examine_request(&request, anatomy, observer, current_location.as_ref(), &ctx.objects)
-    {
+    match resolve_examine_request(
+        &request,
+        session.anatomy(),
+        session.player_id(),
+        session.current_location(),
+        &ctx.objects,
+    ) {
         Ok(resolution) => {
             if let ExamineResolution::Prototype { prototype_id, .. } = &resolution {
-                if !cache.contains_key(prototype_id) {
-                    if let Some(proto) = persistence.load_object(prototype_id).await? {
-                        cache.insert(prototype_id.clone(), proto);
-                    }
-                }
+                session.ensure_object(persistence, prototype_id).await?;
             }
-            let objects = load_all_objects(persistence, cache).await?;
-            let ctx = ctx.with_objects(objects);
+            let ctx = session.display_context(mode);
             if let Some(output) = format_examine_output(&resolution, &ctx) {
                 println!("{output}");
             } else if let ExamineResolution::Object(id) = resolution {
@@ -252,12 +210,11 @@ async fn main() -> Result<()> {
     info!("MUDL REPL starting");
     let persistence = SqlitePersistence::new(&db_url).await?;
     let factory = ObjectFactory::new(persistence.clone());
-    let mut cache: HashMap<ObjectId, Object> = HashMap::new();
-    let default_owner = ObjectId::new(
+    let player_id = ObjectId::new(
         std::env::var("DEFAULT_PLAYER").unwrap_or_else(|_| "player:admin-001".to_string()),
     );
 
-    info!(database = %db_url, player = %default_owner, "session configuration");
+    info!(database = %db_url, player = %player_id, "session configuration");
 
     let module_dir = default_module_dir();
     info!(module = %module_dir.display(), "loading universe module");
@@ -280,12 +237,12 @@ async fn main() -> Result<()> {
         warn!("human creature definition not found in active world");
     }
 
-    let mut current_location: Option<ObjectId> = None;
-    match bootstrap_active_universe(&factory, default_owner.clone()).await {
+    let mut bootstrap_location: Option<ObjectId> = None;
+    match bootstrap_active_universe(&factory, player_id.clone()).await {
         Ok((universe, loc_id)) => {
             loaded_universe = universe;
             active_anatomy = loaded_universe.active_world()?.anatomy.clone();
-            current_location = Some(loc_id.clone());
+            bootstrap_location = Some(loc_id.clone());
             info!(location = %loc_id, "world bootstrapped");
         }
         Err(e) => {
@@ -293,26 +250,33 @@ async fn main() -> Result<()> {
         }
     }
 
-    match restore_session(
+    let mut session = match Session::restore(
         &persistence,
-        default_owner.clone(),
-        current_location.clone(),
+        player_id.clone(),
+        bootstrap_location,
+        active_anatomy.clone(),
     )
     .await
     {
         Ok(session) => {
-            cache = session.objects;
-            current_location = session.current_location;
             info!(
-                objects = cache.len(),
-                location = ?current_location,
+                objects = session.len(),
+                location = ?session.current_location(),
                 "session restored"
             );
+            session
         }
         Err(e) => {
             warn!(error = %e, "failed to restore session");
+            Session::restore(
+                &persistence,
+                player_id.clone(),
+                None,
+                active_anatomy.clone(),
+            )
+            .await?
         }
-    }
+    };
 
     println!("Welcome to MUDL.");
     println!("Type 'help' for commands.");
@@ -342,7 +306,7 @@ async fn main() -> Result<()> {
                 let _ = rl.add_history_entry(line.as_str());
 
                 let parsed = parse_command_line(input);
-                if parsed.is_meta && !has_wizard_permission(&default_owner) {
+                if parsed.is_meta && !has_wizard_permission(session.player_id()) {
                     println!("{}", wizard_access_denied());
                     continue;
                 }
@@ -353,7 +317,7 @@ async fn main() -> Result<()> {
                     "help" => {
                         println!("Commands:");
                         println!("  create <type> <name...>     - e.g. create sword Rusty Sword");
-                        println!("  list                        - list objects in session cache");
+                        println!("  list                        - list objects in session memory");
                         println!(
                             "  look [target]  (l)          - in-character brief view"
                         );
@@ -386,7 +350,7 @@ async fn main() -> Result<()> {
                         );
                         println!("  @unset <target> <key>        - wizard: remove property/verb");
                         println!("  load <id>                   - load object from persistence");
-                        println!("  save <id>                   - save object from cache");
+                        println!("  save <id>                   - save object from session");
                         println!("  module reload               - reload MUDL module from disk");
                         println!(
                             "  module bundle <outdir>      - package module to output directory"
@@ -412,9 +376,9 @@ async fn main() -> Result<()> {
                             &factory,
                             &parsed.type_name,
                             &parsed.display_name,
-                            default_owner.clone(),
-                            current_location.as_ref(),
-                            &active_anatomy,
+                            player_id.clone(),
+                            session.current_location(),
+                            session.anatomy(),
                             parsed.options,
                         )
                         .await
@@ -427,13 +391,12 @@ async fn main() -> Result<()> {
                                     roles = ?obj.roles(),
                                     "object created"
                                 );
-                                let objects = load_all_objects(&persistence, &cache).await?;
                                 let loc = obj
                                     .location
                                     .as_ref()
-                                    .and_then(|id| location_object(id, &objects));
+                                    .and_then(|id| location_object(id, session.objects()));
                                 println!("{}", narrate_create(&obj, loc));
-                                cache.insert(obj.id.clone(), obj);
+                                session.upsert_object(obj);
                             }
                             Err(e) => {
                                 error!(error = %e, "create failed");
@@ -442,26 +405,26 @@ async fn main() -> Result<()> {
                         }
                     }
                     "list" => {
-                        if cache.is_empty() {
+                        if session.is_empty() {
                             println!("Your working memory is empty.");
                         } else {
-                            let names: Vec<String> =
-                                cache.values().map(|obj| obj.name.clone()).collect();
+                            let names: Vec<String> = session
+                                .objects()
+                                .values()
+                                .map(|obj| obj.name.clone())
+                                .collect();
                             println!("You recall: {}", names.join(", "));
-                            for (id, obj) in &cache {
-                                info!(id = %id, name = %obj.name, "cached object");
+                            for (id, obj) in session.objects() {
+                                info!(id = %id, name = %obj.name, "session object");
                             }
                         }
                     }
                     "look" | "l" => {
                         if let Err(e) = run_look_command(
+                            &mut session,
+                            &persistence,
                             parts.get(1).copied(),
                             false,
-                            &current_location,
-                            &default_owner,
-                            &active_anatomy,
-                            &persistence,
-                            &mut cache,
                         )
                         .await
                         {
@@ -471,13 +434,10 @@ async fn main() -> Result<()> {
                     }
                     "@look" => {
                         if let Err(e) = run_look_command(
+                            &mut session,
+                            &persistence,
                             parts.get(1).copied(),
                             true,
-                            &current_location,
-                            &default_owner,
-                            &active_anatomy,
-                            &persistence,
-                            &mut cache,
                         )
                         .await
                         {
@@ -487,13 +447,10 @@ async fn main() -> Result<()> {
                     }
                     "examine" | "x" => {
                         if let Err(e) = run_examine_command(
+                            &mut session,
+                            &persistence,
                             &parts[1..],
                             DisplayMode::Player,
-                            &current_location,
-                            &default_owner,
-                            &active_anatomy,
-                            &persistence,
-                            &mut cache,
                             false,
                         )
                         .await
@@ -504,13 +461,10 @@ async fn main() -> Result<()> {
                     }
                     "@examine" => {
                         if let Err(e) = run_examine_command(
+                            &mut session,
+                            &persistence,
                             &parts[1..],
                             DisplayMode::Builder,
-                            &current_location,
-                            &default_owner,
-                            &active_anatomy,
-                            &persistence,
-                            &mut cache,
                             true,
                         )
                         .await
@@ -521,17 +475,10 @@ async fn main() -> Result<()> {
                     }
                     "@dump" => {
                         let target = parts.get(1).copied();
-                        match resolve_and_load(
-                            target,
-                            &current_location,
-                            &default_owner,
-                            &persistence,
-                            &mut cache,
-                        )
-                        .await
+                        match resolve_in_session(&mut session, &persistence, target).await
                         {
                             Ok(TargetResolution::Found(id)) => {
-                                if let Some(obj) = cache.get(&id) {
+                                if let Some(obj) = session.object(&id) {
                                     println!("{}", obj.dump());
                                 } else if let Some(target) = parts.get(1) {
                                     println!("{}", narrate_target_not_found(target));
@@ -568,15 +515,16 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let target = parts[1..].join(" ");
-                        let objects = load_all_objects(&persistence, &cache).await?;
                         match resolve_target(
                             &target,
-                            current_location.as_ref(),
-                            Some(&default_owner),
-                            &objects,
+                            session.current_location(),
+                            Some(session.player_id()),
+                            session.objects(),
                         ) {
                             Some(id) => {
-                                match soft_delete_object(&persistence, &id, &mut cache).await {
+                                match soft_delete_object(&persistence, &id, session.objects_mut())
+                                    .await
+                                {
                                     Ok(msg) => println!("{msg}"),
                                     Err(e) => {
                                         error!(error = %e, "soft delete failed");
@@ -593,7 +541,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let id = ObjectId::new(parts[1]);
-                        match undelete_object(&persistence, &id, &mut cache).await {
+                        match undelete_object(&persistence, &id, session.objects_mut()).await {
                             Ok(msg) => println!("{msg}"),
                             Err(e) => {
                                 error!(error = %e, id = %id, "undelete failed");
@@ -602,13 +550,11 @@ async fn main() -> Result<()> {
                         }
                     }
                     "inventory" | "i" => {
-                        let objects = load_all_objects(&persistence, &cache).await?;
-                        if let Some(player) = objects.get(&default_owner).cloned() {
-                            println!("{}", describe_inventory(&player, &objects, &active_anatomy));
-                        } else if let Ok(Some(player)) =
-                            persistence.load_object(&default_owner).await
-                        {
-                            println!("{}", describe_inventory(&player, &objects, &active_anatomy));
+                        if let Some(player) = session.object(session.player_id()) {
+                            println!(
+                                "{}",
+                                describe_inventory(player, session.objects(), session.anatomy())
+                            );
                         } else {
                             println!("You seem to have lost yourself.");
                         }
@@ -619,18 +565,13 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut objects = load_all_objects(&persistence, &cache).await?;
-                        match take_from_location(
-                            &default_owner,
-                            current_location.as_ref(),
-                            &item_name,
-                            &mut objects,
-                            &active_anatomy,
-                        ) {
+                        let mut ctx = session.inventory_context();
+                        match take_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                save_all_objects(&persistence, &objects).await?;
-                                cache.extend(objects);
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
+                                    error!(error = %e, "persist after take failed");
+                                }
                             }
                             Err(e) => println!("{e}"),
                         }
@@ -641,18 +582,13 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut objects = load_all_objects(&persistence, &cache).await?;
-                        let mut ctx = InventoryContext {
-                            player_id: &default_owner,
-                            room_id: current_location.as_ref(),
-                            objects: &mut objects,
-                            anatomy: &active_anatomy,
-                        };
+                        let mut ctx = session.inventory_context();
                         match drop_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                save_all_objects(&persistence, &objects).await?;
-                                cache.extend(objects);
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
+                                    error!(error = %e, "persist after drop failed");
+                                }
                             }
                             Err(e) => println!("{e}"),
                         }
@@ -661,13 +597,7 @@ async fn main() -> Result<()> {
                         let rest = parts[1..].join(" ");
                         match parse_put_args(&rest) {
                             Ok(req) => {
-                                let mut objects = load_all_objects(&persistence, &cache).await?;
-                                let mut ctx = InventoryContext {
-                                    player_id: &default_owner,
-                                    room_id: current_location.as_ref(),
-                                    objects: &mut objects,
-                                    anatomy: &active_anatomy,
-                                };
+                                let mut ctx = session.inventory_context();
                                 match put_item(
                                     &mut ctx,
                                     &req.item_name,
@@ -676,8 +606,11 @@ async fn main() -> Result<()> {
                                 ) {
                                     Ok(msg) => {
                                         println!("{msg}");
-                                        save_all_objects(&persistence, &objects).await?;
-                                        cache.extend(objects);
+                                        if let Err(e) =
+                                            persist_session(&mut session, &persistence).await
+                                        {
+                                            error!(error = %e, "persist after put failed");
+                                        }
                                     }
                                     Err(e) => println!("{e}"),
                                 }
@@ -688,18 +621,15 @@ async fn main() -> Result<()> {
                     "remove" => {
                         let rest = parts[1..].join(" ");
                         if let Some((item, container)) = rest.split_once(" from ") {
-                            let mut objects = load_all_objects(&persistence, &cache).await?;
-                            let mut ctx = InventoryContext {
-                                player_id: &default_owner,
-                                room_id: current_location.as_ref(),
-                                objects: &mut objects,
-                                anatomy: &active_anatomy,
-                            };
+                            let mut ctx = session.inventory_context();
                             match remove_item(&mut ctx, item.trim(), container.trim()) {
                                 Ok(msg) => {
                                     println!("{msg}");
-                                    save_all_objects(&persistence, &objects).await?;
-                                    cache.extend(objects);
+                                    if let Err(e) =
+                                        persist_session(&mut session, &persistence).await
+                                    {
+                                        error!(error = %e, "persist after remove failed");
+                                    }
                                 }
                                 Err(e) => println!("{e}"),
                             }
@@ -713,18 +643,14 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut objects = load_all_objects(&persistence, &cache).await?;
-                        let mut ctx = InventoryContext {
-                            player_id: &default_owner,
-                            room_id: current_location.as_ref(),
-                            objects: &mut objects,
-                            anatomy: &active_anatomy,
-                        };
+                        let mut ctx = session.inventory_context();
                         match wield_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                save_all_objects(&persistence, &objects).await?;
-                                cache.extend(objects);
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after wield failed");
+                                }
                             }
                             Err(e) => println!("{e}"),
                         }
@@ -740,8 +666,9 @@ async fn main() -> Result<()> {
                                 match reload_universe(path.to_str().unwrap_or("modules/default")) {
                                     Ok(universe) => {
                                         loaded_universe = universe;
-                                        active_anatomy =
-                                            loaded_universe.active_world()?.anatomy.clone();
+                                        session.set_anatomy(
+                                            loaded_universe.active_world()?.anatomy.clone(),
+                                        );
                                         let world = loaded_universe.active_world()?;
                                         info!(
                                             universe = %loaded_universe.name,
@@ -807,18 +734,14 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut objects = load_all_objects(&persistence, &cache).await?;
-                        let mut ctx = InventoryContext {
-                            player_id: &default_owner,
-                            room_id: current_location.as_ref(),
-                            objects: &mut objects,
-                            anatomy: &active_anatomy,
-                        };
+                        let mut ctx = session.inventory_context();
                         match wear_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                save_all_objects(&persistence, &objects).await?;
-                                cache.extend(objects);
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after wear failed");
+                                }
                             }
                             Err(e) => println!("{e}"),
                         }
@@ -829,66 +752,15 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let dir = parts[1];
-                        if let Some(loc_id) = &current_location {
-                            let loc = if let Some(o) = cache.get(loc_id) {
-                                o.clone()
-                            } else {
-                                match persistence.load_object(loc_id).await {
-                                    Ok(Some(o)) => {
-                                        cache.insert(loc_id.clone(), o.clone());
-                                        o
-                                    }
-                                    Ok(None) => {
-                                        println!(
-                                            "The ground shifts beneath you — you are nowhere."
-                                        );
-                                        continue;
-                                    }
-                                    Err(e) => {
-                                        error!(error = %e, "failed to load location");
-                                        println!(
-                                            "The ground shifts beneath you — you are nowhere."
-                                        );
-                                        continue;
-                                    }
-                                }
-                            };
-                            let exits = loc.get_exits();
-                            if let Some(target_id) = exits.get(dir) {
-                                let mut player = if let Some(o) = cache.remove(&default_owner) {
-                                    o
-                                } else {
-                                    match persistence.load_object(&default_owner).await {
-                                        Ok(Some(o)) => o,
-                                        Ok(None) => {
-                                            println!("You seem to have lost yourself.");
-                                            continue;
-                                        }
-                                        Err(e) => {
-                                            error!(error = %e, "failed to load player");
-                                            println!("You seem to have lost yourself.");
-                                            continue;
-                                        }
-                                    }
-                                };
-                                player.location = Some(target_id.clone());
-                                if let Err(e) = persistence.save_object(&player).await {
-                                    error!(error = %e, "failed to save player location");
-                                    println!("You try to move, but something holds you in place.");
-                                } else {
-                                    println!("{}", narrate_go(dir));
-                                    current_location = Some(target_id.clone());
-                                }
-                                cache.insert(default_owner.clone(), player);
-                                if let Ok(Some(new_loc)) = persistence.load_object(target_id).await
+                        match session.go(dir) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await
                                 {
-                                    cache.insert(target_id.clone(), new_loc);
+                                    error!(error = %e, "persist after go failed");
                                 }
-                            } else {
-                                println!("{}", narrate_no_exit(dir));
                             }
-                        } else {
-                            println!("{}", narrate_no_location());
+                            Err(e) => println!("{e}"),
                         }
                     }
                     "@set" => {
@@ -899,18 +771,15 @@ async fn main() -> Result<()> {
                                 continue;
                             }
                         };
-                        match resolve_and_load(
-                            Some(&set_cmd.target),
-                            &current_location,
-                            &default_owner,
+                        match resolve_in_session(
+                            &mut session,
                             &persistence,
-                            &mut cache,
+                            Some(&set_cmd.target),
                         )
                         .await
                         {
                             Ok(TargetResolution::Found(id)) => {
-                                let objects = load_all_objects(&persistence, &cache).await?;
-                                let mut obj = match cache.remove(&id).or_else(|| objects.get(&id).cloned()) {
+                                let mut obj = match session.object(&id).cloned() {
                                     Some(obj) => obj,
                                     None => {
                                         println!("{}", narrate_wizard_not_found());
@@ -921,8 +790,8 @@ async fn main() -> Result<()> {
                                     &mut obj,
                                     &set_cmd.key,
                                     &set_cmd.value,
-                                    &default_owner,
-                                    &objects,
+                                    session.player_id(),
+                                    session.objects(),
                                 ) {
                                     Ok(()) => {
                                         info!(
@@ -939,7 +808,7 @@ async fn main() -> Result<()> {
                                                 narrate_field_set(&obj, &set_cmd.key)
                                             );
                                         }
-                                        cache.insert(id, obj);
+                                        session.upsert_object(obj);
                                     }
                                     Err(e) => println!("{e}"),
                                 }
@@ -962,20 +831,17 @@ async fn main() -> Result<()> {
                                 continue;
                             }
                         };
-                        match resolve_and_load(
-                            Some(&unset_cmd.target),
-                            &current_location,
-                            &default_owner,
+                        match resolve_in_session(
+                            &mut session,
                             &persistence,
-                            &mut cache,
+                            Some(&unset_cmd.target),
                         )
                         .await
                         {
                             Ok(TargetResolution::Found(id)) => {
-                                let mut obj = if let Some(o) = cache.remove(&id) {
-                                    o
-                                } else {
-                                    match persistence.load_object(&id).await {
+                                let mut obj = match session.object(&id).cloned() {
+                                    Some(obj) => obj,
+                                    None => match persistence.load_object(&id).await {
                                         Ok(Some(o)) => o,
                                         Ok(None) => {
                                             println!("{}", narrate_wizard_not_found());
@@ -986,7 +852,7 @@ async fn main() -> Result<()> {
                                             println!("You cannot reach that object to change it.");
                                             continue;
                                         }
-                                    }
+                                    },
                                 };
                                 match apply_unset(&mut obj, &unset_cmd.key) {
                                     Ok(()) => {
@@ -1004,7 +870,7 @@ async fn main() -> Result<()> {
                                                 narrate_field_unset(&obj, &unset_cmd.key)
                                             );
                                         }
-                                        cache.insert(id, obj);
+                                        session.upsert_object(obj);
                                     }
                                     Err(e) => println!("{e}"),
                                 }
@@ -1028,15 +894,9 @@ async fn main() -> Result<()> {
                         match persistence.load_object(&id).await {
                             Ok(Some(obj)) => {
                                 info!(id = %id, name = %obj.name, "object loaded into session");
-                                cache.insert(id.clone(), obj.clone());
+                                session.cache_object(obj.clone());
                                 println!("{}", narrate_loaded(&obj.name));
-                                let objects = load_all_objects(&persistence, &cache).await?;
-                                let ctx = DisplayContext::new(
-                                    default_owner.clone(),
-                                    DisplayMode::Builder,
-                                )
-                                .with_objects(objects)
-                                .with_anatomy(active_anatomy.clone());
+                                let ctx = session.display_context(DisplayMode::Builder);
                                 render_object(&obj, &ctx, true, false);
                             }
                             Ok(None) => println!("{}", narrate_wizard_not_found()),
@@ -1052,7 +912,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let id = ObjectId::new(parts[1]);
-                        if let Some(obj) = cache.get(&id) {
+                        if let Some(obj) = session.object(&id) {
                             let name = obj.name.clone();
                             match persistence.save_object(obj).await {
                                 Ok(()) => {
