@@ -15,11 +15,24 @@
   alias=mailbox
 @end
 
+@prototype brass-key
+  name=Brass Key
+  description=A small brass key, tarnished but well cut.
+  is_key=true
+  lock_id=chest-lock
+  weight=0.1
+  volume=0.1
+  pocketable=true
+  alias=key
+@end
+
 @prototype travel-chest
   name=Travel Chest
-  description=A sturdy wooden chest banded with iron. The lid is shut but not locked.
+  description=A sturdy wooden chest banded with iron. The lid is shut and a heavy lock secures it.
   is_container=true
   is_open=false
+  locked=true
+  lock_id=chest-lock
   capacity=8
   max_weight=100
   weight=18.0
@@ -73,7 +86,7 @@
   name=Folded Note
   description=A creased slip of paper, its edges worn soft.
   readable=true
-  read_text=Supplies within the chest — mind the dark.
+  read_text=Mind the dark below — take the lantern first.
   weight=0.1
   volume=0.1
   pocketable=true
@@ -88,8 +101,8 @@
   location=the-void
 @end
 
-@item mailbox-folded-note
-  prototype=folded-note
+@item mailbox-brass-key
+  prototype=brass-key
   location=scene-mailbox
 @end
 
@@ -115,5 +128,10 @@
 
 @item chest-tinderbox
   prototype=tinderbox
+  location=scene-chest
+@end
+
+@item chest-folded-note
+  prototype=folded-note
   location=scene-chest
 @end

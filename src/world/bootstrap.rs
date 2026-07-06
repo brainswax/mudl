@@ -306,7 +306,8 @@ pub async fn bootstrap_world<P: Persistence>(
 mod tests {
     use super::*;
     use crate::inventory::{
-        close_container, open_container, put_item, read_item, take_item, InventoryContext,
+        close_container, open_container, put_item, read_item, take_item, unlock_container,
+        InventoryContext, InventoryError,
     };
     use crate::mudl::load_module;
     use crate::persistence::SqlitePersistence;
@@ -358,13 +359,19 @@ mod tests {
             .filter_map(|id| objects.iter().find(|o| &o.id == id))
             .map(|o| o.name.as_str())
             .collect();
-        assert_eq!(mailbox_contents, vec!["Folded Note"]);
+        assert_eq!(mailbox_contents, vec!["Brass Key"]);
+
+        let key = objects.iter().find(|o| o.name == "Brass Key").unwrap();
+        assert!(key.is_key());
+        assert_eq!(key.key_lock_id().as_deref(), Some("chest-lock"));
 
         let chest = ground
             .iter()
             .find(|o| o.name == "Travel Chest")
             .unwrap();
         assert!(!chest.container_is_open(), "starting chest should be closed");
+        assert!(chest.container_is_locked(), "starting chest should be locked");
+        assert_eq!(chest.container_lock_id().as_deref(), Some("chest-lock"));
         let chest_contents: Vec<_> = chest
             .container_contents()
             .iter()
@@ -375,7 +382,7 @@ mod tests {
         assert!(chest_contents.contains(&"Iron Lantern"));
         assert!(chest_contents.contains(&"Trail Rations"));
         assert!(chest_contents.contains(&"Tinderbox"));
-        assert!(!chest_contents.contains(&"Folded Note"));
+        assert!(chest_contents.contains(&"Folded Note"));
 
         let note = objects
             .iter()
@@ -384,12 +391,12 @@ mod tests {
         assert!(note.is_readable());
         assert_eq!(
             note.read_text().as_deref(),
-            Some("Supplies within the chest — mind the dark.")
+            Some("Mind the dark below — take the lantern first.")
         );
     }
 
     #[tokio::test]
-    async fn starting_scene_mailbox_open_read_take_put_flow() {
+    async fn starting_scene_mailbox_key_chest_unlock_flow() {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
@@ -424,22 +431,34 @@ mod tests {
         let err = read_item(&ctx, "note").unwrap_err();
         assert!(err.to_string().contains("don't see"));
 
-        let open_msg = open_container(&mut ctx, "mailbox").unwrap();
+        let open_mailbox = open_container(&mut ctx, "mailbox").unwrap();
         assert_eq!(
-            open_msg,
-            "You open the worn mailbox. Inside you see a folded note."
+            open_mailbox,
+            "You open the worn mailbox. Inside you see a brass key."
         );
 
+        let take_key = take_item(&mut ctx, "key").unwrap();
+        assert!(take_key.contains("pick up"));
+        assert!(take_key.to_lowercase().contains("brass key"));
+
+        let err = open_container(&mut ctx, "chest").unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::ContainerLocked("travel chest".to_string())
+        );
+
+        let unlock_msg = unlock_container(&mut ctx, "chest", "key").unwrap();
+        assert_eq!(
+            unlock_msg,
+            "You unlock the travel chest with the brass key."
+        );
+
+        let open_chest = open_container(&mut ctx, "chest").unwrap();
+        assert!(open_chest.starts_with("You open the travel chest."));
+        assert!(open_chest.contains("folded note"));
+
         let read_note = read_item(&ctx, "note").unwrap();
-        assert!(read_note.contains("Supplies within the chest"));
-
-        let take_msg = take_item(&mut ctx, "note").unwrap();
-        assert!(take_msg.contains("pick up"));
-
-        open_container(&mut ctx, "chest").unwrap();
-        let put_msg = put_item(&mut ctx, "note", "chest", None).unwrap();
-        assert!(put_msg.contains("in the travel chest"));
-        assert!(put_msg.contains("Folded Note") || put_msg.contains("folded note"));
+        assert!(read_note.contains("Mind the dark below"));
 
         close_container(&mut ctx, "mailbox").unwrap();
         let mailbox = ctx

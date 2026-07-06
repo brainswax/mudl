@@ -252,11 +252,11 @@ mod tests {
         assert_eq!(mailbox.location, "the-void");
         assert_eq!(mailbox.prototype.as_deref(), Some("worn-mailbox"));
 
-        let note = instances
+        let key = instances
             .iter()
-            .find(|i| i.base_name == "mailbox-folded-note")
+            .find(|i| i.base_name == "mailbox-brass-key")
             .unwrap();
-        assert_eq!(note.location, "scene-mailbox");
+        assert_eq!(key.location, "scene-mailbox");
 
         let blade = instances
             .iter()
@@ -276,6 +276,15 @@ mod tests {
             .find(|p| p.base_name == "travel-chest")
             .unwrap();
         assert_eq!(chest_proto.props.is_open, Some(false));
+        assert_eq!(chest_proto.props.locked, Some(true));
+        assert_eq!(chest_proto.props.lock_id.as_deref(), Some("chest-lock"));
+
+        let key_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "brass-key")
+            .unwrap();
+        assert_eq!(key_proto.props.is_key, Some(true));
+        assert_eq!(key_proto.props.lock_id.as_deref(), Some("chest-lock"));
 
         let note_proto = prototypes
             .iter()
@@ -284,7 +293,7 @@ mod tests {
         assert_eq!(note_proto.props.readable, Some(true));
         assert_eq!(
             note_proto.props.read_text.as_deref(),
-            Some("Supplies within the chest — mind the dark.")
+            Some("Mind the dark below — take the lantern first.")
         );
 
         let mailbox_proto = prototypes
