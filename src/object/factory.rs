@@ -11,11 +11,11 @@
 
 use std::collections::HashMap;
 
-use crate::mudl::{AnatomyRegistry, PlayerTemplate};
+use crate::mudl::{AnatomyRegistry, MudlRoleProps, PlayerTemplate};
 use crate::object::{
     constrain_id_base, generate_object_id, id_base_from_display_name,
     roles::{ContainerSpec, StackableSpec, WearableSpec},
-    slugify_display_name, Object, ObjectId, PermissionFlags,
+    slugify_display_name, Object, ObjectId, PermissionFlags, Property, Value,
 };
 use crate::persistence::Persistence;
 
@@ -213,6 +213,41 @@ impl<P: Persistence> ObjectFactory<P> {
 
     pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
         self.persistence.load_object(id).await
+    }
+
+    /// Materialize an item from MUDL prototype/instance definitions.
+    pub async fn create_from_mudl_spec(
+        &self,
+        base_name: &str,
+        display_name: &str,
+        owner: ObjectId,
+        prototype_id: Option<ObjectId>,
+        props: &MudlRoleProps,
+        description: Option<&str>,
+        aliases: &[String],
+    ) -> anyhow::Result<Object> {
+        let mut obj = self
+            .allocate_named("item", base_name, display_name, owner)
+            .await?;
+        self.attach_prototype(&mut obj, prototype_id).await?;
+        props.apply_to(&mut obj);
+        let pocketable = props
+            .pocketable
+            .unwrap_or(!(props.is_container.unwrap_or(false)));
+        Self::fill_item_defaults(&mut obj, pocketable);
+        if let Some(desc) = description {
+            obj.add_property(Property {
+                name: "description".to_string(),
+                value: Value::String(desc.to_string()),
+                permissions: PermissionFlags::EVERYONE,
+                behavior: None,
+            });
+        }
+        if !aliases.is_empty() {
+            obj.aliases = aliases.to_vec();
+        }
+        self.commit(&obj).await?;
+        Ok(obj)
     }
 
     // --- Pipeline stages ---

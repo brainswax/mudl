@@ -72,7 +72,7 @@ M1 delivers a working object graph, centralized movement, REPL inventory verbs, 
 
 - ~~**Dual graph state** in REPL~~ — resolved: `repl::Session` is the single authority (IRC still needs per-connection registry)
 - **`object` → `display` coupling** (`Describable` on `Object`) — core imports presentation
-- **`items.mudl` empty** — prototypes still created via Rust `create` / factory, not world data
+- **`items.mudl` starter scene** — West Clearing mailbox + supply chest spawn at bootstrap; expand for more world data
 - **No gateway, events, or multi-user session isolation** yet
 - **Graph invariants** (`location`, `contents`, `body_slots`) enforced by ad-hoc prune/clear, not a single validator
 
@@ -322,7 +322,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 1. ~~**Unify wield through MoveManager**~~ — Done: `move_to_grasp` + `possession::select_grasp_slots` (anatomy-driven); `wield` routes through MoveManager.
 2. ~~**REPL session model**~~ — Done: `repl::Session` owns the object graph, location, anatomy, and `DirtyTracker`; REPL uses incremental `persist_changes`.
 3. ~~**Factory ordering**~~ — Done: fixed pipeline (allocate → prototype → role → defaults-if-unset → commit).
-4. **Populate `items.mudl`** — gold coins, backpack, sword prototypes; spawn from MUDL via bootstrap instead of REPL `create` only.
+4. ~~**Populate `items.mudl`**~~ — Done: `@prototype` / `@item` parser + bootstrap spawn; West Clearing starter scene.
 
 ### Defer (next milestones)
 

@@ -1,7 +1,7 @@
 type: area
 base_name: the-void
-name: The Void
-description: You are in a featureless void. This is the starting point for new players.
+name: West Clearing
+description: A small clearing at the edge of nowhere. Packed earth shows recent footfalls. A weathered mailbox and a travel chest sit side by side, as if left for the next wanderer. Mist gathers to the north.
 
 exits:
   north: north-passage

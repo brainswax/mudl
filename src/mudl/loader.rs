@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::anatomy::{parse_anatomy_file, AnatomyRegistry};
+use super::item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
 use super::world_def::{parse_world_file, WorldDef};
 
 /// A loaded world: self-contained game setting (locations, anatomy, creatures, items).
@@ -14,6 +15,8 @@ pub struct LoadedWorld {
     pub sources: Vec<PathBuf>,
     pub anatomy: AnatomyRegistry,
     pub world_defs: Vec<WorldDef>,
+    pub item_prototypes: Vec<ItemPrototypeDef>,
+    pub item_instances: Vec<ItemInstanceDef>,
     pub starting_location: Option<String>,
 }
 
@@ -155,6 +158,8 @@ fn load_world(world_dir: impl AsRef<Path>, expected_name: &str) -> anyhow::Resul
 
     let mut anatomy = AnatomyRegistry::default();
     let mut world_defs = Vec::new();
+    let mut item_prototypes = Vec::new();
+    let mut item_instances = Vec::new();
     let mut resolved_start = starting_location;
 
     for source in &sources {
@@ -162,6 +167,9 @@ fn load_world(world_dir: impl AsRef<Path>, expected_name: &str) -> anyhow::Resul
         anatomy.merge(parse_anatomy_file(&file_content)?);
         let (defs, start) = parse_world_file(&file_content);
         world_defs.extend(defs);
+        let (protos, items) = parse_item_file(&file_content);
+        item_prototypes.extend(protos);
+        item_instances.extend(items);
         if start.is_some() {
             resolved_start = start;
         }
@@ -182,6 +190,8 @@ fn load_world(world_dir: impl AsRef<Path>, expected_name: &str) -> anyhow::Resul
         sources,
         anatomy,
         world_defs,
+        item_prototypes,
+        item_instances,
         starting_location: resolved_start,
     })
 }
@@ -308,5 +318,13 @@ mod tests {
             .unwrap();
         assert_eq!(void.obj_type, "area");
         assert!(world.sources.len() >= 5);
+        assert!(!world.item_prototypes.is_empty());
+        assert!(!world.item_instances.is_empty());
+        assert!(
+            world
+                .item_instances
+                .iter()
+                .any(|i| i.base_name == "scene-mailbox")
+        );
     }
 }
