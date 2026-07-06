@@ -17,7 +17,7 @@ exits:
 type: area
 base_name: cottage-front
 name: Front of Small Cottage
-description: A small white cottage, tidy and slightly weathered. The wooden door is shut but not locked. You could go in. The forest path continues south, and behind the cottage a narrow way leads east.
+description: A small white cottage, tidy and slightly weathered. A sturdy wooden door faces you, shut and locked. The forest path continues south, and behind the cottage a narrow way leads east.
 exits:
   south: forest-path
   in: cottage-interior

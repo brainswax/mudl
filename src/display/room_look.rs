@@ -3,16 +3,34 @@
 use std::collections::HashMap;
 
 use crate::object::{Object, ObjectId};
+use crate::world::door::door_for_direction;
 
 use super::container::format_stackable_label;
 use super::grammar::{indefinite_article, join_natural_list};
 use super::DisplayContext;
 
-fn format_exits(exits: &HashMap<String, ObjectId>) -> String {
+fn exit_label(direction: &str, room: &Object, objects: &HashMap<ObjectId, Object>) -> String {
+    let Some(door) = door_for_direction(&room.id, direction, objects) else {
+        return direction.to_string();
+    };
+    if door.gate_is_locked() {
+        return format!("{direction} (locked door)");
+    }
+    if !door.gate_is_open() {
+        return format!("{direction} (closed door)");
+    }
+    direction.to_string()
+}
+
+fn format_exits(room: &Object, objects: &HashMap<ObjectId, Object>) -> String {
+    let exits = room.get_exits();
     if exits.is_empty() {
         return String::new();
     }
-    let mut dirs: Vec<&str> = exits.keys().map(String::as_str).collect();
+    let mut dirs: Vec<String> = exits
+        .keys()
+        .map(|dir| exit_label(dir, room, objects))
+        .collect();
     dirs.sort_unstable();
     format!("Obvious exits: {}", dirs.join(", "))
 }
@@ -60,7 +78,7 @@ pub fn format_room_look_player(room: &Object, ctx: &DisplayContext) -> String {
         lines.push(desc);
     }
 
-    let exits = format_exits(&room.get_exits());
+    let exits = format_exits(room, &ctx.objects);
     if !exits.is_empty() {
         lines.push(exits);
     }
@@ -79,7 +97,7 @@ pub fn format_room_look_player(room: &Object, ctx: &DisplayContext) -> String {
 mod tests {
     use super::*;
     use crate::display::DisplayMode;
-    use crate::object::{PermissionFlags, Property, StackableSpec, Value};
+    use crate::object::{DoorSpec, PermissionFlags, Property, StackableSpec, Value};
 
     fn bare_room(id: &str, name: &str, desc: &str) -> Object {
         let mut room = Object {
@@ -170,6 +188,33 @@ mod tests {
         let output = format_room_look_player(&room, &ctx);
 
         assert!(output.contains("You see 20 coins here."));
+    }
+
+    #[test]
+    fn room_look_annotates_closed_and_locked_doors() {
+        let room_id = ObjectId::new("area:cottage-front-001");
+        let dest_id = ObjectId::new("area:cottage-interior-001");
+        let mut room = bare_room("area:cottage-front-001", "Cottage Front", "A cottage.");
+        room.add_exit("in", dest_id.clone());
+
+        let mut locked_door = bare_item("item:door-001", "Wooden Door", &room_id);
+        locked_door.apply_door_role(&DoorSpec {
+            direction: "in".to_string(),
+            destination: "cottage-interior".to_string(),
+            open: false,
+            lock_id: Some("cottage-door".to_string()),
+            locked: true,
+        });
+        locked_door.set_door_destination(dest_id);
+
+        let mut objects = HashMap::new();
+        objects.insert(room.id.clone(), room.clone());
+        objects.insert(locked_door.id.clone(), locked_door);
+
+        let ctx = DisplayContext::new(ObjectId::new("player:hero-001"), DisplayMode::Player)
+            .with_objects(objects);
+        let output = format_room_look_player(&room, &ctx);
+        assert!(output.contains("Obvious exits: in (locked door)"));
     }
 
     #[test]

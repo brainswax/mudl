@@ -1,7 +1,8 @@
 //! Apply composable object roles from MUDL property definitions.
 
 use crate::object::{
-    ContainerSpec, ItemPhysSpec, KeySpec, Object, ReadableSpec, StackableSpec, WearableSpec,
+    ContainerSpec, DoorSpec, ItemPhysSpec, KeySpec, Object, ReadableSpec, StackableSpec,
+    WearableSpec,
 };
 
 /// Key-value role properties parsed from MUDL item/object blocks.
@@ -29,6 +30,9 @@ pub struct MudlRoleProps {
     pub lock_id: Option<String>,
     pub is_key: Option<bool>,
     pub allowed_types: Option<String>,
+    pub is_door: Option<bool>,
+    pub door_direction: Option<String>,
+    pub door_destination: Option<String>,
 }
 
 impl MudlRoleProps {
@@ -59,6 +63,13 @@ impl MudlRoleProps {
                 "lock_id" => props.lock_id = Some(value.to_string()),
                 "is_key" | "key" => props.is_key = Some(*value == "true"),
                 "allowed_types" => props.allowed_types = Some(value.to_string()),
+                "is_door" | "door" => props.is_door = Some(*value == "true"),
+                "door_direction" | "direction" => {
+                    props.door_direction = Some(value.to_string())
+                }
+                "door_destination" | "destination" => {
+                    props.door_destination = Some(value.to_string())
+                }
                 _ => {}
             }
         }
@@ -91,7 +102,40 @@ impl MudlRoleProps {
 
     /// Apply parsed role properties onto an object (composable — multiple roles allowed).
     pub fn apply_to(&self, obj: &mut Object) {
-        if self.is_container == Some(true) {
+        if self.is_door == Some(true)
+            || self.door_direction.is_some()
+            || self.door_destination.is_some()
+        {
+            let direction = self
+                .door_direction
+                .clone()
+                .or_else(|| obj.door_direction())
+                .unwrap_or_else(|| "in".to_string());
+            let destination = self
+                .door_destination
+                .clone()
+                .or_else(|| obj.door_destination_base())
+                .unwrap_or_default();
+            obj.apply_door_role(&DoorSpec {
+                direction,
+                destination,
+                open: self
+                    .is_open
+                    .or_else(|| obj.get_bool_property("is_open"))
+                    .unwrap_or(false),
+                lock_id: self.lock_id.clone().or_else(|| obj.container_lock_id()),
+                locked: self
+                    .locked
+                    .or_else(|| obj.get_bool_property("is_locked"))
+                    .unwrap_or(false),
+            });
+            if let Some(w) = self.weight {
+                obj.set_property_numeric("weight", w);
+            }
+            if let Some(v) = self.volume {
+                obj.set_property_numeric("volume", v);
+            }
+        } else if self.is_container == Some(true) {
             obj.apply_container_role(&ContainerSpec {
                 capacity: self.capacity.unwrap_or(10),
                 max_weight: self.max_weight,
@@ -235,6 +279,29 @@ mod tests {
             obj.container_allowed_types(),
             Some(vec!["key".to_string()])
         );
+    }
+
+    #[test]
+    fn mudl_role_props_apply_door() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("is_door", "true"),
+            ("door_direction", "in"),
+            ("door_destination", "cottage-interior"),
+            ("is_open", "false"),
+            ("locked", "true"),
+            ("lock_id", "cottage-door"),
+        ]);
+        let mut obj = bare("item:door-001");
+        props.apply_to(&mut obj);
+        assert!(obj.is_door());
+        assert_eq!(obj.door_direction().as_deref(), Some("in"));
+        assert_eq!(
+            obj.door_destination_base().as_deref(),
+            Some("cottage-interior")
+        );
+        assert!(!obj.gate_is_open());
+        assert!(obj.gate_is_locked());
+        assert_eq!(obj.container_lock_id().as_deref(), Some("cottage-door"));
     }
 
     #[test]

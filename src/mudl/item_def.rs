@@ -233,6 +233,15 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.allowed_types.is_some() {
         target.allowed_types = extra.allowed_types.clone();
     }
+    if extra.is_door.is_some() {
+        target.is_door = extra.is_door;
+    }
+    if extra.door_direction.is_some() {
+        target.door_direction = extra.door_direction.clone();
+    }
+    if extra.door_destination.is_some() {
+        target.door_destination = extra.door_destination.clone();
+    }
 }
 
 #[cfg(test)]

@@ -365,8 +365,12 @@ async fn main() -> Result<()> {
                         );
                         println!("  wield <item>                - hold/wield an item in your hand");
                         println!("  read <object>               - read text on a note, sign, or mailbox");
-                        println!("  lock <container>            - lock a closed container");
-                        println!("  unlock <container> [with <key>] - unlock (auto-finds key if omitted)");
+                        println!(
+                            "  open/close <container|door> - open or close a container or door"
+                        );
+                        println!(
+                            "  lock/unlock <container|door> [with <key>] - lock or unlock (auto-finds key)"
+                        );
                         println!("  wear <item>                 - wear a container or garment");
                         println!("  go <dir>  (or n/s/e/w/…)    - move; shows room description and exits");
                         println!(

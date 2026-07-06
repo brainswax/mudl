@@ -110,6 +110,28 @@
   alias=paper
 @end
 
+@prototype wooden-door
+  name=Wooden Door
+  description=A sturdy wooden door set in the wall.
+  is_door=true
+  is_open=false
+  weight=5.0
+  volume=4.0
+  pocketable=false
+  alias=door
+@end
+
+@prototype cottage-key
+  name=Cottage Key
+  description=A small iron key on a frayed string.
+  is_key=true
+  lock_id=cottage-door
+  weight=0.1
+  volume=0.1
+  pocketable=true
+  alias=cottage key
+@end
+
 # --- Instances in the starting clearing (the-void) ---
 
 @item scene-mailbox
@@ -124,6 +146,11 @@
 
 @item mailbox-folded-note
   prototype=folded-note
+  location=scene-mailbox
+@end
+
+@item mailbox-cottage-key
+  prototype=cottage-key
   location=scene-mailbox
 @end
 
@@ -155,4 +182,22 @@
 @item cottage-key-ring
   prototype=brass-key-ring
   location=cottage-interior
+@end
+
+# --- Cottage doors (lockable exits) ---
+
+@item cottage-front-door
+  prototype=wooden-door
+  location=cottage-front
+  door_direction=in
+  door_destination=cottage-interior
+  locked=true
+  lock_id=cottage-door
+@end
+
+@item cottage-interior-door
+  prototype=wooden-door
+  location=cottage-interior
+  door_direction=out
+  door_destination=cottage-front
 @end

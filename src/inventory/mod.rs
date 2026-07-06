@@ -855,7 +855,7 @@ fn find_matching_keys_in_possession(
             continue;
         }
 
-        if obj.is_key() && Object::key_unlocks_container(obj, container) {
+        if obj.is_key() && Object::key_unlocks_gate(obj, container) {
             matches.push(KeyMatch {
                 id: item_id.clone(),
                 location_hint: key_location_hint(player, &item_id, container_hint.as_deref()),
@@ -910,102 +910,126 @@ fn resolve_room_or_carried_container(
     )
 }
 
-/// Open a container on the ground or in your possession.
-pub fn open_container(
-    ctx: &mut InventoryContext<'_>,
-    container_name: &str,
-) -> Result<String, InventoryError> {
-    let container_id = resolve_room_or_carried_container(ctx, container_name)?;
-    let container = ctx
+/// Resolve a door in the room or a container (carried or on the ground).
+fn resolve_gate_target(
+    ctx: &InventoryContext<'_>,
+    name: &str,
+) -> Result<ObjectId, InventoryError> {
+    if let Some(room_id) = ctx.room_id {
+        if let TargetResolution::Found(id) = resolve_object(
+            name,
+            ctx.player_id,
+            Some(room_id),
+            ctx.objects,
+            LookupScope::RoomOnly,
+        ) {
+            if ctx
+                .objects
+                .get(&id)
+                .is_some_and(|obj| obj.is_door() && obj.is_active())
+            {
+                return Ok(id);
+            }
+        }
+    }
+    let id = resolve_room_or_carried_container(ctx, name)?;
+    let obj = ctx
         .objects
-        .get(&container_id)
-        .ok_or_else(|| InventoryError::NotFound(container_name.to_string()))?
-        .clone();
-
-    if !container.is_container() {
-        return Err(InventoryError::NotContainer);
+        .get(&id)
+        .ok_or_else(|| InventoryError::NotFound(name.to_string()))?;
+    if obj.is_door() || obj.is_container() {
+        Ok(id)
+    } else {
+        Err(InventoryError::NotContainer)
     }
-
-    let display = container.name.to_lowercase();
-    if container.container_is_open() {
-        return Ok(format!("The {display} is already open."));
-    }
-    if container.container_is_locked() {
-        return Err(InventoryError::ContainerLocked(
-            container.name.to_lowercase(),
-        ));
-    }
-
-    let mut container = container;
-    container.set_container_open(true);
-    ctx.objects.insert(container_id.clone(), container);
-
-    let container = ctx.objects.get(&container_id).unwrap();
-    Ok(crate::display::format_open_container_message(
-        container,
-        ctx.objects,
-    ))
 }
 
-/// Close a container on the ground or in your possession.
-pub fn close_container(
+/// Open a door or container on the ground or in your possession.
+pub fn open_container(
     ctx: &mut InventoryContext<'_>,
-    container_name: &str,
+    target_name: &str,
 ) -> Result<String, InventoryError> {
-    let container_id = resolve_room_or_carried_container(ctx, container_name)?;
-    let container = ctx
+    let gate_id = resolve_gate_target(ctx, target_name)?;
+    let gate = ctx
         .objects
-        .get(&container_id)
-        .ok_or_else(|| InventoryError::NotFound(container_name.to_string()))?
+        .get(&gate_id)
+        .ok_or_else(|| InventoryError::NotFound(target_name.to_string()))?
         .clone();
 
-    if !container.is_container() {
-        return Err(InventoryError::NotContainer);
+    let display = gate.name.to_lowercase();
+    if gate.gate_is_open() {
+        return Ok(format!("The {display} is already open."));
+    }
+    if gate.gate_is_locked() {
+        return Err(InventoryError::ContainerLocked(display));
     }
 
-    let display = container.name.to_lowercase();
-    if !container.container_is_open() {
+    let mut gate = gate;
+    gate.set_gate_open(true);
+    ctx.objects.insert(gate_id.clone(), gate);
+
+    let gate = ctx.objects.get(&gate_id).unwrap();
+    if gate.is_container() {
+        return Ok(crate::display::format_open_container_message(
+            gate,
+            ctx.objects,
+        ));
+    }
+    Ok(format!("You open the {display}."))
+}
+
+/// Close a door or container on the ground or in your possession.
+pub fn close_container(
+    ctx: &mut InventoryContext<'_>,
+    target_name: &str,
+) -> Result<String, InventoryError> {
+    let gate_id = resolve_gate_target(ctx, target_name)?;
+    let gate = ctx
+        .objects
+        .get(&gate_id)
+        .ok_or_else(|| InventoryError::NotFound(target_name.to_string()))?
+        .clone();
+
+    let display = gate.name.to_lowercase();
+    if !gate.gate_is_open() {
         return Ok(format!("The {display} is already closed."));
     }
 
-    let mut container = container;
-    container.set_container_open(false);
-    ctx.objects.insert(container_id, container);
+    let mut gate = gate;
+    gate.set_gate_open(false);
+    ctx.objects.insert(gate_id, gate);
 
     Ok(format!("You close the {display}."))
 }
 
-/// Lock a container in the room or in your possession (must be closed and have a lock).
+/// Lock a door or container in the room or in your possession.
 pub fn lock_container(
     ctx: &mut InventoryContext<'_>,
-    container_name: &str,
+    target_name: &str,
 ) -> Result<String, InventoryError> {
-    let container_id = resolve_room_or_carried_container(ctx, container_name)?;
-    let container = ctx
+    let gate_id = resolve_gate_target(ctx, target_name)?;
+    let gate = ctx
         .objects
-        .get(&container_id)
-        .ok_or_else(|| InventoryError::NotFound(container_name.to_string()))?
+        .get(&gate_id)
+        .ok_or_else(|| InventoryError::NotFound(target_name.to_string()))?
         .clone();
 
-    if !container.is_container() {
-        return Err(InventoryError::NotContainer);
-    }
-    if !container.container_has_lock() {
-        return Err(InventoryError::NoLock(container.name.to_lowercase()));
+    if !gate.gate_has_lock() {
+        return Err(InventoryError::NoLock(gate.name.to_lowercase()));
     }
 
-    let display = container.name.to_lowercase();
-    if container.container_is_locked() {
+    let display = gate.name.to_lowercase();
+    if gate.gate_is_locked() {
         return Ok(format!("The {display} is already locked."));
     }
 
-    let was_open = container.container_is_open();
-    let mut container = container;
+    let was_open = gate.gate_is_open();
+    let mut gate = gate;
     if was_open {
-        container.set_container_open(false);
+        gate.set_gate_open(false);
     }
-    container.set_container_locked(true);
-    ctx.objects.insert(container_id, container.clone());
+    gate.set_gate_locked(true);
+    ctx.objects.insert(gate_id, gate.clone());
 
     if was_open {
         Ok(format!("You close the {display} and lock it."))
@@ -1014,32 +1038,29 @@ pub fn lock_container(
     }
 }
 
-/// Unlock a container using a matching key.
+/// Unlock a door or container using a matching key.
 ///
 /// When `key_name` is `None`, searches player possession (body slots and open carried
 /// containers) for a single matching key.
 pub fn unlock_container(
     ctx: &mut InventoryContext<'_>,
-    container_name: &str,
+    target_name: &str,
     key_name: Option<&str>,
 ) -> Result<String, InventoryError> {
-    let container_id = resolve_room_or_carried_container(ctx, container_name)?;
-    let container = ctx
+    let gate_id = resolve_gate_target(ctx, target_name)?;
+    let gate = ctx
         .objects
-        .get(&container_id)
-        .ok_or_else(|| InventoryError::NotFound(container_name.to_string()))?
+        .get(&gate_id)
+        .ok_or_else(|| InventoryError::NotFound(target_name.to_string()))?
         .clone();
 
-    if !container.is_container() {
-        return Err(InventoryError::NotContainer);
+    if !gate.gate_has_lock() {
+        return Err(InventoryError::NoLock(gate.name.to_lowercase()));
     }
-    if !container.container_has_lock() {
-        return Err(InventoryError::NoLock(container.name.to_lowercase()));
-    }
-    if !container.container_is_locked() {
+    if !gate.gate_is_locked() {
         return Ok(format!(
             "The {} is already unlocked.",
-            container.name.to_lowercase()
+            gate.name.to_lowercase()
         ));
     }
 
@@ -1055,22 +1076,17 @@ pub fn unlock_container(
             )?
         }
         None => {
-            let matches =
-                find_matching_keys_in_possession(ctx.player_id, &container, ctx.objects);
+            let matches = find_matching_keys_in_possession(ctx.player_id, &gate, ctx.objects);
             match matches.len() {
                 0 => {
                     return Err(InventoryError::NoMatchingKey(
-                        container.name.to_lowercase(),
+                        gate.name.to_lowercase(),
                     ));
                 }
                 1 => matches[0].id.clone(),
                 _ => {
                     return Err(InventoryError::InvalidTarget(
-                        format_ambiguous_keys_message(
-                            &container.name,
-                            &matches,
-                            ctx.objects,
-                        ),
+                        format_ambiguous_keys_message(&gate.name, &matches, ctx.objects),
                     ));
                 }
             }
@@ -1080,25 +1096,23 @@ pub fn unlock_container(
     let key = ctx
         .objects
         .get(&key_id)
-        .ok_or_else(|| {
-            InventoryError::NotFound(key_name.unwrap_or("key").to_string())
-        })?
+        .ok_or_else(|| InventoryError::NotFound(key_name.unwrap_or("key").to_string()))?
         .clone();
 
     if !key.is_key() {
         return Err(InventoryError::NotKey(key.name.to_lowercase()));
     }
-    if !Object::key_unlocks_container(&key, &container) {
+    if !Object::key_unlocks_gate(&key, &gate) {
         return Err(InventoryError::WrongKey(key.name.to_lowercase()));
     }
 
-    let mut container = container;
-    container.set_container_locked(false);
-    ctx.objects.insert(container_id, container.clone());
+    let mut gate = gate;
+    gate.set_gate_locked(false);
+    ctx.objects.insert(gate_id, gate.clone());
 
     Ok(format!(
         "You unlock the {} with the {}.",
-        container.name.to_lowercase(),
+        gate.name.to_lowercase(),
         key.name.to_lowercase()
     ))
 }

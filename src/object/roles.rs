@@ -101,6 +101,19 @@ pub struct KeySpec {
     pub lock_id: String,
 }
 
+/// Configuration for a door — a lockable gate on a room exit.
+#[derive(Debug, Clone)]
+pub struct DoorSpec {
+    /// Exit direction this door guards (`in`, `out`, `north`, …).
+    pub direction: String,
+    /// Destination area base name (resolved to an object id at bootstrap).
+    pub destination: String,
+    /// Whether the door starts open. Doors default to closed.
+    pub open: bool,
+    pub lock_id: Option<String>,
+    pub locked: bool,
+}
+
 /// Configuration for a wearable role.
 #[derive(Debug, Clone)]
 pub struct WearableSpec {
@@ -325,15 +338,88 @@ impl Object {
         }
     }
 
-    /// Whether `key` opens `container` (supports one-to-one and shared lock ids).
-    pub fn key_unlocks_container(key: &Object, container: &Object) -> bool {
-        if !key.is_key() || !container.container_has_lock() {
+    pub fn is_door(&self) -> bool {
+        self.get_bool_property("is_door").unwrap_or(false)
+    }
+
+    pub fn door_direction(&self) -> Option<String> {
+        self.get_string_property("door_direction")
+    }
+
+    /// Resolved destination room id (set at bootstrap).
+    pub fn door_destination(&self) -> Option<ObjectId> {
+        self.get_object_ref_property("door_destination")
+    }
+
+    /// Destination area base name from MUDL (before bootstrap resolution).
+    pub fn door_destination_base(&self) -> Option<String> {
+        self.get_string_property("door_destination_base")
+    }
+
+    pub fn set_door_destination(&mut self, destination: ObjectId) {
+        self.set_property_object_ref("door_destination", destination);
+    }
+
+    pub fn apply_door_role(&mut self, spec: &DoorSpec) {
+        self.set_property_bool("is_door", true);
+        self.set_property_string("door_direction", &spec.direction);
+        self.set_property_string("door_destination_base", &spec.destination);
+        self.set_property_bool("is_open", spec.open);
+        self.set_property_bool("is_pocketable", false);
+        if let Some(ref lock_id) = spec.lock_id {
+            self.set_container_lock_id(lock_id);
+            self.set_container_locked(spec.locked);
+        }
+        if self.get_numeric_property("weight").is_none() {
+            self.set_property_numeric("weight", 5.0);
+        }
+        if self.get_numeric_property("volume").is_none() {
+            self.set_property_numeric("volume", 4.0);
+        }
+    }
+
+    /// Whether this object has a lock (`lock_id` set) — containers and doors.
+    pub fn gate_has_lock(&self) -> bool {
+        self.container_lock_id().is_some()
+    }
+
+    /// Open state for a door or container.
+    pub fn gate_is_open(&self) -> bool {
+        if self.is_door() {
+            return self.get_bool_property("is_open").unwrap_or(false);
+        }
+        if self.is_container() {
+            return self.container_is_open();
+        }
+        true
+    }
+
+    pub fn set_gate_open(&mut self, open: bool) {
+        self.set_property_bool("is_open", open);
+    }
+
+    pub fn gate_is_locked(&self) -> bool {
+        self.gate_has_lock() && self.get_bool_property("is_locked").unwrap_or(false)
+    }
+
+    pub fn set_gate_locked(&mut self, locked: bool) {
+        self.set_property_bool("is_locked", locked);
+    }
+
+    /// Whether `key` opens a lockable gate (container or door).
+    pub fn key_unlocks_gate(key: &Object, gate: &Object) -> bool {
+        if !key.is_key() || !gate.gate_has_lock() {
             return false;
         }
-        match (key.key_lock_id(), container.container_lock_id()) {
+        match (key.key_lock_id(), gate.container_lock_id()) {
             (Some(k), Some(c)) => k == c,
             _ => false,
         }
+    }
+
+    /// Whether `key` opens `container` (supports one-to-one and shared lock ids).
+    pub fn key_unlocks_container(key: &Object, container: &Object) -> bool {
+        Object::key_unlocks_gate(key, container)
     }
 
     /// Items worn on body slots (subset of `body_slots` for wear-type slots).
@@ -555,6 +641,25 @@ impl Object {
                 None
             }
         })
+    }
+
+    pub fn get_object_ref_property(&self, name: &str) -> Option<ObjectId> {
+        self.get_property(name).and_then(|p| {
+            if let Value::ObjectRef(id) = &p.value {
+                Some(id.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn set_property_object_ref(&mut self, name: &str, id: ObjectId) {
+        self.add_property(Property {
+            name: name.to_string(),
+            value: Value::ObjectRef(id),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
     }
 
     pub fn get_object_list_property(&self, name: &str) -> Vec<ObjectId> {

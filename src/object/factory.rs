@@ -207,6 +207,10 @@ impl<P: Persistence> ObjectFactory<P> {
             "lock_id",
             "is_locked",
             "is_key",
+            "is_door",
+            "door_direction",
+            "door_destination_base",
+            "allowed_types",
         ] {
             if let Some(prop) = prototype.get_property(key) {
                 target.add_property(prop.clone());

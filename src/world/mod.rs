@@ -1,6 +1,7 @@
 pub mod bootstrap;
 pub mod container_fit;
 pub mod dirty;
+pub mod door;
 pub mod navigation;
 pub mod possession;
 pub mod stack_transfer;
@@ -11,6 +12,7 @@ pub mod session;
 pub use bootstrap::bootstrap_world;
 pub use dirty::{persist_dirty, DirtyTracker};
 pub use module::{active_module_dir, bundle_module, list_universe_files, ModuleManifest};
+pub use door::{door_for_direction, door_passage_block, door_permits_exit, DoorBlock};
 pub use navigation::{
     exit_directions, is_direction_verb, movement_direction_from_line, normalize_direction,
     resolve_exit,

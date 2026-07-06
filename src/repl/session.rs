@@ -8,6 +8,7 @@ use crate::display::{
     format_room_look_player, narrate_go, narrate_no_exit, narrate_no_location, resolve_object,
     DisplayContext, DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
+use crate::world::door::{door_for_direction, door_passage_block, door_permits_exit, DoorBlock};
 use crate::world::navigation::{normalize_direction, resolve_exit};
 use crate::inventory::InventoryContext;
 use crate::mudl::AnatomyRegistry;
@@ -24,6 +25,8 @@ pub enum SessionError {
     LocationMissing,
     PlayerMissing,
     NoExit(String),
+    DoorClosed(String),
+    DoorLocked(String),
 }
 
 impl std::fmt::Display for SessionError {
@@ -38,6 +41,8 @@ impl std::fmt::Display for SessionError {
                 let friendly = normalize_direction(dir).unwrap_or(dir.as_str());
                 write!(f, "{}", narrate_no_exit(friendly))
             }
+            Self::DoorClosed(name) => write!(f, "The {name} is closed."),
+            Self::DoorLocked(name) => write!(f, "The {name} is locked."),
         }
     }
 }
@@ -59,6 +64,23 @@ pub struct Session {
 
 impl Session {
     /// Hydrate from persistence and resolve the player's current location.
+    /// Build a session from an in-memory object graph (tests and tooling).
+    #[cfg(test)]
+    pub fn test_session(
+        player_id: ObjectId,
+        anatomy: AnatomyRegistry,
+        objects: HashMap<ObjectId, Object>,
+        current_location: Option<ObjectId>,
+    ) -> Self {
+        Self {
+            player_id,
+            anatomy,
+            objects,
+            current_location,
+            dirty: DirtyTracker::default(),
+        }
+    }
+
     pub async fn restore<P: Persistence>(
         persistence: &P,
         player_id: ObjectId,
@@ -207,6 +229,18 @@ impl Session {
 
         let (dir_label, target_id) = resolve_exit(&exits, direction)
             .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
+
+        if let Some(door) = door_for_direction(&loc_id, dir_label, &self.objects) {
+            if !door_permits_exit(door, &target_id) {
+                return Err(SessionError::NoExit(direction.to_string()));
+            }
+            let name = door.name.to_lowercase();
+            match door_passage_block(door) {
+                Some(DoorBlock::Closed) => return Err(SessionError::DoorClosed(name)),
+                Some(DoorBlock::Locked) => return Err(SessionError::DoorLocked(name)),
+                None => {}
+            }
+        }
 
         let player = self
             .objects

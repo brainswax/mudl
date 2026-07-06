@@ -152,6 +152,19 @@ async fn spawn_instance<P: Persistence>(
         objects.insert(parent_id.clone(), parent);
     }
 
+    if obj.is_door() {
+        if let Some(base) = obj.door_destination_base() {
+            let dest_id = placements.get(&base).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Unknown door destination '{}' for item '{}'",
+                    base,
+                    def.base_name
+                )
+            })?;
+            obj.set_door_destination(dest_id.clone());
+        }
+    }
+
     factory.persistence().save_object(&obj).await?;
     objects.insert(obj.id.clone(), obj.clone());
     placements.insert(def.base_name.clone(), obj.id);
@@ -393,7 +406,10 @@ mod tests {
             .filter_map(|id| objects.iter().find(|o| &o.id == id))
             .map(|o| o.name.as_str())
             .collect();
-        assert_eq!(mailbox_contents, vec!["Brass Key", "Folded Note"]);
+        assert_eq!(mailbox_contents.len(), 3);
+        assert!(mailbox_contents.contains(&"Brass Key"));
+        assert!(mailbox_contents.contains(&"Cottage Key"));
+        assert!(mailbox_contents.contains(&"Folded Note"));
 
         let key = objects.iter().find(|o| o.name == "Brass Key").unwrap();
         assert!(key.is_key());
@@ -466,15 +482,18 @@ mod tests {
         assert!(err.to_string().contains("don't see"));
 
         let open_mailbox = open_container(&mut ctx, "mailbox").unwrap();
-        assert_eq!(
-            open_mailbox,
-            "You open the worn mailbox. Inside you see a brass key and folded note."
+        assert!(
+            open_mailbox.starts_with("You open the worn mailbox."),
+            "{open_mailbox}"
         );
+        assert!(open_mailbox.contains("brass key"));
+        assert!(open_mailbox.contains("cottage key"));
+        assert!(open_mailbox.contains("folded note"));
 
         let read_note = read_item(&ctx, "note").unwrap();
         assert!(read_note.contains("Mind the dark below"));
 
-        let take_key = take_item(&mut ctx, "key").unwrap();
+        let take_key = take_item(&mut ctx, "brass key").unwrap();
         assert!(take_key.contains("pick up"));
         assert!(take_key.to_lowercase().contains("brass key"));
 
@@ -484,7 +503,7 @@ mod tests {
             InventoryError::ContainerLocked("travel chest".to_string())
         );
 
-        let unlock_msg = unlock_container(&mut ctx, "chest", None).unwrap();
+        let unlock_msg = unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
         assert_eq!(
             unlock_msg,
             "You unlock the travel chest with the brass key."
@@ -501,5 +520,140 @@ mod tests {
             .find(|o| o.name == "Worn Mailbox")
             .unwrap();
         assert!(!mailbox.container_is_open());
+    }
+
+    #[tokio::test]
+    async fn bootstrap_spawns_cottage_doors_with_resolved_destinations() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let owner = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        bootstrap_world(&factory, owner, &world).await.unwrap();
+
+        let objects: Vec<Object> = persistence.list_objects(false).await.unwrap();
+        let cottage_front = objects
+            .iter()
+            .find(|o| o.name == "Front of Small Cottage")
+            .expect("cottage front");
+        let cottage_interior = objects
+            .iter()
+            .find(|o| o.name == "Cottage Interior")
+            .expect("cottage interior");
+
+        let front_door = objects
+            .iter()
+            .find(|o| {
+                o.is_door()
+                    && o.location.as_ref() == Some(&cottage_front.id)
+                    && o.door_direction().as_deref() == Some("in")
+            })
+            .expect("front door");
+        assert!(!front_door.gate_is_open());
+        assert!(front_door.gate_is_locked());
+        assert_eq!(
+            front_door.door_destination().as_ref(),
+            Some(&cottage_interior.id)
+        );
+
+        let interior_door = objects
+            .iter()
+            .find(|o| {
+                o.is_door()
+                    && o.location.as_ref() == Some(&cottage_interior.id)
+                    && o.door_direction().as_deref() == Some("out")
+            })
+            .expect("interior door");
+        assert!(!interior_door.gate_is_open());
+        assert!(!interior_door.gate_is_locked());
+        assert_eq!(
+            interior_door.door_destination().as_ref(),
+            Some(&cottage_front.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn cottage_door_unlock_open_and_passage_flow() {
+        use crate::display::format_room_look_player;
+        use crate::display::{DisplayContext, DisplayMode};
+        use crate::repl::session::Session;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let cottage_front_id = objects
+            .values()
+            .find(|o| o.name == "Front of Small Cottage")
+            .map(|o| o.id.clone())
+            .expect("cottage front");
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&start),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        open_container(&mut ctx, "mailbox").unwrap();
+        take_item(&mut ctx, "cottage key").unwrap();
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            ctx.objects.clone(),
+            Some(start.clone()),
+        );
+        session.go("north").unwrap();
+        session.go("north").unwrap();
+        assert_eq!(session.current_location(), Some(&cottage_front_id));
+
+        let look = format_room_look_player(
+            session.object(&cottage_front_id).unwrap(),
+            &DisplayContext::new(player_id.clone(), DisplayMode::Player)
+                .with_objects(session.objects().clone()),
+        );
+        assert!(look.contains("in (locked door)"));
+
+        let blocked = session.go("in").unwrap_err().to_string();
+        assert!(blocked.contains("locked"));
+
+        let room_id = session.current_location().cloned();
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: room_id.as_ref(),
+            objects: session.objects_mut(),
+            anatomy: &anatomy,
+            dirty: None,
+        };
+        let unlock = unlock_container(&mut ctx, "door", None).unwrap();
+        assert!(unlock.contains("unlock"));
+        let open = open_container(&mut ctx, "door").unwrap();
+        assert!(open.contains("open"));
+
+        drop(ctx);
+        let msg = session.go("in").unwrap();
+        assert!(msg.contains("single room"));
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .map(|o| o.name.as_str()),
+            Some("Cottage Interior")
+        );
     }
 }
