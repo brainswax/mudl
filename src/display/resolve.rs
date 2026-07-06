@@ -171,48 +171,7 @@ pub fn is_in_player_possession(
     item_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
 ) -> bool {
-    if item_id == player_id {
-        return true;
-    }
-
-    let Some(player) = objects.get(player_id) else {
-        return false;
-    };
-
-    if player.body_slots().values().any(|id| id == item_id) {
-        return true;
-    }
-
-    let mut queue: VecDeque<ObjectId> = player.carried_body_items().into_iter().collect();
-    let mut visited = HashMap::new();
-
-    while let Some(container_id) = queue.pop_front() {
-        if visited.contains_key(&container_id) {
-            continue;
-        }
-        visited.insert(container_id.clone(), ());
-
-        let Some(container) = objects.get(&container_id) else {
-            continue;
-        };
-        if !container.is_container() {
-            continue;
-        }
-
-        for content_id in container.container_contents() {
-            if &content_id == item_id {
-                return true;
-            }
-            if objects
-                .get(&content_id)
-                .is_some_and(|obj| obj.is_container())
-            {
-                queue.push_back(content_id);
-            }
-        }
-    }
-
-    false
+    crate::world::possession::is_in_player_possession(player_id, item_id, objects)
 }
 
 fn is_on_ground_in_room(

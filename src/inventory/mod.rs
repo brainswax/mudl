@@ -12,6 +12,10 @@ use crate::object::{LocationRef, Object, ObjectId};
 use crate::world::move_manager::{
     move_object, move_to_container, move_to_room, MoveContext, MoveError, MoveHooks,
 };
+use crate::world::possession::{
+    clear_creature_slots_for_item, is_carried_by as possession_is_carried_by,
+    place_in_grasp_slots, prune_creature_body_slots, PossessionError,
+};
 
 /// Errors returned by inventory operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -380,95 +384,17 @@ pub fn is_carried_by(
     item_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
 ) -> bool {
-    crate::display::is_in_player_possession(player_id, item_id, objects)
+    possession_is_carried_by(player_id, item_id, objects)
 }
 
-fn grasp_slot_free(
-    player: &Object,
-    slot: &str,
-    objects: &HashMap<ObjectId, Object>,
-) -> bool {
-    match player.body_slot_item(slot) {
-        None => true,
-        Some(item_id) => !player.body_slot_item_valid(&item_id, objects),
-    }
-}
-
-fn place_in_grasp_slots(
-    player_id: &ObjectId,
-    item_id: &ObjectId,
-    plan: &BodyPlan,
-    objects: &mut HashMap<ObjectId, Object>,
-) -> Result<Vec<String>, InventoryError> {
-    let item = objects
-        .get(item_id)
-        .ok_or(InventoryError::NotCarried)?
-        .clone();
-    let mut player = objects.get(player_id).unwrap().clone();
-    player.prune_stale_body_slots(objects);
-    objects.insert(player_id.clone(), player.clone());
-
-    let hand_pref = item.hand_slot();
-    let preference = hand_pref.as_deref().unwrap_or("right");
-
-    let grasp_names: Vec<String> = plan.grasp_slots().iter().map(|s| s.name.clone()).collect();
-
-    let (target_slots, carried_label) = if preference == "both" {
-        let left = "left_hand";
-        let right = "right_hand";
-        if !grasp_slot_free(&player, left, objects)
-            || !grasp_slot_free(&player, right, objects)
-        {
-            return Err(InventoryError::HandsFull);
-        }
-        (
-            vec![left.to_string(), right.to_string()],
-            Some(left.to_string()),
-        )
-    } else if preference == "left" {
-        if !grasp_slot_free(&player, "left_hand", objects) {
-            return Err(InventoryError::HandsFull);
-        }
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else if grasp_slot_free(&player, "right_hand", objects) {
-        (
-            vec!["right_hand".to_string()],
-            Some("right_hand".to_string()),
-        )
-    } else if grasp_slot_free(&player, "left_hand", objects) {
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else {
-        return Err(InventoryError::HandsFull);
-    };
-
-    for slot in &grasp_names {
-        if target_slots.contains(slot) && !grasp_slot_free(&player, slot, objects) {
-            return Err(InventoryError::HandsFull);
+impl From<PossessionError> for InventoryError {
+    fn from(err: PossessionError) -> Self {
+        match err {
+            PossessionError::HandsFull => Self::HandsFull,
+            PossessionError::NotCarried => Self::NotCarried,
+            PossessionError::NotFound(name) => Self::NotFound(name),
         }
     }
-
-    let mut player = objects.get(player_id).unwrap().clone();
-    for slot in &target_slots {
-        player.set_body_slot(slot, Some(item_id.clone()));
-    }
-    objects.insert(player_id.clone(), player);
-
-    let mut item = objects.get(item_id).unwrap().clone();
-    item.location = Some(player_id.clone());
-    item.set_carried_slot(carried_label.as_deref().or(Some(target_slots[0].as_str())));
-    objects.insert(item_id.clone(), item);
-
-    Ok(target_slots)
-}
-
-fn remove_from_player(
-    player_id: &ObjectId,
-    item_id: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-) {
-    let mut player = objects.get(player_id).unwrap().clone();
-    player.clear_item_from_body_slots(item_id);
-    objects.insert(player_id.clone(), player);
 }
 
 pub fn take_item(
@@ -812,10 +738,11 @@ pub fn wield_item(
         return Err(InventoryError::NotWieldable);
     }
 
-    remove_from_player(ctx.player_id, &item_id, ctx.objects);
+    clear_creature_slots_for_item(ctx.player_id, &item_id, ctx.objects);
 
     let player = ctx.objects.get(ctx.player_id).unwrap().clone();
     let plan = player_body_plan(&player, ctx.anatomy)?;
+    prune_creature_body_slots(ctx.player_id, ctx.objects);
     place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
 
     let item = ctx.objects.get(&item_id).unwrap();

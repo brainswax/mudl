@@ -2,8 +2,11 @@
 
 use std::collections::HashMap;
 
-use crate::display::is_in_player_possession;
 use crate::mudl::{AnatomyRegistry, BodyPlan};
+use crate::world::possession::{
+    clear_creature_slots_for_item, grasp_slot_available, is_in_player_possession,
+    place_in_grasp_slots, prune_creature_body_slots, PossessionError,
+};
 use crate::object::LocationRef;
 use crate::object::{
     is_unlimited_weight, player_carried_weight, transfer_weight, player_weight_bearer,
@@ -65,6 +68,16 @@ impl std::fmt::Display for MoveError {
 }
 
 impl std::error::Error for MoveError {}
+
+impl From<PossessionError> for MoveError {
+    fn from(err: PossessionError) -> Self {
+        match err {
+            PossessionError::HandsFull => Self::HandsFull,
+            PossessionError::NotCarried => Self::NotCarried,
+            PossessionError::NotFound(name) => Self::NotFound(name),
+        }
+    }
+}
 
 impl From<MoveError> for crate::inventory::InventoryError {
     fn from(err: MoveError) -> Self {
@@ -191,44 +204,6 @@ fn player_body_plan<'a>(
     anatomy.body_plan(&plan_name).ok_or(MoveError::NoBodyPlan)
 }
 
-fn prune_creature_body_slots(
-    creature_id: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-) {
-    let Some(creature) = objects.get(creature_id).cloned() else {
-        return;
-    };
-    if !creature.has_creature_role() {
-        return;
-    }
-    let mut creature = creature;
-    creature.prune_stale_body_slots(objects);
-    objects.insert(creature_id.clone(), creature);
-}
-
-fn clear_creature_slots_for_item(
-    creature_id: &ObjectId,
-    item_id: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-) {
-    let Some(mut creature) = objects.get(creature_id).cloned() else {
-        return;
-    };
-    creature.clear_item_from_body_slots(item_id);
-    objects.insert(creature_id.clone(), creature);
-}
-
-fn grasp_slot_free(
-    player: &Object,
-    slot: &str,
-    objects: &HashMap<ObjectId, Object>,
-) -> bool {
-    match player.body_slot_item(slot) {
-        None => true,
-        Some(item_id) => !player.body_slot_item_valid(&item_id, objects),
-    }
-}
-
 fn max_carry_units_for_weight(
     player: &Object,
     item: &Object,
@@ -246,62 +221,6 @@ fn max_carry_units_for_weight(
         return u32::MAX;
     }
     (room / unit_w).floor().max(0.0) as u32
-}
-
-fn grasp_slot_available(
-    player: &Object,
-    item: &Object,
-    plan: &BodyPlan,
-    objects: &HashMap<ObjectId, Object>,
-) -> bool {
-    select_grasp_slots(player, item, plan, objects).is_ok()
-}
-
-fn select_grasp_slots(
-    player: &Object,
-    item: &Object,
-    plan: &BodyPlan,
-    objects: &HashMap<ObjectId, Object>,
-) -> Result<(Vec<String>, Option<String>), MoveError> {
-    let hand_pref = item.hand_slot();
-    let preference = hand_pref.as_deref().unwrap_or("right");
-    let grasp_names: Vec<String> = plan.grasp_slots().iter().map(|s| s.name.clone()).collect();
-
-    let (target_slots, carried_label) = if preference == "both" {
-        let left = "left_hand";
-        let right = "right_hand";
-        if !grasp_slot_free(player, left, objects)
-            || !grasp_slot_free(player, right, objects)
-        {
-            return Err(MoveError::HandsFull);
-        }
-        (
-            vec![left.to_string(), right.to_string()],
-            Some(left.to_string()),
-        )
-    } else if preference == "left" {
-        if !grasp_slot_free(player, "left_hand", objects) {
-            return Err(MoveError::HandsFull);
-        }
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else if grasp_slot_free(player, "right_hand", objects) {
-        (
-            vec!["right_hand".to_string()],
-            Some("right_hand".to_string()),
-        )
-    } else if grasp_slot_free(player, "left_hand", objects) {
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else {
-        return Err(MoveError::HandsFull);
-    };
-
-    for slot in &grasp_names {
-        if target_slots.contains(slot) && !grasp_slot_free(player, slot, objects) {
-            return Err(MoveError::HandsFull);
-        }
-    }
-
-    Ok((target_slots, carried_label))
 }
 
 fn inventory_transfer_failure(
@@ -666,33 +585,6 @@ fn remove_from_source(
         }
         LocationRef::Nowhere => Ok(()),
     }
-}
-
-fn place_in_grasp_slots(
-    player_id: &ObjectId,
-    item_id: &ObjectId,
-    plan: &BodyPlan,
-    objects: &mut HashMap<ObjectId, Object>,
-) -> Result<Vec<String>, MoveError> {
-    let item = objects.get(item_id).ok_or(MoveError::NotCarried)?.clone();
-    let player = objects.get(player_id).ok_or(MoveError::NotCarried)?;
-    let (target_slots, carried_label) = select_grasp_slots(player, &item, plan, objects)?;
-
-    let mut player = objects.get(player_id).ok_or(MoveError::NotCarried)?.clone();
-    for slot in &target_slots {
-        player.set_body_slot(slot, Some(item_id.clone()));
-    }
-    objects.insert(player_id.clone(), player);
-
-    let mut item = objects
-        .get(item_id)
-        .ok_or(MoveError::NotFound(item_id.to_string()))?
-        .clone();
-    item.location = Some(player_id.clone());
-    item.set_carried_slot(carried_label.as_deref().or(Some(target_slots[0].as_str())));
-    objects.insert(item_id.clone(), item);
-
-    Ok(target_slots)
 }
 
 fn apply_destination(

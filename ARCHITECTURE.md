@@ -33,12 +33,13 @@ M1 delivers a working object graph, centralized movement, REPL inventory verbs, 
 ┌───────────────────┐       ┌─────────────────────────────────────────────┐
 │ Inventory         │       │ Display (src/display/)                      │
 │ take/drop/put/    │──────▶│ resolve, look/examine, grammar, equipment   │
-│ wear/wield        │       │ (also imported by object + move_manager)    │
+│ wear/wield        │       │ (resolve delegates possession queries)      │
 └─────────┬─────────┘       └─────────────────────────────────────────────┘
           │ delegates
           ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  MoveManager (src/world/move_manager.rs) — single authority for moves    │
+│  MoveManager (src/world/move_manager.rs) — single authority for moves  │
+│  + possession (body slots, carried gear, grasp placement)               │
 │  + stack_transfer (merge/split plans) + LocationRef resolution          │
 └─────────┬───────────────────────────────┬───────────────────────────────┘
           │                               │
@@ -70,7 +71,6 @@ M1 delivers a working object graph, centralized movement, REPL inventory verbs, 
 ### M1 known gaps (see review priorities below)
 
 - **Dual graph state** in REPL (`cache` + DB reload per command) — not a single `WorldSession` authority
-- **Duplicate grasp-slot logic** in `inventory` (wield) vs `move_manager` (take/move)
 - **`object` → `display` coupling** (`Describable` on `Object`) — core imports presentation
 - **`items.mudl` empty** — prototypes still created via Rust `create` / factory, not world data
 - **No gateway, events, or multi-user session isolation** yet
@@ -176,7 +176,7 @@ mudl/
 ├── src/                    # Rust engine only
 │   ├── object/             # Object model, roles, LocationRef, ObjectFactory
 │   ├── mudl/               # MUDL parser, anatomy, role props, @include loader
-│   ├── world/              # Bootstrap, MoveManager, dirty tracking, session
+│   ├── world/              # Bootstrap, MoveManager, possession, dirty tracking, session
 │   ├── command/            # Shared command/bootstrap helpers
 │   ├── display/            # Player/builder/debug presentation
 │   ├── inventory/          # Body-slot inventory (delegates to MoveManager)
@@ -279,7 +279,7 @@ The parser (`src/command/parse.rs`) strips `@`, lowercases the verb, and routes 
 
 Multiple matches in the same tier prompt disambiguation: `Which coins do you mean?` with lines like `coins-042 (in purse)`. Possession is searched before room scans to avoid full-world iteration.
 
-Command helpers live in `src/command/`; inventory slot logic in `src/inventory/`; presentation in `src/display/` and `Object::is_location()`.
+Command helpers live in `src/command/`; possession graph logic in `src/world/possession.rs`; inventory verbs in `src/inventory/`; presentation in `src/display/`.
 
 ## Move Semantics
 
@@ -318,11 +318,10 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 ### Do soon (before doc/examples drift)
 
-1. **Extract `world::possession`** — move `is_in_player_possession`, BFS container walk out of `display`; have `move_manager` and `inventory` depend on it (break `world` → `display` edge).
-2. **Unify grasp placement** — delete `inventory::place_in_grasp_slots`; route `wield` through `MoveManager` (`LocationRef::BodySlot` or dedicated wield wrapper).
-3. **REPL session model** — one in-memory `HashMap<ObjectId, Object>` per session; stop `load_all_objects` merge on every command; use `DirtyTracker` + `persist_dirty`.
-4. **Factory ordering** — `create_wearable` should not let `init_item_defaults` overwrite `apply_wearable_role` phys values.
-5. **Populate `items.mudl`** — gold coins, backpack, sword prototypes; spawn from MUDL via bootstrap instead of REPL `create` only.
+1. **Unify wield through MoveManager** — `wield` still calls `possession::place_in_grasp_slots` directly; optional thin `move_to_grasp` wrapper.
+2. **REPL session model** — one in-memory `HashMap<ObjectId, Object>` per session; stop `load_all_objects` merge on every command; use `DirtyTracker` + `persist_dirty`.
+3. **Factory ordering** — `create_wearable` should not let `init_item_defaults` overwrite `apply_wearable_role` phys values.
+4. **Populate `items.mudl`** — gold coins, backpack, sword prototypes; spawn from MUDL via bootstrap instead of REPL `create` only.
 
 ### Defer (next milestones)
 
