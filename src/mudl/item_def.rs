@@ -221,6 +221,15 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.write_text.is_some() {
         target.write_text = extra.write_text.clone();
     }
+    if extra.locked.is_some() {
+        target.locked = extra.locked;
+    }
+    if extra.lock_id.is_some() {
+        target.lock_id = extra.lock_id.clone();
+    }
+    if extra.is_key.is_some() {
+        target.is_key = extra.is_key;
+    }
 }
 
 #[cfg(test)]

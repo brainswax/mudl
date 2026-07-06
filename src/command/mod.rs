@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use crate::inventory::{take_item, InventoryContext, InventoryError};
 use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse, MudlRoleProps};
 use crate::object::{ContainerSpec, Object, ObjectFactory, ObjectId, WearableSpec};
+use crate::display::{resolve_object, ResolveScope, TargetResolution};
 use crate::persistence::Persistence;
 use crate::world::{
     bootstrap_world, bundle_module, persist_all, persist_dirty, DirtyTracker, ModuleManifest,
@@ -182,6 +183,8 @@ pub struct CreateOptions {
     pub wearable: Option<bool>,
     pub wear_slot: Option<String>,
     pub stack_count: Option<u32>,
+    pub lock_id: Option<String>,
+    pub locked: Option<bool>,
     pub prototype: Option<ObjectId>,
     pub mudl_props: MudlRoleProps,
 }
@@ -203,6 +206,8 @@ pub fn parse_create_options(tokens: &[&str]) -> CreateOptions {
                 "wear_slot" => opts.wear_slot = Some(value.to_string()),
                 "count" | "stack_count" => opts.stack_count = value.parse().ok(),
                 "prototype" => opts.prototype = Some(ObjectId::new(value)),
+                "lock_id" => opts.lock_id = Some(value.to_string()),
+                "locked" | "is_locked" => opts.locked = Some(value == "true"),
                 _ => extra_pairs.push((key, value)),
             }
         }
@@ -279,8 +284,27 @@ pub async fn create_at_location_with_options<P: Persistence>(
                         max_volume: options.max_volume,
                         wearable: options.wearable.unwrap_or(true),
                         wear_slot: options.wear_slot.clone(),
-            ..crate::object::ContainerSpec::default()
+                        lock_id: options.lock_id.clone(),
+                        locked: options.locked.unwrap_or(false),
+                        ..crate::object::ContainerSpec::default()
                     },
+                    options.prototype.clone(),
+                )
+                .await?
+        }
+        "key" => {
+            let lock_id = options
+                .lock_id
+                .clone()
+                .or_else(|| options.mudl_props.lock_id.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Usage: @create key <name> lock_id=<lock>")
+                })?;
+            factory
+                .create_key(
+                    display_name,
+                    owner.clone(),
+                    &lock_id,
                     options.prototype.clone(),
                 )
                 .await?
@@ -349,6 +373,48 @@ pub async fn create_at_location_with_options<P: Persistence>(
     }
 
     Ok(obj)
+}
+
+/// Create a key that opens `container`, assigning a `lock_id` if the container lacks one.
+pub async fn create_key_for_container<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    container: &mut Object,
+    key_display_name: &str,
+    owner: ObjectId,
+    location: Option<ObjectId>,
+) -> anyhow::Result<Object> {
+    if !container.is_container() {
+        anyhow::bail!("{key_display_name}: target is not a container");
+    }
+    let lock_id = container.ensure_container_lock_id();
+    factory.persistence().save_object(container).await?;
+    let mut key = factory
+        .create_key(key_display_name, owner, &lock_id, None)
+        .await?;
+    if let Some(loc) = location {
+        key.location = Some(loc);
+        factory.persistence().save_object(&key).await?;
+    }
+    Ok(key)
+}
+
+/// Resolve a container target for wizard key creation.
+pub fn resolve_container_target(
+    name: &str,
+    player_id: &ObjectId,
+    room_id: Option<&ObjectId>,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<ObjectId> {
+    match resolve_object(
+        name,
+        player_id,
+        room_id,
+        objects,
+        ResolveScope::PossessionOrRoom,
+    ) {
+        TargetResolution::Found(id) => objects.get(&id).filter(|o| o.is_container()).map(|o| o.id.clone()),
+        _ => None,
+    }
 }
 
 /// Pick up a visible item from the current location into the player's hand slots.

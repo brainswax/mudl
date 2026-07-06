@@ -1,7 +1,7 @@
 //! Apply composable object roles from MUDL property definitions.
 
 use crate::object::{
-    ContainerSpec, ItemPhysSpec, Object, ReadableSpec, StackableSpec, WearableSpec,
+    ContainerSpec, ItemPhysSpec, KeySpec, Object, ReadableSpec, StackableSpec, WearableSpec,
 };
 
 /// Key-value role properties parsed from MUDL item/object blocks.
@@ -25,6 +25,9 @@ pub struct MudlRoleProps {
     pub read_text: Option<String>,
     pub writable: Option<bool>,
     pub write_text: Option<String>,
+    pub locked: Option<bool>,
+    pub lock_id: Option<String>,
+    pub is_key: Option<bool>,
 }
 
 impl MudlRoleProps {
@@ -51,6 +54,9 @@ impl MudlRoleProps {
                 "read_text" | "text" => props.read_text = Some(value.to_string()),
                 "writable" | "is_writable" => props.writable = Some(*value == "true"),
                 "write_text" => props.write_text = Some(value.to_string()),
+                "locked" | "is_locked" => props.locked = Some(*value == "true"),
+                "lock_id" => props.lock_id = Some(value.to_string()),
+                "is_key" | "key" => props.is_key = Some(*value == "true"),
                 _ => {}
             }
         }
@@ -91,6 +97,8 @@ impl MudlRoleProps {
                 wearable: self.is_wearable.unwrap_or(false),
                 wear_slot: self.wear_slot.clone(),
                 open: self.is_open.unwrap_or(true),
+                lock_id: self.lock_id.clone(),
+                locked: self.locked.unwrap_or(false),
             });
         } else if let (Some(w), Some(v)) = (self.weight, self.volume) {
             obj.apply_item_phys(&ItemPhysSpec {
@@ -136,6 +144,14 @@ impl MudlRoleProps {
         }
         if let Some(ref text) = self.write_text {
             obj.set_property_string("write_text", text);
+        }
+
+        if self.is_key == Some(true) {
+            if let Some(ref lock_id) = self.lock_id {
+                obj.apply_key_role(&KeySpec {
+                    lock_id: lock_id.clone(),
+                });
+            }
         }
     }
 }

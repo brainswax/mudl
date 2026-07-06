@@ -35,6 +35,7 @@ pub enum MoveError {
     NotContainer,
     /// Source or destination container is closed.
     ContainerClosed(String),
+    ContainerLocked(String),
     NotWearable,
     InvalidTarget(String),
     NoBodyPlan,
@@ -62,6 +63,7 @@ impl std::fmt::Display for MoveError {
             Self::VolumeExceeded => write!(f, "That would take up too much space."),
             Self::NotContainer => write!(f, "That isn't a container."),
             Self::ContainerClosed(name) => write!(f, "The {name} is closed."),
+            Self::ContainerLocked(name) => write!(f, "The {name} is locked."),
             Self::NotWearable => write!(f, "You can't wear that."),
             Self::InvalidTarget(msg) => write!(f, "{msg}"),
             Self::NoBodyPlan => write!(f, "You have no body plan."),
@@ -93,6 +95,7 @@ impl From<MoveError> for crate::inventory::InventoryError {
             MoveError::ContainerFull => Self::ContainerFull,
             MoveError::NotContainer => Self::NotContainer,
             MoveError::ContainerClosed(name) => Self::ContainerClosed(name),
+            MoveError::ContainerLocked(name) => Self::ContainerLocked(name),
             MoveError::NotWearable => Self::NotWearable,
             MoveError::InvalidTarget(m) => Self::InvalidTarget(m),
             MoveError::NoBodyPlan => Self::NoBodyPlan,
@@ -736,6 +739,9 @@ pub fn move_object(
             .objects
             .get(container_id)
             .ok_or(MoveError::NotContainer)?;
+        if container.container_is_locked() {
+            return Err(MoveError::ContainerLocked(container.name.clone()));
+        }
         if !container.container_is_open() {
             return Err(MoveError::ContainerClosed(container.name.clone()));
         }
@@ -745,6 +751,9 @@ pub fn move_object(
             .objects
             .get(container_id)
             .ok_or(MoveError::NotContainer)?;
+        if container.container_is_locked() {
+            return Err(MoveError::ContainerLocked(container.name.clone()));
+        }
         if !container.container_is_open() {
             return Err(MoveError::ContainerClosed(container.name.clone()));
         }

@@ -282,6 +282,9 @@ pub fn compute_container_fit(
     if !container.is_container() {
         return Err(MoveError::NotContainer);
     }
+    if container.container_is_locked() {
+        return Err(MoveError::ContainerLocked(container.name.clone()));
+    }
     if !container.container_is_open() {
         return Err(MoveError::ContainerClosed(container.name.clone()));
     }
@@ -503,6 +506,9 @@ pub fn fit_failure_reason(
     item: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> MoveError {
+    if container.container_is_locked() {
+        return MoveError::ContainerLocked(container.name.clone());
+    }
     if !container.container_is_open() {
         return MoveError::ContainerClosed(container.name.clone());
     }

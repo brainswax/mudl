@@ -36,6 +36,9 @@ pub fn format_look_container_player(
 ) -> String {
     let name = container.name.to_lowercase();
     if !container.container_is_open() {
+        if container.container_is_locked() {
+            return format!("The {name} is closed and locked.");
+        }
         return format!("The {name} is closed.");
     }
     let labels = container_content_labels(container, objects);
@@ -90,6 +93,9 @@ pub fn format_examine_container_player(
 ) -> String {
     let name = container.name.to_lowercase();
     if !container.container_is_open() {
+        if container.container_is_locked() {
+            return format!("The {name} is closed and locked.");
+        }
         return format!("The {name} is closed.");
     }
     let labels = container_content_labels(container, objects);
@@ -245,6 +251,7 @@ mod tests {
             wearable: false,
             wear_slot: None,
             open: true,
+            ..crate::object::ContainerSpec::default()
         });
         let mut note = bare("item:note-001", "Folded Note");
         mailbox.set_property_list("contents", vec![note.id.clone()]);
@@ -268,6 +275,7 @@ mod tests {
             wearable: false,
             wear_slot: None,
             open: true,
+            ..crate::object::ContainerSpec::default()
         });
 
         assert_eq!(
@@ -286,6 +294,7 @@ mod tests {
             wearable: false,
             wear_slot: None,
             open: false,
+            ..crate::object::ContainerSpec::default()
         });
         let mut lantern = bare("item:lantern-001", "iron lantern");
         chest.set_property_list("contents", vec![lantern.id.clone()]);
@@ -309,11 +318,28 @@ mod tests {
             wearable: false,
             wear_slot: None,
             open: false,
+            ..crate::object::ContainerSpec::default()
         });
 
         assert_eq!(
             format_examine_container_player(&chest, &HashMap::new()),
             "The travel chest is closed."
+        );
+    }
+
+    #[test]
+    fn look_closed_locked_container() {
+        let mut chest = bare("item:chest-001", "travel chest");
+        chest.apply_container_role(&crate::object::ContainerSpec {
+            open: false,
+            lock_id: Some("demo-lock".to_string()),
+            locked: true,
+            ..crate::object::ContainerSpec::default()
+        });
+
+        assert_eq!(
+            format_look_container_player(&chest, &HashMap::new()),
+            "The travel chest is closed and locked."
         );
     }
 

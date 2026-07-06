@@ -35,6 +35,10 @@ pub struct ContainerSpec {
     pub wear_slot: Option<String>,
     /// When false, contents are hidden and inaccessible until opened.
     pub open: bool,
+    /// Optional lock identifier — keys with a matching `lock_id` can unlock this container.
+    pub lock_id: Option<String>,
+    /// Whether the container starts locked (requires `lock_id`).
+    pub locked: bool,
 }
 
 impl Default for ContainerSpec {
@@ -46,8 +50,16 @@ impl Default for ContainerSpec {
             wearable: false,
             wear_slot: None,
             open: true,
+            lock_id: None,
+            locked: false,
         }
     }
+}
+
+/// Configuration for a key that opens one or more locks sharing the same `lock_id`.
+#[derive(Debug, Clone)]
+pub struct KeySpec {
+    pub lock_id: String,
 }
 
 /// Configuration for a wearable role.
@@ -193,6 +205,71 @@ impl Object {
         self.set_property_bool("is_open", open);
     }
 
+    /// Whether this container has a lock mechanism (`lock_id` set).
+    pub fn container_has_lock(&self) -> bool {
+        self.container_lock_id().is_some()
+    }
+
+    pub fn container_lock_id(&self) -> Option<String> {
+        self.get_string_property("lock_id")
+            .filter(|id| !id.trim().is_empty())
+    }
+
+    pub fn set_container_lock_id(&mut self, lock_id: impl Into<String>) {
+        self.set_property_string("lock_id", lock_id);
+    }
+
+    /// Whether the container is currently locked. Ignored when no `lock_id` is set.
+    pub fn container_is_locked(&self) -> bool {
+        self.container_has_lock() && self.get_bool_property("is_locked").unwrap_or(false)
+    }
+
+    pub fn set_container_locked(&mut self, locked: bool) {
+        self.set_property_bool("is_locked", locked);
+    }
+
+    /// Ensure a container has a lock id, generating one from its object id if needed.
+    pub fn ensure_container_lock_id(&mut self) -> String {
+        if let Some(id) = self.container_lock_id() {
+            return id;
+        }
+        let lock_id = format!("lock:{}", self.id.as_str());
+        self.set_container_lock_id(&lock_id);
+        lock_id
+    }
+
+    pub fn is_key(&self) -> bool {
+        self.get_bool_property("is_key").unwrap_or(false)
+    }
+
+    pub fn key_lock_id(&self) -> Option<String> {
+        self.get_string_property("lock_id")
+            .filter(|id| !id.trim().is_empty())
+    }
+
+    pub fn apply_key_role(&mut self, spec: &KeySpec) {
+        self.set_property_bool("is_key", true);
+        self.set_property_string("lock_id", &spec.lock_id);
+        self.set_property_bool("is_pocketable", true);
+        if self.get_numeric_property("weight").is_none() {
+            self.set_property_numeric("weight", 0.1);
+        }
+        if self.get_numeric_property("volume").is_none() {
+            self.set_property_numeric("volume", 0.1);
+        }
+    }
+
+    /// Whether `key` opens `container` (supports one-to-one and shared lock ids).
+    pub fn key_unlocks_container(key: &Object, container: &Object) -> bool {
+        if !key.is_key() || !container.container_has_lock() {
+            return false;
+        }
+        match (key.key_lock_id(), container.container_lock_id()) {
+            (Some(k), Some(c)) => k == c,
+            _ => false,
+        }
+    }
+
     /// Items worn on body slots (subset of `body_slots` for wear-type slots).
     pub fn worn_items(&self) -> HashMap<String, ObjectId> {
         self.body_slots()
@@ -215,6 +292,10 @@ impl Object {
         }
         self.set_property_bool("is_pocketable", false);
         self.set_property_bool("is_open", spec.open);
+        if let Some(ref lock_id) = spec.lock_id {
+            self.set_container_lock_id(lock_id);
+            self.set_container_locked(spec.locked);
+        }
         if self.get_numeric_property("weight").is_none() {
             self.set_property_numeric("weight", 1.0);
         }
@@ -556,6 +637,36 @@ mod tests {
         assert!(!obj.container_is_open());
         obj.set_container_open(true);
         assert!(obj.container_is_open());
+    }
+
+    #[test]
+    fn container_lock_and_key_matching() {
+        let mut chest = bare_object("item:chest-001");
+        chest.apply_container_role(&ContainerSpec {
+            lock_id: Some("chest-lock".to_string()),
+            locked: true,
+            open: false,
+            ..ContainerSpec::default()
+        });
+        assert!(chest.container_is_locked());
+
+        let mut key_a = bare_object("item:key-a-001");
+        key_a.apply_key_role(&KeySpec {
+            lock_id: "chest-lock".to_string(),
+        });
+        let mut key_b = bare_object("item:key-b-001");
+        key_b.apply_key_role(&KeySpec {
+            lock_id: "chest-lock".to_string(),
+        });
+
+        assert!(Object::key_unlocks_container(&key_a, &chest));
+        assert!(Object::key_unlocks_container(&key_b, &chest));
+
+        let mut wrong = bare_object("item:key-wrong-001");
+        wrong.apply_key_role(&KeySpec {
+            lock_id: "other-lock".to_string(),
+        });
+        assert!(!Object::key_unlocks_container(&wrong, &chest));
     }
 
     #[test]

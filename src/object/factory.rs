@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use crate::mudl::{AnatomyRegistry, MudlRoleProps, PlayerTemplate};
 use crate::object::{
     constrain_id_base, generate_object_id, id_base_from_display_name,
-    roles::{ContainerSpec, StackableSpec, WearableSpec},
+    roles::{ContainerSpec, KeySpec, StackableSpec, WearableSpec},
     slugify_display_name, Object, ObjectId, PermissionFlags, Property, Value,
 };
 use crate::persistence::Persistence;
@@ -104,6 +104,25 @@ impl<P: Persistence> ObjectFactory<P> {
         Ok(container)
     }
 
+    /// Create a key that opens any lock sharing `lock_id`.
+    pub async fn create_key(
+        &self,
+        display_name: &str,
+        owner: ObjectId,
+        lock_id: &str,
+        prototype: Option<ObjectId>,
+    ) -> anyhow::Result<Object> {
+        let slug = id_base_from_display_name(display_name);
+        let mut key = self.allocate_named("item", &slug, display_name, owner).await?;
+        self.attach_prototype(&mut key, prototype).await?;
+        key.apply_key_role(&KeySpec {
+            lock_id: lock_id.to_string(),
+        });
+        Self::fill_item_defaults(&mut key, true);
+        self.commit(&key).await?;
+        Ok(key)
+    }
+
     /// Create a wearable item (garment, armor, etc.).
     pub async fn create_wearable(
         &self,
@@ -185,6 +204,9 @@ impl<P: Persistence> ObjectFactory<P> {
             "read_text",
             "is_writable",
             "write_text",
+            "lock_id",
+            "is_locked",
+            "is_key",
         ] {
             if let Some(prop) = prototype.get_property(key) {
                 target.add_property(prop.clone());

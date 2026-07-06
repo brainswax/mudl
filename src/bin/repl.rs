@@ -5,9 +5,9 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
     apply_set, apply_unset, bootstrap_active_universe, create_at_location_with_options,
-    has_wizard_permission, package_module, parse_command_line, parse_create_command,
-    parse_set_command, parse_unset_command, reload_universe, soft_delete_object,
-    undelete_object, wizard_access_denied,
+    create_key_for_container, has_wizard_permission, package_module, parse_command_line,
+    parse_create_command, parse_set_command, parse_unset_command, reload_universe,
+    resolve_container_target, soft_delete_object, undelete_object, wizard_access_denied,
 };
 use mudl::display::{
     format_examine_output, format_no_parent_message, narrate_create, narrate_field_set,
@@ -19,8 +19,9 @@ use mudl::display::{
     TargetResolution,
 };
 use mudl::inventory::{
-    close_container, describe_inventory, drop_item, open_container, parse_put_args, put_item,
-    read_item, remove_item, take_item, wear_item, wield_item,
+    close_container, describe_inventory, drop_item, lock_container, open_container,
+    parse_put_args, parse_unlock_args, put_item, read_item, remove_item, take_item,
+    unlock_container, wear_item, wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
@@ -344,6 +345,8 @@ async fn main() -> Result<()> {
                         );
                         println!("  wield <item>                - hold/wield an item in your hand");
                         println!("  read <object>               - read text on a note, sign, or mailbox");
+                        println!("  lock <container>            - lock a closed container");
+                        println!("  unlock <container> with <key> - unlock with a matching key");
                         println!("  wear <item>                 - wear a container or garment");
                         println!("  go <dir>                    - move to another location (e.g. go north)");
                         println!(
@@ -358,6 +361,9 @@ async fn main() -> Result<()> {
                         );
                         println!(
                             "  @create <type> <name...> [key=value...] - wizard create with roles"
+                        );
+                        println!(
+                            "  @keyfor <container> [name]  - wizard: create a key for a container"
                         );
                         println!("  @delete <target>            - wizard: soft-delete an object");
                         println!(
@@ -684,6 +690,96 @@ async fn main() -> Result<()> {
                         match read_item(&ctx, &item_name) {
                             Ok(msg) => println!("{msg}"),
                             Err(e) => println!("{e}"),
+                        }
+                    }
+                    "lock" => {
+                        if parts.len() < 2 {
+                            println!("Usage: lock <container>");
+                            continue;
+                        }
+                        let container_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match lock_container(&mut ctx, &container_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after lock failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "unlock" => {
+                        let rest = parts[1..].join(" ");
+                        match parse_unlock_args(&rest) {
+                            Ok((container, key)) => {
+                                let mut ctx = session.inventory_context();
+                                match unlock_container(&mut ctx, &container, &key) {
+                                    Ok(msg) => {
+                                        println!("{msg}");
+                                        if let Err(e) =
+                                            persist_session(&mut session, &persistence).await
+                                        {
+                                            error!(error = %e, "persist after unlock failed");
+                                        }
+                                    }
+                                    Err(e) => println!("{e}"),
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "@keyfor" => {
+                        if parts.len() < 2 {
+                            println!("Usage: @keyfor <container> [key name]");
+                            continue;
+                        }
+                        let container_name = parts[1].to_string();
+                        let key_name = if parts.len() > 2 {
+                            parts[2..].join(" ")
+                        } else {
+                            format!("{} Key", container_name)
+                        };
+                        let container_id = match resolve_container_target(
+                            &container_name,
+                            session.player_id(),
+                            session.current_location(),
+                            session.objects(),
+                        ) {
+                            Some(id) => id,
+                            None => {
+                                println!("{}", narrate_wizard_not_found());
+                                continue;
+                            }
+                        };
+                        let mut container = session
+                            .object(&container_id)
+                            .cloned()
+                            .expect("resolved container");
+                        let location = session.current_location().cloned();
+                        match create_key_for_container(
+                            &factory,
+                            &mut container,
+                            &key_name,
+                            player_id.clone(),
+                            location,
+                        )
+                        .await
+                        {
+                            Ok(key) => {
+                                session.upsert_object(container);
+                                session.upsert_object(key.clone());
+                                println!(
+                                    "You conjure {} (lock_id: {}).",
+                                    key.name,
+                                    key.key_lock_id().unwrap_or_default()
+                                );
+                            }
+                            Err(e) => {
+                                error!(error = %e, "@keyfor failed");
+                                println!("The key refuses to take shape.");
+                            }
                         }
                     }
                     "wield" => {
