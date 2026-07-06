@@ -2,6 +2,7 @@ pub mod bootstrap;
 pub mod container_fit;
 pub mod dirty;
 pub mod door;
+pub mod exits;
 pub mod portal;
 pub mod navigation;
 pub mod possession;
@@ -17,6 +18,10 @@ pub use door::{door_for_direction, door_passage_block, door_permits_exit, DoorBl
 pub use portal::{
     portal_for_direction, portal_kind_label, portal_passage_block, portal_permits_exit,
     portals_in_room, PortalBlock,
+};
+pub use exits::{
+    can_traverse_exit, reverse_direction, validate_place_exits, validate_place_hierarchy,
+    validate_reciprocal_exits, validate_world_places,
 };
 pub use navigation::{
     exit_directions, is_direction_verb, movement_direction_from_line, normalize_direction,

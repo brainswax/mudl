@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::mudl::{ItemInstanceDef, ItemPrototypeDef, LoadedWorld, WorldDef};
 use crate::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value};
 use crate::persistence::Persistence;
+use crate::world::exits::validate_world_places;
 use crate::world::session::resolve_bootstrap_location;
 
 fn location_id(def: &WorldDef) -> ObjectId {
@@ -263,18 +264,39 @@ pub async fn bootstrap_world<P: Persistence>(
                 continue;
             };
             if let Some(loc_base) = &def.location {
-                if let Some(loc_id) = name_to_id.get(loc_base) {
-                    obj.location = Some(loc_id.clone());
-                }
+                let loc_id = name_to_id.get(loc_base).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Place '{}' has unknown parent location '{}'",
+                        def.base_name,
+                        loc_base
+                    )
+                })?;
+                obj.location = Some(loc_id.clone());
             }
             for (dir, target_base) in &def.exits {
-                if let Some(target_id) = name_to_id.get(target_base) {
-                    obj.add_exit(dir, target_id.clone());
-                }
+                let target_id = name_to_id.get(target_base).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Exit '{}' from '{}' targets unknown place '{}'",
+                        dir,
+                        def.base_name,
+                        target_base
+                    )
+                })?;
+                obj.add_exit(dir, target_id.clone());
             }
             factory.persistence().save_object(&obj).await?;
         }
     }
+
+    let mut place_objects: HashMap<ObjectId, Object> = HashMap::new();
+    for id in name_to_id.values() {
+        if let Some(obj) = factory.load_object(id).await? {
+            place_objects.insert(id.clone(), obj);
+        }
+    }
+    validate_world_places(&place_objects).map_err(|errors| {
+        anyhow::anyhow!("Invalid world exit graph: {}", errors.join("; "))
+    })?;
 
     bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
 
@@ -318,6 +340,8 @@ pub async fn bootstrap_world<P: Persistence>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repl::session::Session;
+    use crate::world::exits::validate_world_places;
     use crate::inventory::{
         close_container, open_container, read_item, take_item, unlock_container,
         InventoryContext, InventoryError,
@@ -580,7 +604,7 @@ mod tests {
             .find(|o| {
                 o.is_window()
                     && o.location.as_ref() == Some(&cottage_interior.id)
-                    && o.portal_direction().as_deref() == Some("east")
+                    && o.portal_direction().as_deref() == Some("rear")
             })
             .expect("interior window");
         assert!(!interior_window.portal_passable());
@@ -591,13 +615,17 @@ mod tests {
             Some(&cottage_rear.id)
         );
 
+        let cottage_bedroom = objects
+            .iter()
+            .find(|o| o.name == "Bedroom")
+            .expect("cottage bedroom");
         let boots = objects
             .iter()
             .find(|o| {
                 o.name == "Boots of Carrying"
-                    && o.location.as_ref() == Some(&cottage_interior.id)
+                    && o.location.as_ref() == Some(&cottage_bedroom.id)
             })
-            .expect("boots of carrying in cottage interior");
+            .expect("boots of carrying in cottage bedroom");
         assert!(boots.is_wearable());
         assert_eq!(boots.carry_max_weight_bonus(), 25);
         assert!((boots.carry_encumbrance_factor() - 0.85).abs() < f64::EPSILON);
@@ -634,15 +662,123 @@ mod tests {
             &DisplayContext::new(ObjectId::new("player:hero-001"), DisplayMode::Player)
                 .with_objects(object_map),
         );
-        assert!(look.contains("Through the east window you see:"));
+        assert!(look.contains("Through the rear window you see:"));
         assert!(look.contains("stacked firewood"));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_wires_cottage_room_hierarchy_and_exits() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let owner = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        bootstrap_world(&factory, owner, &world).await.unwrap();
+
+        let objects: Vec<Object> = persistence.list_objects(false).await.unwrap();
+        let interior = objects
+            .iter()
+            .find(|o| o.name == "Cottage Interior")
+            .expect("cottage interior");
+        let bedroom = objects
+            .iter()
+            .find(|o| o.name == "Bedroom")
+            .expect("bedroom");
+        let pantry = objects
+            .iter()
+            .find(|o| o.name == "Pantry")
+            .expect("pantry");
+
+        assert!(interior.is_area());
+        assert!(bedroom.is_room());
+        assert!(pantry.is_room());
+        assert_eq!(bedroom.location.as_ref(), Some(&interior.id));
+        assert_eq!(pantry.location.as_ref(), Some(&interior.id));
+
+        let object_map: HashMap<ObjectId, Object> =
+            objects.into_iter().map(|o| (o.id.clone(), o)).collect();
+        validate_world_places(&object_map).unwrap();
+
+        let interior = object_map
+            .values()
+            .find(|o| o.name == "Cottage Interior")
+            .unwrap();
+        let exits = interior.get_exits();
+        assert!(exits.contains_key("west"));
+        assert!(exits.contains_key("east"));
+    }
+
+    #[tokio::test]
+    async fn cottage_room_movement_and_persist_reload() {
+        use crate::world::session::{hydrate_world, persist_all, resolve_player_location};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let pantry_id = objects
+            .values()
+            .find(|o| o.name == "Pantry")
+            .map(|o| o.id.clone())
+            .expect("pantry");
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&start),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+        open_container(&mut ctx, "mailbox").unwrap();
+        take_item(&mut ctx, "cottage key").unwrap();
+        drop(ctx);
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            objects,
+            Some(start.clone()),
+        );
+        session.go("north").unwrap();
+        session.go("north").unwrap();
+        unlock_container(&mut session.inventory_context(), "door", None).unwrap();
+        open_container(&mut session.inventory_context(), "door").unwrap();
+        session.go("in").unwrap();
+        session.go("east").unwrap();
+        assert_eq!(session.current_location(), Some(&pantry_id));
+
+        persist_all(&persistence, session.objects()).await.unwrap();
+
+        let reloaded = hydrate_world(&persistence).await.unwrap();
+        let restored = resolve_player_location(&player_id, &reloaded, Some(start));
+        assert_eq!(restored.as_ref(), Some(&pantry_id));
+
+        let pantry = reloaded.get(&pantry_id).unwrap();
+        assert!(pantry.is_room());
+        assert_eq!(
+            pantry.parent_place(&reloaded).map(|p| p.name.as_str()),
+            Some("Cottage Interior")
+        );
     }
 
     #[tokio::test]
     async fn cottage_door_unlock_open_and_passage_flow() {
         use crate::display::format_room_look_player;
         use crate::display::{DisplayContext, DisplayMode};
-        use crate::repl::session::Session;
 
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
@@ -714,7 +850,7 @@ mod tests {
 
         drop(ctx);
         let msg = session.go("in").unwrap();
-        assert!(msg.contains("single room"));
+        assert!(msg.contains("main hall"));
         assert_eq!(
             session
                 .object(session.current_location().unwrap())

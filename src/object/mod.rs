@@ -267,6 +267,44 @@ impl Object {
         )
     }
 
+    /// Whether this place is an outdoor/overworld area (not a nested room).
+    pub fn is_area(&self) -> bool {
+        self.object_type() == "area"
+    }
+
+    /// Whether this place is a nested room inside an area or another room.
+    pub fn is_room(&self) -> bool {
+        self.object_type() == "room"
+    }
+
+    /// Parent navigable place when this object is nested (rooms under areas, etc.).
+    pub fn parent_place<'a>(
+        &self,
+        objects: &'a HashMap<ObjectId, Object>,
+    ) -> Option<&'a Object> {
+        let parent_id = self.location.as_ref()?;
+        let parent = objects.get(parent_id)?;
+        if parent.is_active() && parent.is_location() {
+            Some(parent)
+        } else {
+            None
+        }
+    }
+
+    /// Child rooms nested directly under this place.
+    pub fn child_rooms<'a>(&self, objects: &'a HashMap<ObjectId, Object>) -> Vec<&'a Object> {
+        let mut rooms: Vec<&Object> = objects
+            .values()
+            .filter(|obj| {
+                obj.is_active()
+                    && obj.is_room()
+                    && obj.location.as_ref() == Some(&self.id)
+            })
+            .collect();
+        rooms.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        rooms
+    }
+
     /// Whether this object is visible in normal play (not soft-deleted).
     pub fn is_active(&self) -> bool {
         !self.is_deleted

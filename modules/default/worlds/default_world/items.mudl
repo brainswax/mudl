@@ -211,7 +211,7 @@
 
 @item cottage-carrying-boots
   prototype=boots-of-carrying
-  location=cottage-interior
+  location=cottage-bedroom
 @end
 
 # --- Cottage doors (lockable exits) ---
@@ -235,6 +235,6 @@
 @item cottage-interior-window
   prototype=cottage-window
   location=cottage-interior
-  door_direction=east
+  door_direction=rear
   door_destination=cottage-rear
 @end

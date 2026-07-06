@@ -125,10 +125,12 @@ mod tests {
         let content = include_str!("../../modules/default/worlds/default_world/map.mudl");
         let (defs, _) = parse_world_file(content);
         let bases: Vec<_> = defs.iter().map(|d| d.base_name.as_str()).collect();
-        assert_eq!(bases.len(), 5);
+        assert_eq!(bases.len(), 7);
         assert!(bases.contains(&"the-void"));
         assert!(bases.contains(&"forest-path"));
         assert!(bases.contains(&"cottage-interior"));
+        assert!(bases.contains(&"cottage-bedroom"));
+        assert!(bases.contains(&"cottage-pantry"));
 
         let clearing = defs.iter().find(|d| d.base_name == "the-void").unwrap();
         assert_eq!(clearing.exits.get("north").map(String::as_str), Some("forest-path"));
@@ -136,5 +138,23 @@ mod tests {
 
         let front = defs.iter().find(|d| d.base_name == "cottage-front").unwrap();
         assert_eq!(front.exits.get("in").map(String::as_str), Some("cottage-interior"));
+
+        let bedroom = defs.iter().find(|d| d.base_name == "cottage-bedroom").unwrap();
+        assert_eq!(bedroom.obj_type, "room");
+        assert_eq!(bedroom.location.as_deref(), Some("cottage-interior"));
+        assert_eq!(
+            bedroom.exits.get("east").map(String::as_str),
+            Some("cottage-interior")
+        );
+
+        let interior = defs.iter().find(|d| d.base_name == "cottage-interior").unwrap();
+        assert_eq!(
+            interior.exits.get("west").map(String::as_str),
+            Some("cottage-bedroom")
+        );
+        assert_eq!(
+            interior.exits.get("east").map(String::as_str),
+            Some("cottage-pantry")
+        );
     }
 }

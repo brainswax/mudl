@@ -13,6 +13,7 @@ use crate::object::{player_encumbrance_level, EncumbranceLevel};
 use crate::world::portal::{
     portal_for_direction, portal_passage_block, portal_permits_exit, PortalBlock,
 };
+use crate::world::exits::can_traverse_exit;
 use crate::world::navigation::{normalize_direction, resolve_exit};
 use crate::inventory::InventoryContext;
 use crate::mudl::AnatomyRegistry;
@@ -227,14 +228,18 @@ impl Session {
             .ok_or(SessionError::NoLocation)?
             .clone();
 
-        let exits = self
+        let room = self
             .objects
             .get(&loc_id)
-            .ok_or(SessionError::LocationMissing)?
-            .get_exits();
+            .ok_or(SessionError::LocationMissing)?;
 
+        let exits = room.get_exits();
         let (dir_label, target_id) = resolve_exit(&exits, direction)
             .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
+
+        if !can_traverse_exit(room, dir_label, target_id, &self.objects) {
+            return Err(SessionError::NoExit(direction.to_string()));
+        }
 
         if let Some(portal) = portal_for_direction(&loc_id, dir_label, &self.objects) {
             if !portal_permits_exit(portal, &target_id) {
