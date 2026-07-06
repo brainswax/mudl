@@ -2,7 +2,7 @@
 
 **MUDL** (working name) — An IRC-first, programmable MUD/MOO with a custom domain-specific language (DSL), self-modifying world capabilities, and multi-modal authoring (IRC chat, REPL, files, GitHub).
 
-**Status**: High-level design (MVP phase). This document will evolve as we implement.
+**Status**: High-level design + **Milestone 1 implemented** (object roles, movement, inventory, persistence). This document tracks both target architecture and known M1 gaps.
 
 ## Vision
 A living, collaborative text world where:
@@ -14,7 +14,69 @@ A living, collaborative text world where:
 
 The system emphasizes **separation of concerns**, extensibility, and safety (especially for live/LLM-generated code).
 
-## High-Level Architecture
+## Milestone 1 — As Built (2026)
+
+M1 delivers a working object graph, centralized movement, REPL inventory verbs, and SQLite roundtrip. The diagram below shows **actual** module dependencies today (solid = implemented, dashed = planned).
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Frontends: REPL (src/bin/repl.rs)          IRC / Gateway (planned)    │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │ parse_command_line, InventoryContext
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Command layer (src/command/)                                           │
+│  create / bootstrap / persist helpers / @meta parse                     │
+└───────┬─────────────────────────────┬───────────────────────────────────┘
+        │                             │
+        ▼                             ▼
+┌───────────────────┐       ┌─────────────────────────────────────────────┐
+│ Inventory         │       │ Display (src/display/)                      │
+│ take/drop/put/    │──────▶│ resolve, look/examine, grammar, equipment   │
+│ wear/wield        │       │ (also imported by object + move_manager)    │
+└─────────┬─────────┘       └─────────────────────────────────────────────┘
+          │ delegates
+          ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  MoveManager (src/world/move_manager.rs) — single authority for moves    │
+│  + stack_transfer (merge/split plans) + LocationRef resolution          │
+└─────────┬───────────────────────────────┬───────────────────────────────┘
+          │                               │
+          ▼                               ▼
+┌─────────────────────┐         ┌─────────────────────────────────────────┐
+│ Object model        │         │ MUDL loader (src/mudl/)                 │
+│ roles, factory,     │◀────────│ anatomy, map, MudlRoleProps             │
+│ weight, editor      │         │ items.mudl prototypes (placeholder)     │
+└─────────┬───────────┘         └─────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Persistence trait → SqlitePersistence (JSON Object rows + counters)    │
+│  hydrate_world / persist_all / DirtyTracker (incremental, underused)    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### M1 strengths
+
+| Area | What works well |
+|------|-----------------|
+| **Movement** | `MoveManager` owns validation, stack merge/split, capacity/weight/volume, body-slot cleanup |
+| **Roles** | Composable properties (`is_container`, `stackable`, `body_slots`, …) + `MudlRoleProps` bridge |
+| **Anatomy** | Creature slots loaded from MUDL; grasp/wear resolution uses `BodyPlan` |
+| **Persistence** | Full JSON roundtrip verified (222 tests); complex graphs (containers, stacks, slots) reload identically |
+| **Factory** | `ObjectFactory<P: Persistence>` abstracts creation + ID counters |
+| **Presentation** | Clean split: player (`look`) vs builder (`@examine`); centralized `resolve_object` |
+
+### M1 known gaps (see review priorities below)
+
+- **Dual graph state** in REPL (`cache` + DB reload per command) — not a single `WorldSession` authority
+- **Duplicate grasp-slot logic** in `inventory` (wield) vs `move_manager` (take/move)
+- **`object` → `display` coupling** (`Describable` on `Object`) — core imports presentation
+- **`items.mudl` empty** — prototypes still created via Rust `create` / factory, not world data
+- **No gateway, events, or multi-user session isolation** yet
+- **Graph invariants** (`location`, `contents`, `body_slots`) enforced by ad-hoc prune/clear, not a single validator
+
+## High-Level Architecture (target)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Frontends / Input Layers                  │
@@ -244,9 +306,32 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 **Startup**: `bootstrap_world()` ensures MUDL-defined content exists, then `restore_session()` hydrates all active objects from the DB and restores the player's `current_location` from their persisted `location` field.
 
+**Roundtrip guarantee (M1)**: `milestone1_complex_scene_persist_reload_identical` builds a post-play graph (worn container, nested stack, two-handed wield, split ground piles), runs `persist_all` → `hydrate_world`, and asserts byte-identical `Object` equality for every node plus reference integrity across the graph.
+
+**Incremental saves**: `MoveContext.dirty` + `DirtyTracker` mark touched IDs during moves; REPL still calls `persist_all` after inventory verbs — wire dirty tracking through REPL before scaling object counts.
+
 **Soft deletes**: Objects are never hard-deleted. `is_deleted` and `deleted_at` on `Object` mark removal; `list_objects(false)` hides them from normal play. Wizard commands `@delete <target>` and `@undelete <id>` toggle the flag. Deleted objects remain loadable by ID for recovery.
 
 **Schema**: `objects(id, data, is_deleted, deleted_at)` and `counters(type_base, counter)`. Older DB files are migrated with `ALTER TABLE` on connect.
+
+## Refactor Roadmap (post-M1 review)
+
+### Do soon (before doc/examples drift)
+
+1. **Extract `world::possession`** — move `is_in_player_possession`, BFS container walk out of `display`; have `move_manager` and `inventory` depend on it (break `world` → `display` edge).
+2. **Unify grasp placement** — delete `inventory::place_in_grasp_slots`; route `wield` through `MoveManager` (`LocationRef::BodySlot` or dedicated wield wrapper).
+3. **REPL session model** — one in-memory `HashMap<ObjectId, Object>` per session; stop `load_all_objects` merge on every command; use `DirtyTracker` + `persist_dirty`.
+4. **Factory ordering** — `create_wearable` should not let `init_item_defaults` overwrite `apply_wearable_role` phys values.
+5. **Populate `items.mudl`** — gold coins, backpack, sword prototypes; spawn from MUDL via bootstrap instead of REPL `create` only.
+
+### Defer (next milestones)
+
+- Gateway + per-player world views (multi-user / IRC)
+- Event bus wiring `MoveHooks.on_move` → `event_handlers`
+- Prototype inheritance resolver in world state (not just factory copy)
+- Location/exits as first-class `LocationRef` / exit objects (beyond `exits` map on areas)
+- Graph consistency validator (orphan `contents`, stale `body_slots`) on load
+- SQLite transactions wrapping multi-object moves
 
 ## Future Directions
 - Full LLM content generation pipeline.
