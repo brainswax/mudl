@@ -17,3 +17,4 @@ sqlx = { version = "0.7.4", features = ["runtime-tokio", "sqlite", "macros"] }
 tokio = { version = "1.52.3", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+ureq = "2.12"

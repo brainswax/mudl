@@ -59,7 +59,9 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
         if trimmed.starts_with('#')
             || trimmed.starts_with("//")
             || trimmed.starts_with("@include")
+            || trimmed.starts_with("@import")
             || trimmed.starts_with("@include-world")
+            || trimmed.starts_with("@expansion")
             || trimmed.starts_with("@universe")
             || trimmed.starts_with("@world")
             || trimmed.starts_with("@creature")
@@ -177,7 +179,7 @@ mod tests {
 
     #[test]
     fn parse_haunted_map_scatter_and_dead_ends() {
-        let content = include_str!("../../modules/default/worlds/default_world/haunted.mudl");
+        let content = include_str!("../../modules/default/worlds/default_world/expansions/haunted_forest.mudl");
         let (defs, _) = parse_world_file(content);
         assert_eq!(defs.len(), 13);
 
