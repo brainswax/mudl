@@ -425,7 +425,10 @@ mod tests {
         assert!(err.to_string().contains("don't see"));
 
         let open_msg = open_container(&mut ctx, "mailbox").unwrap();
-        assert_eq!(open_msg, "You open the worn mailbox.");
+        assert_eq!(
+            open_msg,
+            "You open the worn mailbox. Inside you see a folded note."
+        );
 
         let read_note = read_item(&ctx, "note").unwrap();
         assert!(read_note.contains("Supplies within the chest"));

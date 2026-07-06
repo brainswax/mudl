@@ -786,9 +786,13 @@ pub fn open_container(
 
     let mut container = container;
     container.set_container_open(true);
-    ctx.objects.insert(container_id, container);
+    ctx.objects.insert(container_id.clone(), container);
 
-    Ok(format!("You open the {display}."))
+    let container = ctx.objects.get(&container_id).unwrap();
+    Ok(crate::display::format_open_container_message(
+        container,
+        ctx.objects,
+    ))
 }
 
 /// Close a container on the ground or in your possession.
@@ -3007,7 +3011,10 @@ mod tests {
         assert_eq!(err, InventoryError::NotFound("lantern".to_string()));
 
         let msg = open_container(&mut ctx, "chest").unwrap();
-        assert_eq!(msg, "You open the travel chest.");
+        assert_eq!(
+            msg,
+            "You open the travel chest. Inside you see an iron lantern."
+        );
 
         take_item(&mut ctx, "lantern").unwrap();
         assert!(crate::world::possession::is_carried_by(

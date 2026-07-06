@@ -22,7 +22,7 @@ pub mod weight;
 pub use carried::format_look_self_summary;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_examine_container_player,
-    format_inside_container, format_look_container_player,
+    format_inside_container, format_look_container_player, format_open_container_message,
 };
 pub use stackable::{
     format_examine_stack_weight, format_examine_stackable_fallback, format_look_stackable_sentence,
