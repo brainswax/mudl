@@ -3,6 +3,7 @@ pub mod container_fit;
 pub mod dirty;
 pub mod door;
 pub mod exits;
+pub mod place_builder;
 pub mod portal;
 pub mod navigation;
 pub mod possession;
@@ -16,12 +17,16 @@ pub use dirty::{persist_dirty, DirtyTracker};
 pub use module::{active_module_dir, bundle_module, list_universe_files, ModuleManifest};
 pub use door::{door_for_direction, door_passage_block, door_permits_exit, DoorBlock};
 pub use portal::{
-    portal_for_direction, portal_kind_label, portal_passage_block, portal_permits_exit,
-    portals_in_room, PortalBlock,
+    passable_portal_blocks_passage, passable_portal_for_direction, portal_for_direction,
+    portal_kind_label, portal_passage_block, portal_permits_exit, portals_in_room, PortalBlock,
 };
 pub use exits::{
     can_traverse_exit, reverse_direction, validate_place_exits, validate_place_hierarchy,
     validate_reciprocal_exits, validate_world_places,
+};
+pub use place_builder::{
+    apply_dig_result, dig_place, link_exit, link_places, unlink_exit, DigOptions, DigRequest,
+    DigResult, PlaceBuildError,
 };
 pub use navigation::{
     exit_directions, is_direction_verb, movement_direction_from_line, normalize_direction,

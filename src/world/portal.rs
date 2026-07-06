@@ -14,6 +14,32 @@ pub enum PortalBlock {
 /// Back-compat alias for door-centric call sites.
 pub type DoorBlock = PortalBlock;
 
+/// Passable portal (door, open gate, teleporter) on `direction`, if any.
+pub fn passable_portal_for_direction<'a>(
+    room_id: &ObjectId,
+    direction: &str,
+    objects: &'a HashMap<ObjectId, Object>,
+) -> Option<&'a Object> {
+    portal_for_direction(room_id, direction, objects).filter(|portal| portal.portal_passable())
+}
+
+/// Whether a passable portal blocks movement along an exit to `target_id`.
+///
+/// Non-passable portals (windows, viewports) are ignored so map exits and scenic
+/// portals can share a direction label.
+pub fn passable_portal_blocks_passage(
+    room_id: &ObjectId,
+    direction: &str,
+    target_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<PortalBlock> {
+    let portal = passable_portal_for_direction(room_id, direction, objects)?;
+    if !portal_permits_exit(portal, target_id) {
+        return None;
+    }
+    portal_passage_block(portal)
+}
+
 /// Find the portal in `room_id` aligned with `direction`, if any.
 pub fn portal_for_direction<'a>(
     room_id: &ObjectId,
@@ -144,6 +170,36 @@ mod tests {
         let found = portal_for_direction(&room, "in", &objects).unwrap();
         assert!(found.is_door());
         assert_eq!(portal_passage_block(found), Some(PortalBlock::Closed));
+    }
+
+    #[test]
+    fn non_passable_window_does_not_block_map_exit_on_same_direction() {
+        let room_id = ObjectId::new("area:hall-001");
+        let pantry_id = ObjectId::new("room:pantry-001");
+        let rear_id = ObjectId::new("area:rear-001");
+        let mut hall = bare("area:hall-001", "Hall");
+        hall.add_exit("east", pantry_id.clone());
+
+        let mut window = bare("item:window-001", "Window");
+        window.location = Some(room_id.clone());
+        window.apply_portal_role(&PortalSpec {
+            kind: crate::object::PortalKind::Window,
+            direction: "east".to_string(),
+            destination: "rear".to_string(),
+            open: false,
+            lock_id: None,
+            locked: false,
+            passable: None,
+            transparent: None,
+        });
+        window.set_portal_destination(rear_id);
+
+        let objects = HashMap::from([
+            (hall.id.clone(), hall),
+            (window.id.clone(), window),
+        ]);
+
+        assert!(passable_portal_blocks_passage(&room_id, "east", &pantry_id, &objects).is_none());
     }
 
     #[test]

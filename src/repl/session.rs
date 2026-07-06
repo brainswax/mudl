@@ -9,9 +9,10 @@ use crate::display::{
     narrate_no_location, narrate_overloaded, resolve_object, DisplayContext, DisplayFlags,
     DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::object::{player_encumbrance_level, EncumbranceLevel};
-use crate::world::portal::{
-    portal_for_direction, portal_passage_block, portal_permits_exit, PortalBlock,
+use crate::object::{player_encumbrance_level, ObjectFactory, EncumbranceLevel};
+use crate::world::portal::{passable_portal_blocks_passage, PortalBlock};
+use crate::world::place_builder::{
+    apply_dig_result, dig_place, link_places, unlink_exit, DigRequest, DigResult, PlaceBuildError,
 };
 use crate::world::exits::can_traverse_exit;
 use crate::world::navigation::{normalize_direction, resolve_exit};
@@ -241,16 +242,25 @@ impl Session {
             return Err(SessionError::NoExit(direction.to_string()));
         }
 
-        if let Some(portal) = portal_for_direction(&loc_id, dir_label, &self.objects) {
-            if !portal_permits_exit(portal, &target_id) {
-                return Err(SessionError::NoExit(direction.to_string()));
-            }
-            let name = portal.name.to_lowercase();
-            match portal_passage_block(portal) {
-                Some(PortalBlock::Closed) => return Err(SessionError::DoorClosed(name)),
-                Some(PortalBlock::Locked) => return Err(SessionError::DoorLocked(name)),
-                None => {}
-            }
+        if let Some(block) =
+            passable_portal_blocks_passage(&loc_id, dir_label, target_id, &self.objects)
+        {
+            let name = self
+                .objects
+                .get(&loc_id)
+                .and_then(|room| {
+                    crate::world::portal::passable_portal_for_direction(
+                        &room.id,
+                        dir_label,
+                        &self.objects,
+                    )
+                })
+                .map(|portal| portal.name.to_lowercase())
+                .unwrap_or_else(|| "passage".to_string());
+            return Err(match block {
+                PortalBlock::Closed => SessionError::DoorClosed(name),
+                PortalBlock::Locked => SessionError::DoorLocked(name),
+            });
         }
 
         let encumbrance = self
@@ -286,6 +296,103 @@ impl Session {
             lines.push(format_room_look_player(room, &ctx));
         }
         Ok(lines.join("\n"))
+    }
+
+    /// Dig a new place from the current location (`@dig`).
+    pub async fn dig_place<P: Persistence>(
+        &mut self,
+        factory: &ObjectFactory<P>,
+        request: DigRequest,
+    ) -> Result<DigResult, PlaceBuildError> {
+        let from_id = self
+            .current_location
+            .as_ref()
+            .ok_or(PlaceBuildError::NoLocation)?
+            .clone();
+        let from = self
+            .objects
+            .get(&from_id)
+            .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?
+            .clone();
+        if !from.is_location() {
+            return Err(PlaceBuildError::NotAPlace(from.name.clone()));
+        }
+
+        let result = dig_place(factory, &from, self.player_id.clone(), request, &self.objects).await?;
+        for id in apply_dig_result(&mut self.objects, &result) {
+            self.dirty.mark(&id);
+        }
+        Ok(result)
+    }
+
+    /// Link an exit between two places (`@link`).
+    pub fn link_exit(
+        &mut self,
+        from_id: &ObjectId,
+        direction: &str,
+        target_id: &ObjectId,
+        reciprocal: bool,
+    ) -> Result<Vec<String>, PlaceBuildError> {
+        let from = self
+            .objects
+            .get(from_id)
+            .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?
+            .clone();
+        if !from.is_location() {
+            return Err(PlaceBuildError::NotAPlace(from.name));
+        }
+        let target = self
+            .objects
+            .get(target_id)
+            .ok_or_else(|| PlaceBuildError::NotFound(target_id.as_str().to_string()))?
+            .clone();
+        if !target.is_location() {
+            return Err(PlaceBuildError::NotAPlace(target.name));
+        }
+
+        let mut from_mut = from;
+        let mut target_mut = target;
+        let notes = link_places(
+            &mut from_mut,
+            &mut target_mut,
+            direction,
+            &self.objects,
+            reciprocal,
+        )?;
+        self.dirty.mark(&from_mut.id);
+        self.dirty.mark(&target_mut.id);
+        self.objects.insert(from_mut.id.clone(), from_mut);
+        self.objects.insert(target_mut.id.clone(), target_mut);
+        Ok(notes)
+    }
+
+    /// Remove an exit from a place (`@unlink`).
+    pub fn unlink_exit(
+        &mut self,
+        from_id: &ObjectId,
+        direction: &str,
+    ) -> Result<String, PlaceBuildError> {
+        let from_name = self
+            .objects
+            .get(from_id)
+            .map(|o| o.name.clone())
+            .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
+        let from = self
+            .objects
+            .get_mut(from_id)
+            .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
+        let removed = unlink_exit(from, direction)?;
+        self.dirty.mark(from_id);
+        let dir = crate::world::navigation::normalize_direction(direction)
+            .unwrap_or(direction);
+        Ok(format!(
+            "Removed {} exit '{}'{}",
+            from_name,
+            dir,
+            removed
+                .and_then(|id| self.objects.get(&id).map(|o| format!(" (was {})", o.name)))
+                .unwrap_or_default()
+        ))
     }
 
     /// Persist only dirty objects (no-op count when nothing changed).
@@ -593,5 +700,84 @@ mod tests {
         session.persist_changes(&persistence).await.unwrap();
         let bars = persistence.load_object(&bars_id).await.unwrap().unwrap();
         assert_eq!(bars.location.as_ref().map(|id| id.as_str()), Some("room:void-001"));
+    }
+
+    #[tokio::test]
+    async fn session_dig_creates_and_links_new_place() {
+        use crate::object::ObjectFactory;
+        use crate::world::place_builder::DigOptions;
+
+        let (persistence, mut session) = sample_session().await;
+        let factory = ObjectFactory::new(persistence.clone());
+        let result = session
+            .dig_place(
+                &factory,
+                DigRequest {
+                    direction: "east".to_string(),
+                    name: "Side Chamber".to_string(),
+                    options: DigOptions {
+                        place_type: Some("room".to_string()),
+                        description: Some("A small side room.".to_string()),
+                        reciprocal: Some(true),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.new_place.name, "Side Chamber");
+        assert!(result.new_place.is_room());
+        let room = session.object(session.current_location().unwrap()).unwrap();
+        assert_eq!(
+            room.get_exits().get("east"),
+            Some(&result.new_place.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn go_ignores_non_passable_window_on_shared_direction() {
+        use crate::object::{PortalKind, PortalSpec};
+
+        let player_id = ObjectId::new("player:hero-001");
+        let hall_id = ObjectId::new("area:hall-001");
+        let pantry_id = ObjectId::new("room:pantry-001");
+        let rear_id = ObjectId::new("area:rear-001");
+
+        let mut player = bare("player:hero-001", "Hero");
+        player.location = Some(hall_id.clone());
+
+        let mut hall = bare("area:hall-001", "Hall");
+        hall.add_exit("east", pantry_id.clone());
+
+        let mut pantry = bare("room:pantry-001", "Pantry");
+        pantry.location = Some(hall_id.clone());
+        pantry.add_exit("west", hall_id.clone());
+
+        let rear = bare("area:rear-001", "Rear Yard");
+        let mut window = bare("item:window-001", "Window");
+        window.location = Some(hall_id.clone());
+        window.apply_portal_role(&PortalSpec {
+            kind: PortalKind::Window,
+            direction: "east".to_string(),
+            destination: "rear".to_string(),
+            open: false,
+            lock_id: None,
+            locked: false,
+            passable: None,
+            transparent: None,
+        });
+        window.set_portal_destination(rear_id);
+
+        let mut objects = HashMap::new();
+        objects.insert(player.id.clone(), player);
+        objects.insert(hall.id.clone(), hall);
+        objects.insert(pantry.id.clone(), pantry);
+        objects.insert(rear.id.clone(), rear);
+        objects.insert(window.id.clone(), window);
+
+        let mut session =
+            Session::test_session(player_id, human_anatomy(), objects, Some(hall_id));
+        session.go("east").unwrap();
+        assert_eq!(session.current_location(), Some(&pantry_id));
     }
 }
