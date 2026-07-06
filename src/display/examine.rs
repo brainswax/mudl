@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use crate::object::{
-    format_weight_amount, is_state_property, is_unlimited_weight, player_carried_weight, Object,
+    format_weight_amount, is_state_property, is_unlimited_weight, player_carried_weight,
+    player_effective_max_weight, Object,
     ObjectId,
 };
 
@@ -186,7 +187,7 @@ fn format_contents_weight_status(obj: &Object, objects: &HashMap<ObjectId, Objec
 
 fn format_carried_weight_status(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
     let carried = format_weight_amount(player_carried_weight(obj, objects));
-    match obj.get_int_property("max_weight") {
+    match player_effective_max_weight(obj, objects) {
         Some(max) if is_unlimited_weight(max) => format!("{carried}/unlimited"),
         Some(max) => format!("{carried}/{max}"),
         None => carried,

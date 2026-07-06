@@ -476,6 +476,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn go_unencumbered_when_wearing_carry_modifiers() {
+        use crate::object::WearableSpec;
+
+        let (_persistence, mut session) = sample_session().await;
+        let player_id = session.player_id.clone();
+        let mut heavy = bare("item:crate-001", "Crate");
+        heavy.set_property_numeric("weight", 92.0);
+        heavy.location = Some(player_id.clone());
+
+        let mut boots = bare("item:boots-001", "Boots of Carrying");
+        boots.apply_wearable_role(&WearableSpec {
+            wear_slot: "left_foot".to_string(),
+            weight: 2.0,
+            volume: 2.0,
+            mod_max_weight: Some(25),
+            mod_encumbrance: Some(0.85),
+        });
+        boots.location = Some(player_id.clone());
+
+        let player = session.object_mut(&player_id).unwrap();
+        player.set_property_int("max_weight", 100);
+        player.set_property_map(
+            "body_slots",
+            HashMap::from([
+                ("right_hand".to_string(), heavy.id.clone()),
+                ("left_foot".to_string(), boots.id.clone()),
+            ]),
+        );
+        session.objects.insert(heavy.id.clone(), heavy);
+        session.objects.insert(boots.id.clone(), boots);
+
+        let msg = session.go("north").unwrap();
+        assert!(!msg.contains("too encumbered to move easily"));
+        assert!(msg.contains("head north"));
+    }
+
+    #[tokio::test]
     async fn go_accepts_direction_aliases() {
         let (_persistence, mut session) = sample_session().await;
         let msg = session.go("n").unwrap();

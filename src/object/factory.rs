@@ -213,6 +213,8 @@ impl<P: Persistence> ObjectFactory<P> {
             "portal_kind",
             "portal_passable",
             "portal_transparent",
+            "mod_max_weight",
+            "mod_encumbrance",
             "door_direction",
             "door_destination_base",
             "allowed_types",
@@ -476,6 +478,8 @@ mod tests {
                     wear_slot: "back".to_string(),
                     weight: 2.5,
                     volume: 3.0,
+                    mod_max_weight: None,
+                    mod_encumbrance: None,
                 },
                 None,
             )
@@ -506,6 +510,8 @@ mod tests {
                     wear_slot: "torso".to_string(),
                     weight: 1.2,
                     volume: 2.0,
+                    mod_max_weight: None,
+                    mod_encumbrance: None,
                 },
                 Some(proto.id.clone()),
             )

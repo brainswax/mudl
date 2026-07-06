@@ -37,6 +37,8 @@ pub struct MudlRoleProps {
     pub door_destination: Option<String>,
     pub portal_passable: Option<bool>,
     pub portal_transparent: Option<bool>,
+    pub mod_max_weight: Option<i64>,
+    pub mod_encumbrance: Option<f64>,
 }
 
 impl MudlRoleProps {
@@ -82,6 +84,12 @@ impl MudlRoleProps {
                 "portal_transparent" | "transparent" => {
                     props.portal_transparent = Some(*value == "true")
                 }
+                "mod_max_weight" | "carry_bonus" | "max_weight_bonus" => {
+                    props.mod_max_weight = value.parse().ok()
+                }
+                "mod_encumbrance" | "encumbrance_factor" | "encumbrance_reduction" => {
+                    props.mod_encumbrance = value.parse::<f64>().ok().filter(|n| n.is_finite())
+                }
                 _ => {}
             }
         }
@@ -94,6 +102,8 @@ impl MudlRoleProps {
             || self.volume.is_some()
             || self.pocketable.is_some()
             || self.hand_slot.is_some()
+            || self.mod_max_weight.is_some()
+            || self.mod_encumbrance.is_some()
     }
 
     /// Apply scalar overrides without re-applying role composition.
@@ -109,6 +119,9 @@ impl MudlRoleProps {
         }
         if let Some(ref slot) = self.hand_slot {
             obj.set_property_string("hand_slot", slot);
+        }
+        if self.mod_max_weight.is_some() || self.mod_encumbrance.is_some() {
+            obj.apply_carry_modifiers(self.mod_max_weight, self.mod_encumbrance);
         }
     }
 
@@ -204,7 +217,11 @@ impl MudlRoleProps {
                     .unwrap_or_else(|| "torso".to_string()),
                 weight: self.weight.unwrap_or(1.0),
                 volume: self.volume.unwrap_or(1.0),
+                mod_max_weight: self.mod_max_weight,
+                mod_encumbrance: self.mod_encumbrance,
             });
+        } else if self.mod_max_weight.is_some() || self.mod_encumbrance.is_some() {
+            obj.apply_carry_modifiers(self.mod_max_weight, self.mod_encumbrance);
         }
 
         if self.stackable == Some(true) {
@@ -335,6 +352,21 @@ mod tests {
         assert_eq!(obj.container_lock_id().as_deref(), Some("cottage-door"));
         assert!(obj.portal_passable());
         assert!(!obj.portal_transparent());
+    }
+
+    #[test]
+    fn mudl_role_props_apply_wearable_carry_modifiers() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("is_wearable", "true"),
+            ("wear_slot", "left_foot"),
+            ("mod_max_weight", "25"),
+            ("mod_encumbrance", "0.85"),
+        ]);
+        let mut obj = bare("item:boots-001");
+        props.apply_to(&mut obj);
+        assert!(obj.is_wearable());
+        assert_eq!(obj.carry_max_weight_bonus(), 25);
+        assert!((obj.carry_encumbrance_factor() - 0.85).abs() < f64::EPSILON);
     }
 
     #[test]

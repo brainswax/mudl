@@ -29,6 +29,24 @@ pub const ENCUMBRANCE_SLOW_THRESHOLD: f64 = 0.90;
 /// Carried-weight fraction of `max_weight` at which movement is blocked.
 pub const ENCUMBRANCE_BLOCK_THRESHOLD: f64 = 1.0;
 
+/// Carry bonuses aggregated from worn equipment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CarryModifiers {
+    /// Added to base `max_weight` while worn.
+    pub max_weight_bonus: i64,
+    /// Multiplier on encumbrance ratio (`1.0` = unchanged, lower = lighter feel).
+    pub encumbrance_factor: f64,
+}
+
+impl Default for CarryModifiers {
+    fn default() -> Self {
+        Self {
+            max_weight_bonus: 0,
+            encumbrance_factor: 1.0,
+        }
+    }
+}
+
 /// How encumbrance affects player movement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncumbranceLevel {
@@ -94,13 +112,51 @@ pub fn owner_player_of_container(
     None
 }
 
-/// Whether adding `additional` weight would exceed the player's `max_weight` (skips unlimited).
+/// Base carry limit stored on the player (before worn bonuses).
+pub fn player_base_max_weight(player: &Object) -> Option<i64> {
+    player.get_int_property("max_weight")
+}
+
+/// Sum carry modifiers from worn equipment on `player`.
+pub fn collect_worn_carry_modifiers(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> CarryModifiers {
+    let mut mods = CarryModifiers::default();
+    for item_id in player.carried_body_items() {
+        let Some(item) = objects.get(&item_id) else {
+            continue;
+        };
+        if !item.is_active() || !item.is_wearable() {
+            continue;
+        }
+        mods.max_weight_bonus += item.carry_max_weight_bonus();
+        mods.encumbrance_factor *= item.carry_encumbrance_factor();
+    }
+    mods.encumbrance_factor = mods.encumbrance_factor.clamp(0.5, 1.0);
+    mods
+}
+
+/// Effective carry limit including worn `mod_max_weight` bonuses.
+pub fn player_effective_max_weight(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<i64> {
+    let base = player_base_max_weight(player)?;
+    if is_unlimited_weight(base) {
+        return Some(base);
+    }
+    let bonus = collect_worn_carry_modifiers(player, objects).max_weight_bonus;
+    Some(base.saturating_add(bonus))
+}
+
+/// Whether adding `additional` weight would exceed effective carry capacity.
 pub fn would_exceed_player_max_weight(
     player: &Object,
     objects: &HashMap<ObjectId, Object>,
     additional: f64,
 ) -> bool {
-    let Some(max) = player.get_int_property("max_weight") else {
+    let Some(max) = player_effective_max_weight(player, objects) else {
         return false;
     };
     if is_unlimited_weight(max) {
@@ -153,9 +209,9 @@ impl Object {
     }
 }
 
-/// Fraction of the player's `max_weight` currently carried (`None` if unlimited or unset).
+/// Fraction of effective carry capacity currently used (`None` if unlimited or unset).
 pub fn player_carry_fraction(player: &Object, objects: &HashMap<ObjectId, Object>) -> Option<f64> {
-    let max = player.get_int_property("max_weight")?;
+    let max = player_effective_max_weight(player, objects)?;
     if is_unlimited_weight(max) {
         return None;
     }
@@ -166,12 +222,22 @@ pub fn player_carry_fraction(player: &Object, objects: &HashMap<ObjectId, Object
     Some(player_carried_weight(player, objects) / max_f)
 }
 
-/// Encumbrance tier from carried weight vs `max_weight`.
+/// Encumbrance ratio after worn `mod_encumbrance` multipliers.
+pub fn player_encumbrance_fraction(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<f64> {
+    let base = player_carry_fraction(player, objects)?;
+    let factor = collect_worn_carry_modifiers(player, objects).encumbrance_factor;
+    Some(base * factor)
+}
+
+/// Encumbrance tier from carried weight vs effective capacity and worn modifiers.
 pub fn player_encumbrance_level(
     player: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> EncumbranceLevel {
-    match player_carry_fraction(player, objects) {
+    match player_encumbrance_fraction(player, objects) {
         None => EncumbranceLevel::Unencumbered,
         Some(ratio) if ratio >= ENCUMBRANCE_BLOCK_THRESHOLD => EncumbranceLevel::Overloaded,
         Some(ratio) if ratio >= ENCUMBRANCE_SLOW_THRESHOLD => EncumbranceLevel::Encumbered,
@@ -373,6 +439,69 @@ mod tests {
             player_encumbrance_level(&player, &objects),
             EncumbranceLevel::Overloaded
         );
+    }
+
+    #[test]
+    fn worn_boots_increase_effective_max_weight() {
+        let mut player = bare("player:hero-001");
+        player.set_property_int("max_weight", 100);
+        let mut boots = bare("item:boots-001");
+        boots.name = "Boots of Carrying".to_string();
+        boots.apply_wearable_role(&crate::object::WearableSpec {
+            wear_slot: "left_foot".to_string(),
+            weight: 2.0,
+            volume: 2.0,
+            mod_max_weight: Some(25),
+            mod_encumbrance: Some(0.85),
+        });
+        boots.location = Some(player.id.clone());
+        player.set_property_map(
+            "body_slots",
+            HashMap::from([("left_foot".to_string(), boots.id.clone())]),
+        );
+        let objects = HashMap::from([
+            (player.id.clone(), player.clone()),
+            (boots.id.clone(), boots),
+        ]);
+        assert_eq!(player_effective_max_weight(&player, &objects), Some(125));
+    }
+
+    #[test]
+    fn worn_boots_reduce_encumbrance_without_changing_carry_fraction_denominator() {
+        let mut player = bare("player:hero-001");
+        player.set_property_int("max_weight", 100);
+        let item_id = ObjectId::new("item:crate-001");
+        let mut heavy = bare("item:crate-001");
+        heavy.set_property_numeric("weight", 92.0);
+        heavy.location = Some(player.id.clone());
+        let mut boots = bare("item:boots-001");
+        boots.apply_wearable_role(&crate::object::WearableSpec {
+            wear_slot: "left_foot".to_string(),
+            weight: 2.0,
+            volume: 2.0,
+            mod_max_weight: Some(25),
+            mod_encumbrance: Some(0.85),
+        });
+        boots.location = Some(player.id.clone());
+        player.set_property_map(
+            "body_slots",
+            HashMap::from([
+                ("right_hand".to_string(), item_id.clone()),
+                ("left_foot".to_string(), boots.id.clone()),
+            ]),
+        );
+        let objects = HashMap::from([
+            (player.id.clone(), player.clone()),
+            (item_id, heavy),
+            (boots.id.clone(), boots),
+        ]);
+
+        assert_eq!(
+            player_encumbrance_level(&player, &objects),
+            EncumbranceLevel::Unencumbered
+        );
+        // Effective capacity is 125 with +25 from boots; carried is 94 (crate + boots).
+        assert!((player_carry_fraction(&player, &objects).unwrap() - 94.0 / 125.0).abs() < 0.01);
     }
 
     #[test]

@@ -6,7 +6,8 @@ use crate::display::stackable::{
     format_examine_stack_weight, format_examine_stackable_fallback,
 };
 use crate::object::{
-    format_weight_amount, is_unlimited_weight, player_carried_weight, Object, ObjectId,
+    format_weight_amount, is_unlimited_weight, player_carried_weight, player_effective_max_weight,
+    Object, ObjectId,
 };
 
 fn player_capacity_message(max: i64) -> String {
@@ -48,7 +49,7 @@ pub fn format_weight_examine_player(obj: &Object, objects: &HashMap<ObjectId, Ob
             format_weight_amount(carried)
         ));
     }
-    if let Some(max) = obj.get_int_property("max_weight") {
+    if let Some(max) = player_effective_max_weight(obj, objects) {
         parts.push(player_capacity_message(max));
     }
     if parts.is_empty() {
@@ -99,7 +100,7 @@ pub fn format_weight_examine_builder(
             "Carried weight: {}",
             player_carried_weight(obj, objects)
         ));
-        if let Some(max) = obj.get_int_property("max_weight") {
+        if let Some(max) = player_effective_max_weight(obj, objects) {
             if is_unlimited_weight(max) {
                 lines.push("Max weight: unlimited".to_string());
             } else {

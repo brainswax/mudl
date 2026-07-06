@@ -143,6 +143,20 @@
   alias=cottage key
 @end
 
+@prototype boots-of-carrying
+  name=Boots of Carrying
+  description=Sturdy leather boots that lighten your step and somehow broaden your shoulders.
+  is_wearable=true
+  wear_slot=left_foot
+  mod_max_weight=25
+  mod_encumbrance=0.85
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=boots
+  alias=carrying boots
+@end
+
 # --- Instances in the starting clearing (the-void) ---
 
 @item scene-mailbox
@@ -192,6 +206,11 @@
 
 @item cottage-key-ring
   prototype=brass-key-ring
+  location=cottage-interior
+@end
+
+@item cottage-carrying-boots
+  prototype=boots-of-carrying
   location=cottage-interior
 @end
 

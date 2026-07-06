@@ -254,6 +254,12 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.portal_transparent.is_some() {
         target.portal_transparent = extra.portal_transparent;
     }
+    if extra.mod_max_weight.is_some() {
+        target.mod_max_weight = extra.mod_max_weight;
+    }
+    if extra.mod_encumbrance.is_some() {
+        target.mod_encumbrance = extra.mod_encumbrance;
+    }
 }
 
 #[cfg(test)]

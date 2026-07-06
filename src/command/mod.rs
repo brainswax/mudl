@@ -336,6 +336,8 @@ pub async fn create_at_location_with_options<P: Persistence>(
                             .map(|v| v as f64)
                             .or(options.volume)
                             .unwrap_or(1.0),
+                        mod_max_weight: None,
+                        mod_encumbrance: None,
                     },
                     options.prototype.clone(),
                 )

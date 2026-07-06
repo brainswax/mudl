@@ -590,6 +590,17 @@ mod tests {
             interior_window.portal_destination().as_ref(),
             Some(&cottage_rear.id)
         );
+
+        let boots = objects
+            .iter()
+            .find(|o| {
+                o.name == "Boots of Carrying"
+                    && o.location.as_ref() == Some(&cottage_interior.id)
+            })
+            .expect("boots of carrying in cottage interior");
+        assert!(boots.is_wearable());
+        assert_eq!(boots.carry_max_weight_bonus(), 25);
+        assert!((boots.carry_encumbrance_factor() - 0.85).abs() < f64::EPSILON);
     }
 
     #[tokio::test]

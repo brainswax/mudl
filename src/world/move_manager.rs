@@ -9,8 +9,8 @@ use crate::world::possession::{
 };
 use crate::object::LocationRef;
 use crate::object::{
-    is_unlimited_weight, player_carried_weight, transfer_weight, player_weight_bearer,
-    would_exceed_player_max_weight, Object, ObjectId,
+    is_unlimited_weight, player_carried_weight, player_effective_max_weight, transfer_weight,
+    player_weight_bearer, would_exceed_player_max_weight, Object, ObjectId,
 };
 use crate::world::stack_transfer::{
     compute_stack_transfer_plan, cap_stack_transfer_plan_to_weight, fit_failure_reason,
@@ -225,7 +225,7 @@ fn max_carry_units_for_weight(
     item: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> u32 {
-    let Some(max_w) = player.get_int_property("max_weight") else {
+    let Some(max_w) = player_effective_max_weight(player, objects) else {
         return u32::MAX;
     };
     if is_unlimited_weight(max_w) {

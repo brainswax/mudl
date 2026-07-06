@@ -2531,6 +2531,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wearing_carrying_boots_increases_effective_max_weight() {
+        use crate::object::{
+            player_effective_max_weight, would_exceed_player_max_weight, WearableSpec,
+        };
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut boots = factory
+            .create_wearable(
+                "Boots of Carrying",
+                player_id.clone(),
+                WearableSpec {
+                    wear_slot: "left_foot".to_string(),
+                    weight: 2.0,
+                    volume: 2.0,
+                    mod_max_weight: Some(25),
+                    mod_encumbrance: Some(0.85),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        boots.location = Some(room_id.clone());
+        objects.insert(boots.id.clone(), boots);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        {
+            let player = ctx.objects.get_mut(&player_id).unwrap();
+            player.set_property_map("body_slots", HashMap::new());
+        }
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert_eq!(player_effective_max_weight(player, ctx.objects), Some(100));
+        assert!(would_exceed_player_max_weight(player, ctx.objects, 101.0));
+
+        wear_item(&mut ctx, "boots").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert_eq!(player_effective_max_weight(player, ctx.objects), Some(125));
+        assert!(!would_exceed_player_max_weight(player, ctx.objects, 101.0));
+    }
+
+    #[tokio::test]
     async fn wear_and_container_operations() {
         let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 

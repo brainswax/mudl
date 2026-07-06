@@ -182,6 +182,10 @@ pub struct WearableSpec {
     pub wear_slot: String,
     pub weight: f64,
     pub volume: f64,
+    /// Additive bonus to the wearer's effective `max_weight` while equipped.
+    pub mod_max_weight: Option<i64>,
+    /// Encumbrance multiplier while equipped (`0.85` = 15% lighter feel for movement).
+    pub mod_encumbrance: Option<f64>,
 }
 
 /// Physical attributes for a generic item.
@@ -628,6 +632,39 @@ impl Object {
         self.set_property_string("wear_slot", &spec.wear_slot);
         self.set_property_numeric("weight", spec.weight);
         self.set_property_numeric("volume", spec.volume);
+        self.apply_carry_modifiers(spec.mod_max_weight, spec.mod_encumbrance);
+    }
+
+    /// Apply carry-capacity / encumbrance modifiers (wearable equipment).
+    pub fn apply_carry_modifiers(
+        &mut self,
+        max_weight_bonus: Option<i64>,
+        encumbrance_factor: Option<f64>,
+    ) {
+        if let Some(bonus) = max_weight_bonus.filter(|b| *b != 0) {
+            self.set_property_int("mod_max_weight", bonus);
+        }
+        if let Some(factor) = encumbrance_factor.filter(|f| f.is_finite() && (*f - 1.0).abs() > 1e-9)
+        {
+            self.set_property_numeric("mod_encumbrance", factor);
+        }
+    }
+
+    /// Bonus added to the wearer's `max_weight` while this item is worn.
+    pub fn carry_max_weight_bonus(&self) -> i64 {
+        self.get_int_property("mod_max_weight").unwrap_or(0)
+    }
+
+    /// Encumbrance multiplier while worn (`1.0` = no change).
+    pub fn carry_encumbrance_factor(&self) -> f64 {
+        self.get_numeric_property("mod_encumbrance")
+            .filter(|f| f.is_finite())
+            .unwrap_or(1.0)
+    }
+
+    pub fn has_carry_modifiers(&self) -> bool {
+        self.carry_max_weight_bonus() != 0
+            || (self.carry_encumbrance_factor() - 1.0).abs() > 1e-9
     }
 
     pub fn apply_item_phys(&mut self, spec: &ItemPhysSpec) {
@@ -1088,6 +1125,8 @@ mod tests {
             wear_slot: "back".to_string(),
             weight: 2.5,
             volume: 3.0,
+            mod_max_weight: None,
+            mod_encumbrance: None,
         });
         obj.init_item_defaults_if_unset(false);
 
