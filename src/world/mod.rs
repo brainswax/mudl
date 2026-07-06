@@ -21,7 +21,8 @@ pub use portal::{
     portal_kind_label, portal_passage_block, portal_permits_exit, portals_in_room, PortalBlock,
 };
 pub use exits::{
-    apply_scatter_exit, can_traverse_exit, pick_scatter_destination, reverse_direction,
+    apply_loop_entry, apply_scatter_exit, can_traverse_exit, pick_scatter_destination,
+    reverse_direction,
     validate_place_exits, validate_place_hierarchy, validate_reciprocal_exits,
     validate_world_places,
 };

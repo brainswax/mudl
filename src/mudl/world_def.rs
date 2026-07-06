@@ -13,6 +13,8 @@ pub struct WorldDef {
     /// When set, leaving via `scatter_direction` sends the player to one of these places.
     pub scatter_to: Vec<String>,
     pub scatter_direction: Option<String>,
+    /// When set, entering this place silently sends the player to the named place.
+    pub loop_to: Option<String>,
 }
 
 /// Parse room/object definitions from MUDL source (legacy declarative format).
@@ -29,6 +31,7 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
         starting_location: None,
         scatter_to: Vec::new(),
         scatter_direction: None,
+        loop_to: None,
     };
     let mut in_exits = false;
 
@@ -51,6 +54,7 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
                     starting_location: None,
                     scatter_to: Vec::new(),
                     scatter_direction: None,
+                    loop_to: None,
                 };
                 in_exits = false;
             }
@@ -83,7 +87,7 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
             if parts.len() == 2 {
                 let key = parts[0].trim().to_lowercase();
                 let value = parts[1].trim().to_string();
-                if key == "scatter_to" || key == "scatter_direction" {
+                if key == "scatter_to" || key == "scatter_direction" || key == "loop_to" {
                     in_exits = false;
                     match key.as_str() {
                         "scatter_to" => {
@@ -94,6 +98,7 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
                                 .collect();
                         }
                         "scatter_direction" => current.scatter_direction = Some(value),
+                        "loop_to" => current.loop_to = Some(value),
                         _ => {}
                     }
                     continue;
@@ -199,5 +204,6 @@ mod tests {
             wither.exits.get("out").map(String::as_str),
             Some("haunted-entry")
         );
+        assert_eq!(wither.loop_to.as_deref(), Some("haunted-entry"));
     }
 }

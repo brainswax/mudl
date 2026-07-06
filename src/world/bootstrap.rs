@@ -307,6 +307,16 @@ pub async fn bootstrap_world<P: Persistence>(
                     });
                 }
             }
+            if let Some(loop_base) = &def.loop_to {
+                if let Some(loop_id) = name_to_id.get(loop_base) {
+                    obj.add_property(Property {
+                        name: "loop_to".to_string(),
+                        value: Value::ObjectRef(loop_id.clone()),
+                        permissions: PermissionFlags::EVERYONE,
+                        behavior: None,
+                    });
+                }
+            }
             factory.persistence().save_object(&obj).await?;
         }
     }
@@ -940,15 +950,23 @@ mod tests {
         let entry_msg = session.go("in").unwrap();
         assert!(entry_msg.contains("Tangled Threshold") || entry_msg.contains("held breath"));
 
-        session.go("east").unwrap();
-        session.go("out").unwrap();
+        let wrong_turn = session.go("east").unwrap();
         assert_eq!(
             session.object(session.current_location().unwrap()).unwrap().name,
-            "Tangled Threshold"
+            "Tangled Threshold",
+            "wrong turns loop silently to the threshold"
+        );
+        assert!(
+            !wrong_turn.to_lowercase().contains("wither"),
+            "dead-end names should not appear on silent loop"
+        );
+        assert!(
+            !wrong_turn.to_lowercase().contains("you go"),
+            "silent loop should not narrate movement"
         );
 
         session.go("north").unwrap();
-        let moon_read = read_item(&mut session.inventory_context(), "stone").unwrap();
+        let moon_read = read_item(&mut session.inventory_context(), "marker").unwrap();
         assert!(moon_read.contains("MOON"));
 
         session.go("east").unwrap();

@@ -15,7 +15,7 @@ use crate::world::portal::{passable_portal_blocks_passage, PortalBlock};
 use crate::world::place_builder::{
     apply_dig_result, dig_place, link_places, unlink_exit, DigRequest, DigResult, PlaceBuildError,
 };
-use crate::world::exits::{apply_scatter_exit, can_traverse_exit};
+use crate::world::exits::{apply_loop_entry, apply_scatter_exit, can_traverse_exit};
 use crate::world::navigation::{normalize_direction, resolve_exit};
 use crate::inventory::InventoryContext;
 use crate::mudl::AnatomyRegistry;
@@ -273,10 +273,11 @@ impl Session {
             return Err(SessionError::Overloaded);
         }
 
+        let looped_target = apply_loop_entry(map_target_id, &self.objects);
         let target_id = apply_scatter_exit(
             room,
             dir_label,
-            map_target_id,
+            &looped_target,
             &self.player_id,
             &self.objects,
         );
@@ -290,19 +291,21 @@ impl Session {
 
         self.current_location = Some(target_id.clone());
 
-        let scattered = target_id != *map_target_id;
-        let movement_line = if scattered {
+        let looped = looped_target != *map_target_id;
+        let scattered = target_id != looped_target;
+        let mut lines = Vec::new();
+        if scattered {
             let dest_name = object_name(&target_id, &self.objects);
-            narrate_scatter_exit(&dest_name)
-        } else {
-            match encumbrance {
+            lines.push(narrate_scatter_exit(&dest_name));
+        } else if !looped {
+            let movement_line = match encumbrance {
                 EncumbranceLevel::Encumbered => narrate_go_encumbered(dir_label),
                 EncumbranceLevel::Unencumbered | EncumbranceLevel::Overloaded => {
                     narrate_go(dir_label)
                 }
-            }
-        };
-        let mut lines = vec![movement_line];
+            };
+            lines.push(movement_line);
+        }
         if let Some(room) = self.objects.get(&target_id) {
             let ctx = DisplayContext::new(self.player_id.clone(), DisplayMode::Player)
                 .with_objects(self.objects.clone())

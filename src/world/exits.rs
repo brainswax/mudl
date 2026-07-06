@@ -40,6 +40,31 @@ pub fn pick_scatter_destination(
     Some(candidates[hash % candidates.len()].clone())
 }
 
+/// When entering `target`, redirect to `loop_to` if the place defines one (silent maze loop).
+pub fn apply_loop_entry(
+    target_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> ObjectId {
+    let Some(place) = objects.get(target_id) else {
+        return target_id.clone();
+    };
+    let Some(prop) = place.get_property("loop_to") else {
+        return target_id.clone();
+    };
+    let Value::ObjectRef(loop_id) = &prop.value else {
+        return target_id.clone();
+    };
+    if objects
+        .get(loop_id)
+        .filter(|place| place.is_active() && place.is_location())
+        .is_some()
+    {
+        loop_id.clone()
+    } else {
+        target_id.clone()
+    }
+}
+
 /// Apply scatter exit redirection when leaving `from` along `direction`.
 pub fn apply_scatter_exit(
     from: &Object,
@@ -328,6 +353,26 @@ mod tests {
         let first = pick_scatter_destination(&heart, &player, &objects).unwrap();
         let second = pick_scatter_destination(&heart, &player, &objects).unwrap();
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn apply_loop_entry_redirects_to_configured_place() {
+        let entry_id = ObjectId::new("area:entry-001");
+        let dead_id = ObjectId::new("area:dead-001");
+        let mut dead = bare_place("area:dead-001", "Dead End", None);
+        dead.add_property(crate::object::Property {
+            name: "loop_to".to_string(),
+            value: Value::ObjectRef(entry_id.clone()),
+            permissions: crate::object::PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+        let entry = bare_place("area:entry-001", "Entry", None);
+        let objects = HashMap::from([
+            (dead.id.clone(), dead.clone()),
+            (entry.id.clone(), entry),
+        ]);
+        assert_eq!(apply_loop_entry(&dead_id, &objects), entry_id);
+        assert_eq!(apply_loop_entry(&entry_id, &objects), entry_id);
     }
 
     #[test]

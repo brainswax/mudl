@@ -41,14 +41,16 @@
   alias=whisper charm
 @end
 
-@prototype standing-stone
-  name=Standing Stone
-  description=A weathered stone pillar, its face carved with a single word.
+@prototype way-marker
+  name=Way Marker
+  description=A weathered stone post, waist-high, its face worn smooth on one side.
   readable=true
-  weight=50.0
-  volume=40.0
+  weight=35.0
+  volume=25.0
   pocketable=false
+  alias=marker
   alias=stone
+  alias=post
 @end
 
 @prototype hollow-oak-portal
@@ -87,30 +89,48 @@
   lock_id=oak-whisper
 @end
 
-# --- Puzzle stones ---
+# --- Way markers (one per location; subtle navigation clues) ---
 
-@item haunted-moon-stone
-  prototype=standing-stone
+@item haunted-entry-marker
+  prototype=way-marker
+  location=haunted-entry
+  description=A low plinth of green-black stone. Four shallow glyphs circle its rim — pale, warm, glassy, and grey — with a blank space where a fifth might wait.
+  read_text=MOON, EMBER, MIRROR, ASH — the wood remembers the order. Begin where silver gathers.
+@end
+
+@item haunted-moon-marker
+  prototype=way-marker
   location=haunted-moon
-  read_text=MOON — first, when the silver opens the way.
+  description=A pale standing stone. Its east face catches light the canopy never offers; the other sides stay cold.
+  read_text=MOON — first. Silver gathers here; warmth waits to the east.
 @end
 
-@item haunted-ember-stone
-  prototype=standing-stone
+@item haunted-ember-marker
+  prototype=way-marker
   location=haunted-ember
-  read_text=EMBER — second, follow warmth that left no flame.
+  description=A charred pillar of stone. Heat still lingers along its southern edge, as though coals slept there moments ago.
+  read_text=EMBER — second. Follow the warmth that left no flame; still water lies south.
 @end
 
-@item haunted-mirror-stone
-  prototype=standing-stone
+@item haunted-mirror-marker
+  prototype=way-marker
   location=haunted-mirror
-  read_text=MIRROR — third, trust the still water's lie.
+  description=A slick black stone rising from the mire. Its western face holds a perfect, unmoving reflection of reeds that are not behind you.
+  read_text=MIRROR — third. Trust the still water's lie; ash-grey quiet lies west.
 @end
 
-@item haunted-ash-stone
-  prototype=standing-stone
+@item haunted-ash-marker
+  prototype=way-marker
   location=haunted-ash
-  read_text=ASH — fourth, then north to the pale heart. Step OUT when the wood releases you.
+  description=A grey pillar filmed with fine dust. Fresh ash has drifted north across its base, as if something ahead exhaled.
+  read_text=ASH — fourth. Then north to the pale heart. Step OUT when the wood releases you.
+@end
+
+@item haunted-heart-marker
+  prototype=way-marker
+  location=haunted-heart
+  description=A ring of four worn posts frames a hollow stump. The glyphs match the threshold — but here, every face points outward.
+  read_text=The order held. The wood yields only one exit, and it will not be gentle.
 @end
 
 # --- Haunted forest areas ---
@@ -118,7 +138,7 @@
 type: area
 base_name: haunted-entry
 name: Tangled Threshold
-description: The trees close like a held breath. Mist beads on your sleeves. Pale motes drift without wind. Carved into a root, half-swallowed by moss: MOON, EMBER, MIRROR, ASH — then the heart of the wood. Paths tangle in every other direction.
+description: The trees close like a held breath. Mist beads on your sleeves. Pale motes drift without wind. Every path looks equally inviting and equally wrong.
 exits:
   north: haunted-moon
   east: haunted-wither
@@ -128,7 +148,7 @@ exits:
 type: area
 base_name: haunted-moon
 name: Moonlit Glade
-description: A silvered clearing where the canopy breaks. A standing stone warms under moonlight that does not match the sky. The threshold lies south; deeper woods beckon east.
+description: A silvered clearing where the canopy breaks. The air is colder than it should be under this much light.
 exits:
   south: haunted-entry
   east: haunted-ember
@@ -137,7 +157,7 @@ exits:
 type: area
 base_name: haunted-ember
 name: Ember Copse
-description: Charred stumps ring a hollow where coals once slept. The air tastes of old smoke. Moonlit Glade lies west; south, the ground turns glassy and still.
+description: Charred stumps ring a hollow where coals once slept. The air tastes of old smoke and turned earth.
 exits:
   west: haunted-moon
   south: haunted-mirror
@@ -146,7 +166,7 @@ exits:
 type: area
 base_name: haunted-mirror
 name: Mirror Mire
-description: Black water repeats the trees upside down. Every step sounds like two people walking. Ember Copse is north; west, ash-grey reeds rattle without breeze.
+description: Black water repeats the trees upside down. Every step sounds like two people walking, but only your boots leave ripples.
 exits:
   north: haunted-ember
   west: haunted-ash
@@ -155,7 +175,7 @@ exits:
 type: area
 base_name: haunted-ash
 name: Ash Hollow
-description: Fine grey dust coats your boots. Dead branches arch like rib bones. Mirror Mire glimmers east. North, the air thins — something final waits.
+description: Fine grey dust coats your boots. Dead branches arch like rib bones. The air thins ahead.
 exits:
   east: haunted-mirror
   north: haunted-heart
@@ -164,60 +184,67 @@ exits:
 type: area
 base_name: haunted-heart
 name: Pale Heart of the Wood
-description: The haunted forest kneels here. A ring of roots frames a patch of sky that looks almost ordinary. The stones' order was not a suggestion. South leads back to ash. There is only one way out — and the world will choose where you land.
+description: The haunted forest kneels here. A ring of roots frames a patch of sky that looks almost ordinary. Something final has been waiting.
 exits:
   south: haunted-ash
   out: haunted-entry
 scatter_to: the-void, forest-path, cottage-rear
 scatter_direction: out
 
-# --- Dead ends (loop back to the threshold) ---
+# --- Wrong turns (silent loop back to the threshold) ---
 
 type: area
 base_name: haunted-wither
 name: Withering Reach
-description: Branches knit overhead until the light dies. You turn in place twice before the path spits you back toward the threshold.
+description: Branches knit overhead until the light dies.
 exits:
   out: haunted-entry
+loop_to: haunted-entry
 
 type: area
 base_name: haunted-mist
 name: Breathless Mist
-description: White mist swallows the trail. Somewhere a branch snaps — behind you, beside you, impossible to tell. You retreat by instinct.
+description: White mist swallows the trail.
 exits:
   out: haunted-entry
+loop_to: haunted-entry
 
 type: area
 base_name: haunted-moss
 name: Moss Choke
-description: Soft moss climbs every trunk and blurs every landmark. Hours might pass in minutes. The way back finds you before panic does.
+description: Soft moss climbs every trunk and blurs every landmark.
 exits:
   out: haunted-entry
+loop_to: haunted-entry
 
 type: area
 base_name: haunted-thicket
 name: Bramble Thicket
-description: Thorns catch cloth and skin alike. Progress is a lie here. Eventually you stumble backward into familiar gloom.
+description: Thorns catch cloth and skin alike.
 exits:
   out: haunted-entry
+loop_to: haunted-entry
 
 type: area
 base_name: haunted-pool
 name: Drowned Glare
-description: The pool's reflection shows a path that is not there. When you reach for it, the image shatters and the forest reclaims you.
+description: The pool's reflection shows a path that is not there.
 exits:
   out: haunted-entry
+loop_to: haunted-entry
 
 type: area
 base_name: haunted-bones
 name: Bone Snarl
-description: Bleached roots tangle like old teeth. A windless voice seems to count your steps. You do not finish the count.
+description: Bleached roots tangle like old teeth.
 exits:
   out: haunted-entry
+loop_to: haunted-entry
 
 type: area
 base_name: haunted-shrine
 name: Forgotten Shrine
-description: A stone bowl holds rainwater and fallen needles. Whoever left offerings stopped long ago. The glade behind you feels suddenly far.
+description: A stone bowl holds rainwater and fallen needles.
 exits:
   out: haunted-entry
+loop_to: haunted-entry
