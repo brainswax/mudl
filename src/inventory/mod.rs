@@ -221,32 +221,6 @@ fn resolve_carried_item(
     }
 }
 
-fn resolve_carried_container(
-    ctx: &InventoryContext<'_>,
-    container_name: &str,
-) -> Result<ObjectId, InventoryError> {
-    match resolve_inventory_target(
-        container_name,
-        None,
-        ctx.player_id,
-        ctx.objects,
-        ResolveScope::Carried,
-    ) {
-        Ok(id) => Ok(id),
-        Err(InventoryError::NotFound(_)) => {
-            if let Some(room_id) = ctx.room_id {
-                if target_visible_on_ground(container_name, room_id, ctx.player_id, ctx.objects) {
-                    return Err(InventoryError::ContainerNotCarriedButOnGround(
-                        container_name.to_string(),
-                    ));
-                }
-            }
-            Err(InventoryError::NotFound(container_name.to_string()))
-        }
-        Err(e) => Err(e),
-    }
-}
-
 fn resolve_ground_item(
     ctx: &InventoryContext<'_>,
     item_name: &str,
@@ -554,11 +528,17 @@ pub fn parse_put_args(rest: &str) -> Result<PutRequest, InventoryError> {
 pub fn format_put_message(
     item: &Object,
     container_display: &str,
+    container_carried: bool,
     transferred: u32,
     total_held: u32,
     quantity: Option<u32>,
 ) -> String {
     let remainder_in_hand = total_held.saturating_sub(transferred);
+    let container_phrase = if container_carried {
+        format!("your {container_display}")
+    } else {
+        format!("the {container_display}")
+    };
 
     let mut snap = item.clone();
     snap.set_stack_count(transferred);
@@ -570,11 +550,11 @@ pub fn format_put_message(
 
     let base = if transferred == 1 && quantity.is_none() && total_held == 1 {
         format!(
-            "You put {} {item_label} in your {container_display}",
+            "You put {} {item_label} in {container_phrase}",
             indefinite_article(&item_label)
         )
     } else {
-        format!("You put {item_label} in your {container_display}")
+        format!("You put {item_label} in {container_phrase}")
     };
 
     if let Some(req) = quantity {
@@ -612,6 +592,28 @@ fn format_remainder_in_hand_clause(item: &Object, count: u32) -> String {
     }
 }
 
+fn container_visible_for_put(
+    ctx: &InventoryContext<'_>,
+    container_id: &ObjectId,
+    container_name: &str,
+) -> Result<bool, InventoryError> {
+    if is_carried_by(ctx.player_id, container_id, ctx.objects) {
+        return Ok(true);
+    }
+    let Some(room_id) = ctx.room_id else {
+        return Err(InventoryError::NoRoom);
+    };
+    let Some(container) = ctx.objects.get(container_id) else {
+        return Err(InventoryError::NotFound(container_name.to_string()));
+    };
+    if container.location.as_ref() == Some(room_id)
+        && !is_carried_by(ctx.player_id, container_id, ctx.objects)
+    {
+        return Ok(false);
+    }
+    Err(InventoryError::NotFound(container_name.to_string()))
+}
+
 pub fn put_item(
     ctx: &mut InventoryContext<'_>,
     item_name: &str,
@@ -619,7 +621,7 @@ pub fn put_item(
     quantity: Option<u32>,
 ) -> Result<String, InventoryError> {
     let item_id = resolve_carried_item_with_variants(ctx, item_name)?;
-    let container_id = resolve_carried_container(ctx, container_name)?;
+    let container_id = resolve_room_or_carried_container(ctx, container_name)?;
 
     if item_id == container_id {
         return Err(InventoryError::InvalidTarget(
@@ -640,15 +642,15 @@ pub fn put_item(
     if !container.is_container() {
         return Err(InventoryError::NotContainer);
     }
-    if !is_carried_by(ctx.player_id, &container_id, ctx.objects) {
-        return Err(InventoryError::ContainerNotCarried);
-    }
+
+    let container_carried = container_visible_for_put(ctx, &container_id, container_name)?;
+
     if !container.container_is_open() {
         return Err(InventoryError::ContainerClosed(container.name.clone()));
     }
 
     let item = ctx.objects.get(&item_id).unwrap().clone();
-    let container_display = container.name.clone();
+    let container_display = container.name.to_lowercase();
     let total_count = if item.is_stackable() {
         item.stack_count()
     } else {
@@ -663,6 +665,7 @@ pub fn put_item(
     Ok(format_put_message(
         &item,
         &container_display,
+        container_carried,
         transferred,
         total_count,
         quantity,
@@ -2368,11 +2371,31 @@ mod tests {
             count: 20,
             max_stack: 99,
         });
-        let msg = format_put_message(&coins, "purse", 15, 20, None);
+        let msg = format_put_message(&coins, "purse", true, 15, 20, None);
         assert_eq!(
             msg,
             "You put 15 coins in your purse, but 5 coins remain in your hand."
         );
+    }
+
+    #[test]
+    fn format_put_message_ground_container() {
+        let mut note = Object {
+            id: ObjectId::new("item:note-001"),
+            name: "folded note".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: ObjectId::new("player:hero-001"),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let msg = format_put_message(&note, "travel chest", false, 1, 1, None);
+        assert_eq!(msg, "You put a folded note in the travel chest.");
     }
 
     #[test]
@@ -2395,7 +2418,7 @@ mod tests {
             count: 20,
             max_stack: 99,
         });
-        let msg = format_put_message(&coins, "purse", 10, 20, Some(10));
+        let msg = format_put_message(&coins, "purse", true, 10, 20, Some(10));
         assert_eq!(msg, "You put 10 coins in your purse.");
     }
 
@@ -2462,28 +2485,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn put_item_container_on_ground_hints_to_get_first() {
+    async fn put_item_into_ground_container() {
         let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
-        let mut coins = factory
-            .create_stackable_item("coins", player_id.clone(), None, 5)
+        let note = factory
+            .create_item("folded note", player_id.clone())
             .await
             .unwrap();
-        coins.name = "coins".to_string();
-        let coins_id = coins.id.clone();
+        let note_id = note.id.clone();
 
         let mut player = objects.get(&player_id).unwrap().clone();
-        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        player.set_body_slot("right_hand", Some(note_id.clone()));
         objects.insert(player_id.clone(), player);
-        objects.insert(coins_id, coins);
+        objects.insert(note_id.clone(), note);
 
-        let mut backpack = factory
-            .create_container("backpack", player_id.clone(), 5, true)
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
             .await
             .unwrap();
-        backpack.name = "backpack".to_string();
-        backpack.location = Some(room_id.clone());
-        objects.insert(backpack.id.clone(), backpack);
+        chest.name = "Travel Chest".to_string();
+        let chest_id = chest.id.clone();
+        chest.location = Some(room_id.clone());
+        objects.insert(chest_id.clone(), chest);
 
         let mut ctx = InventoryContext {
             player_id: &player_id,
@@ -2493,12 +2524,61 @@ mod tests {
             dirty: None,
         };
 
-        let err = put_item(&mut ctx, "coins", "backpack", None).unwrap_err();
+        let msg = put_item(&mut ctx, "note", "chest", None).unwrap();
+        assert_eq!(msg, "You put a folded note in the travel chest.");
+        assert!(
+            ctx.objects
+                .get(&chest_id)
+                .unwrap()
+                .container_contents()
+                .contains(&note_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn put_item_into_closed_ground_container_fails() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let note = factory
+            .create_item("folded note", player_id.clone())
+            .await
+            .unwrap();
+        let note_id = note.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(note_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(note_id, note);
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.name = "Travel Chest".to_string();
+        chest.location = Some(room_id.clone());
+        objects.insert(chest.id.clone(), chest);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = put_item(&mut ctx, "note", "chest", None).unwrap_err();
         assert_eq!(
             err,
-            InventoryError::ContainerNotCarriedButOnGround("backpack".to_string())
+            InventoryError::ContainerClosed("Travel Chest".to_string())
         );
-        assert!(err.to_string().contains("get backpack"));
     }
 
     #[tokio::test]

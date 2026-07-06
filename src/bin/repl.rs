@@ -337,7 +337,7 @@ async fn main() -> Result<()> {
                         println!("  get/take <item>             - pick up an item from the room");
                         println!("  drop <item>                 - drop a carried item");
                         println!(
-                            "  put [count] <item> in <container> - stow items (e.g. put 10 coins in purse)"
+                            "  put [count] <item> in <container> - stow items in hand or nearby containers"
                         );
                         println!(
                             "  remove <item> from <container> - take an item out of a container"
