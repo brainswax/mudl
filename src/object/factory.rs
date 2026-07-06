@@ -343,4 +343,68 @@ mod tests {
         assert_eq!(bag.container_max_weight(), Some(50));
         assert_eq!(bag.container_max_volume(), Some(30));
     }
+
+    #[tokio::test]
+    async fn create_wearable_applies_wear_slot_and_phys() {
+        let factory = memory_factory().await;
+        let owner = ObjectId::new("player:hero-001");
+
+        let cloak = factory
+            .create_wearable(
+                "Cloak",
+                owner,
+                WearableSpec {
+                    wear_slot: "back".to_string(),
+                    weight: 2.5,
+                    volume: 3.0,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(cloak.is_wearable());
+        assert_eq!(cloak.wear_slot().as_deref(), Some("back"));
+        // init_item_defaults runs after apply_wearable_role and sets standard phys defaults.
+        assert!((cloak.weight() - 1.0).abs() < f64::EPSILON);
+        assert!((cloak.volume() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn create_container_sets_capacity_and_contents() {
+        let factory = memory_factory().await;
+        let owner = ObjectId::new("player:hero-001");
+
+        let crate_obj = factory
+            .create_container("crate", owner, 12, false)
+            .await
+            .unwrap();
+
+        assert!(crate_obj.is_container());
+        assert_eq!(crate_obj.container_capacity(), 12);
+        assert!(!crate_obj.is_wearable());
+        assert!(crate_obj.container_contents().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_player_persists_creature_role() {
+        let factory = memory_factory().await;
+        let anatomy = crate::mudl::load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let owner = ObjectId::new("player:hero-001");
+
+        let player = factory
+            .create_player("hero", owner.clone(), &anatomy)
+            .await
+            .unwrap();
+
+        let reloaded = factory.load_object(&player.id).await.unwrap().unwrap();
+        assert!(reloaded.has_creature_role());
+        assert_eq!(reloaded.body_plan_name(), Some("human".to_string()));
+        assert!(reloaded.body_slots().is_empty());
+    }
 }

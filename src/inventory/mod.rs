@@ -2630,4 +2630,158 @@ mod tests {
         let output = purse.describe(&ctx);
         assert!(output.contains("The purse contains 20 coins"));
     }
+
+    #[tokio::test]
+    async fn drop_worn_backpack_clears_torso_slot() {
+        use crate::display::format_look_self_summary;
+
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let backpack_id = objects
+            .values()
+            .find(|o| o.name == "Backpack")
+            .unwrap()
+            .id
+            .clone();
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        wear_item(&mut ctx, "backpack").unwrap();
+        drop_item(&mut ctx, "backpack").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("torso").is_none());
+        assert_eq!(
+            ctx.objects.get(&backpack_id).unwrap().location.as_ref(),
+            Some(&room_id)
+        );
+
+        let summary = format_look_self_summary(player, ctx.objects, &anatomy);
+        assert!(!summary.contains("unknown"));
+        assert!(!summary.contains("backpack"));
+    }
+
+    #[tokio::test]
+    async fn put_merges_coins_into_existing_purse_stack() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut purse = factory
+            .create_container_with_spec(
+                "purse",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 3,
+                    max_weight: Some(100),
+                    max_volume: None,
+                    wearable: true,
+                    wear_slot: Some("torso".to_string()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        purse.name = "purse".to_string();
+
+        let proto = factory
+            .create_item("coin", player_id.clone())
+            .await
+            .unwrap();
+
+        let mut in_purse = factory
+            .create_stackable_item("coins", player_id.clone(), Some(proto.id.clone()), 5)
+            .await
+            .unwrap();
+        in_purse.location = Some(purse.id.clone());
+        purse.set_property_list("contents", vec![in_purse.id.clone()]);
+
+        let mut in_hand = factory
+            .create_stackable_item("coins", player_id.clone(), Some(proto.id), 7)
+            .await
+            .unwrap();
+        in_hand.set_property_int("weight", 1);
+        in_hand.location = Some(player_id.clone());
+
+        let purse_id = purse.id.clone();
+        let in_hand_id = in_hand.id.clone();
+        let in_purse_id = in_purse.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(purse_id.clone()));
+        player.set_body_slot("right_hand", Some(in_hand_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(purse_id.clone(), purse);
+        objects.insert(in_purse_id.clone(), in_purse);
+        objects.insert(in_hand_id.clone(), in_hand);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        put_item(&mut ctx, "coins", "purse", None).unwrap();
+
+        let merged = objects.get(&in_purse_id).unwrap();
+        assert_eq!(merged.stack_count(), 12);
+        assert!(objects.get(&in_hand_id).is_none());
+        assert_eq!(objects.get(&purse_id).unwrap().container_contents().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn put_into_unlimited_weight_container_accepts_full_stack() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 5,
+                    max_weight: Some(crate::object::UNLIMITED_WEIGHT),
+                    max_volume: None,
+                    wearable: false,
+                    wear_slot: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.name = "chest".to_string();
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 50)
+            .await
+            .unwrap();
+        bars.set_property_int("weight", 10);
+        bars.location = Some(player_id.clone());
+
+        let chest_id = chest.id.clone();
+        let bars_id = bars.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(bars_id.clone()));
+        player.set_body_slot("torso", Some(chest_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest_id.clone(), chest);
+        objects.insert(bars_id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+        };
+
+        let msg = put_item(&mut ctx, "gold bars", "chest", None).unwrap();
+        assert!(!msg.contains("remain in your hand"));
+
+        let stored_id = objects.get(&chest_id).unwrap().container_contents()[0].clone();
+        assert_eq!(objects.get(&stored_id).unwrap().stack_count(), 50);
+    }
 }

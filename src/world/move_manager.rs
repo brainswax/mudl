@@ -811,10 +811,11 @@ fn verify_at_source(
         {
             Ok(())
         }
+        // Two-handed items may appear in multiple grasp slots; any slot on the holder counts.
         (
-            LocationRef::BodySlot(expected_holder, expected_slot),
-            LocationRef::BodySlot(actual_holder, actual_slot),
-        ) if expected_holder == actual_holder && expected_slot == actual_slot => Ok(()),
+            LocationRef::BodySlot(expected_holder, _),
+            LocationRef::BodySlot(actual_holder, _),
+        ) if expected_holder == actual_holder => Ok(()),
         (LocationRef::Container(expected, _), LocationRef::Container(actual, _))
             if expected == actual =>
         {
@@ -846,6 +847,8 @@ pub fn move_object(
         }
     }
 
+    verify_at_source(obj_id, &src, ctx.objects)?;
+
     if let Some(holder_id) = src.holder_id() {
         prune_creature_body_slots(holder_id, ctx.objects);
     }
@@ -854,8 +857,6 @@ pub fn move_object(
             prune_creature_body_slots(holder_id, ctx.objects);
         }
     }
-
-    verify_at_source(obj_id, &src, ctx.objects)?;
 
     let item = ctx
         .objects
@@ -1447,6 +1448,7 @@ mod tests {
         sword.name = "Greatsword".to_string();
         sword.set_property_string("hand_slot", "both");
         sword.location = Some(player_id.clone());
+        sword.set_carried_slot(Some("left_hand"));
         let sword_id = sword.id.clone();
 
         let mut player = objects.get(&player_id).unwrap().clone();
@@ -1468,5 +1470,66 @@ mod tests {
         assert!(player.body_slot_item("left_hand").is_none());
         assert!(player.body_slot_item("right_hand").is_none());
         assert_eq!(objects.get(&sword_id).unwrap().location.as_ref(), Some(&room_id));
+    }
+
+    #[tokio::test]
+    async fn move_to_unlimited_weight_container_accepts_heavy_stack() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence);
+        let (anatomy, player_id, _, mut objects) = setup().await;
+
+        let chest = factory
+            .create_container_with_spec(
+                "chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 5,
+                    max_weight: Some(crate::object::UNLIMITED_WEIGHT),
+                    max_volume: None,
+                    wearable: false,
+                    wear_slot: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 40)
+            .await
+            .unwrap();
+        bars.set_property_int("weight", 25);
+        bars.location = Some(player_id.clone());
+
+        let chest_id = chest.id.clone();
+        let bars_id = bars.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(bars_id.clone()));
+        player.set_body_slot("torso", Some(chest_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest_id.clone(), chest);
+        objects.insert(bars_id.clone(), bars);
+
+        let mut ctx = MoveContext {
+            objects: &mut objects,
+            anatomy: Some(&anatomy),
+            hooks: MoveHooks::default(),
+            dirty: None,
+        };
+
+        let src = resolve_location(&bars_id, ctx.objects).unwrap();
+        let result = move_object(
+            &mut ctx,
+            &bars_id,
+            src,
+            LocationRef::Container(chest_id.clone(), None),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.units_transferred, Some(40));
+        let stored_id = objects.get(&chest_id).unwrap().container_contents()[0].clone();
+        assert_eq!(objects.get(&stored_id).unwrap().stack_count(), 40);
     }
 }

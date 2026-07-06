@@ -807,4 +807,78 @@ mod tests {
 
         assert!(is_in_player_possession(&player_id, &gem_id, &objects));
     }
+
+    #[test]
+    fn resolve_by_full_typed_id() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("room:test-001");
+
+        let mut sword = bare("item:sword-001", "sword", &player_id);
+        sword.location = Some(room_id.clone());
+
+        let mut objects = HashMap::new();
+        objects.insert(room_id.clone(), bare("room:test-001", "Test", &player_id));
+        objects.insert(sword.id.clone(), sword);
+
+        let result = resolve_object(
+            "item:sword-001",
+            &player_id,
+            Some(&room_id),
+            &objects,
+            ResolveScope::RoomOnly,
+        );
+        assert_eq!(result, TargetResolution::Found(ObjectId::new("item:sword-001")));
+    }
+
+    #[test]
+    fn resolve_by_short_id_not_found_when_absent() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("room:test-001");
+
+        let objects = HashMap::from([(
+            room_id.clone(),
+            bare("room:test-001", "Test", &player_id),
+        )]);
+
+        let result = resolve_object(
+            "missing-item-999",
+            &player_id,
+            Some(&room_id),
+            &objects,
+            ResolveScope::RoomOnly,
+        );
+        assert_eq!(result, TargetResolution::NotFound);
+    }
+
+    #[test]
+    fn resolve_duplicate_names_requires_disambiguation_hint() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("room:test-001");
+
+        let mut first = bare("item:coin-001", "coin", &player_id);
+        first.location = Some(room_id.clone());
+        let mut second = bare("item:coin-002", "coin", &player_id);
+        second.location = Some(room_id.clone());
+
+        let mut objects = HashMap::new();
+        objects.insert(room_id.clone(), bare("room:test-001", "Test", &player_id));
+        objects.insert(first.id.clone(), first);
+        objects.insert(second.id.clone(), second);
+
+        let result = resolve_object(
+            "coin",
+            &player_id,
+            Some(&room_id),
+            &objects,
+            ResolveScope::RoomOnly,
+        );
+        match result {
+            TargetResolution::Ambiguous(msg) => {
+                assert!(msg.contains("coin-001"));
+                assert!(msg.contains("coin-002"));
+                assert!(msg.contains("Which coin do you mean?"));
+            }
+            other => panic!("expected ambiguous, got {other:?}"),
+        }
+    }
 }

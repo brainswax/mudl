@@ -271,4 +271,74 @@ mod tests {
         let reloaded_boots = persistence.load_object(&item_id).await.unwrap().unwrap();
         assert_eq!(reloaded_boots.location.as_ref(), Some(&player_id));
     }
+
+    #[tokio::test]
+    async fn complex_object_graph_roundtrip() {
+        use crate::object::{ContainerSpec, StackableSpec};
+
+        let persistence = memory_persistence().await;
+        let room_id = ObjectId::new("room:test-001");
+        let player_id = ObjectId::new("player:hero-001");
+
+        let room = sample_object("room:test-001", "Test Room");
+        let mut player = sample_object("player:hero-001", "Hero");
+        player.location = Some(room_id.clone());
+
+        let mut backpack = sample_object("item:backpack-001", "backpack");
+        let backpack_id = backpack.id.clone();
+        backpack.apply_container_role(&ContainerSpec {
+            capacity: 5,
+            max_weight: Some(100),
+            max_volume: None,
+            wearable: true,
+            wear_slot: Some("torso".to_string()),
+        });
+
+        let mut coins = sample_object("item:coins-001", "coins");
+        coins.set_property_int("weight", 1);
+        coins.apply_stackable_role(&StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        let coins_id = coins.id.clone();
+        coins.location = Some(backpack_id.clone());
+
+        let mut bars = sample_object("item:bars-001", "gold bar");
+        let bars_id = bars.id.clone();
+        bars.set_property_int("weight", 5);
+        bars.apply_stackable_role(&StackableSpec {
+            count: 3,
+            max_stack: 99,
+        });
+        bars.location = Some(player_id.clone());
+
+        backpack.set_property_list("contents", vec![coins_id.clone()]);
+        player.set_body_slot("torso", Some(backpack_id.clone()));
+        player.set_body_slot("right_hand", Some(bars_id.clone()));
+
+        for obj in [&room, &player, &backpack, &coins, &bars] {
+            persistence.save_object(obj).await.unwrap();
+        }
+
+        let reloaded_player = persistence.load_object(&player_id).await.unwrap().unwrap();
+        assert_eq!(
+            reloaded_player.body_slot_item("torso").as_ref(),
+            Some(&backpack_id)
+        );
+        assert_eq!(
+            reloaded_player.body_slot_item("right_hand").as_ref(),
+            Some(&bars_id)
+        );
+
+        let reloaded_backpack = persistence.load_object(&backpack_id).await.unwrap().unwrap();
+        assert_eq!(reloaded_backpack.container_contents(), vec![coins_id.clone()]);
+
+        let reloaded_coins = persistence.load_object(&coins_id).await.unwrap().unwrap();
+        assert_eq!(reloaded_coins.stack_count(), 20);
+        assert_eq!(reloaded_coins.location.as_ref(), Some(&backpack_id));
+
+        let reloaded_bars = persistence.load_object(&bars_id).await.unwrap().unwrap();
+        assert_eq!(reloaded_bars.stack_count(), 3);
+        assert_eq!(reloaded_bars.location.as_ref(), Some(&player_id));
+    }
 }

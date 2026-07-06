@@ -64,6 +64,9 @@ cargo run --bin repl
 
 # Or use the Makefile
 make run-repl
+
+# Run unit tests (inline #[test] modules across src/)
+cargo test
 ```
 
 On startup you should see something like:
