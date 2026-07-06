@@ -106,6 +106,11 @@
   location=scene-mailbox
 @end
 
+@item mailbox-folded-note
+  prototype=folded-note
+  location=scene-mailbox
+@end
+
 @item scene-chest
   prototype=travel-chest
   location=the-void
@@ -128,10 +133,5 @@
 
 @item chest-tinderbox
   prototype=tinderbox
-  location=scene-chest
-@end
-
-@item chest-folded-note
-  prototype=folded-note
   location=scene-chest
 @end

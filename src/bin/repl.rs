@@ -346,7 +346,7 @@ async fn main() -> Result<()> {
                         println!("  wield <item>                - hold/wield an item in your hand");
                         println!("  read <object>               - read text on a note, sign, or mailbox");
                         println!("  lock <container>            - lock a closed container");
-                        println!("  unlock <container> with <key> - unlock with a matching key");
+                        println!("  unlock <container> [with <key>] - unlock (auto-finds key if omitted)");
                         println!("  wear <item>                 - wear a container or garment");
                         println!("  go <dir>                    - move to another location (e.g. go north)");
                         println!(
@@ -715,7 +715,7 @@ async fn main() -> Result<()> {
                         match parse_unlock_args(&rest) {
                             Ok((container, key)) => {
                                 let mut ctx = session.inventory_context();
-                                match unlock_container(&mut ctx, &container, &key) {
+                                match unlock_container(&mut ctx, &container, key.as_deref()) {
                                     Ok(msg) => {
                                         println!("{msg}");
                                         if let Err(e) =

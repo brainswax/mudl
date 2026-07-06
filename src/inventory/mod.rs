@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
 use crate::display::{
@@ -35,6 +35,8 @@ pub enum InventoryError {
     ContainerLocked(String),
     NoLock(String),
     WrongKey(String),
+    /// No carried key matches the container's lock (auto-unlock).
+    NoMatchingKey(String),
     NotKey(String),
     NotContainer,
     NotWearable,
@@ -73,6 +75,9 @@ impl fmt::Display for InventoryError {
             Self::ContainerLocked(name) => write!(f, "The {name} is locked."),
             Self::NoLock(name) => write!(f, "The {name} has no lock."),
             Self::WrongKey(name) => write!(f, "The {name} doesn't fit that lock."),
+            Self::NoMatchingKey(name) => {
+                write!(f, "You aren't carrying a key that fits the {name}.")
+            }
             Self::NotKey(name) => write!(f, "The {name} isn't a key."),
             Self::NotContainer => write!(f, "That isn't a container."),
             Self::NotWearable => write!(f, "You can't wear that."),
@@ -768,19 +773,122 @@ fn ensure_container_open(container: &Object) -> Result<(), InventoryError> {
     Ok(())
 }
 
-/// Parse `unlock <container> with <key>`.
-pub fn parse_unlock_args(rest: &str) -> Result<(String, String), InventoryError> {
-    let (container, key) = rest.split_once(" with ").ok_or_else(|| {
-        InventoryError::InvalidTarget("Usage: unlock <container> with <key>".into())
-    })?;
-    let container = container.trim().to_string();
-    let key = key.trim().to_string();
-    if container.is_empty() || key.is_empty() {
+/// Parse `unlock <container>` or `unlock <container> with <key>`.
+pub fn parse_unlock_args(rest: &str) -> Result<(String, Option<String>), InventoryError> {
+    let rest = rest.trim();
+    if rest.is_empty() {
         return Err(InventoryError::InvalidTarget(
-            "Usage: unlock <container> with <key>".into(),
+            "Usage: unlock <container> [with <key>]".into(),
         ));
     }
+    let (container, key) = match rest.split_once(" with ") {
+        Some((container, key)) => {
+            let container = container.trim().to_string();
+            let key = key.trim().to_string();
+            if container.is_empty() || key.is_empty() {
+                return Err(InventoryError::InvalidTarget(
+                    "Usage: unlock <container> [with <key>]".into(),
+                ));
+            }
+            (container, Some(key))
+        }
+        None => (rest.to_string(), None),
+    };
     Ok((container, key))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KeyMatch {
+    id: ObjectId,
+    location_hint: String,
+}
+
+fn key_location_hint(
+    player: &Object,
+    key_id: &ObjectId,
+    container_hint: Option<&str>,
+) -> String {
+    for (slot, id) in player.body_slots() {
+        if id == *key_id {
+            return format!("in your {}", slot_display_name(&slot));
+        }
+    }
+    if let Some(hint) = container_hint {
+        return format!("in {hint}");
+    }
+    "carried".to_string()
+}
+
+/// Find keys in player possession (body slots and open carried containers) that fit `container`.
+fn find_matching_keys_in_possession(
+    player_id: &ObjectId,
+    container: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> Vec<KeyMatch> {
+    let Some(player) = objects.get(player_id) else {
+        return Vec::new();
+    };
+
+    let mut matches = Vec::new();
+    let mut queue: VecDeque<(ObjectId, Option<String>)> = VecDeque::new();
+    let mut visited = HashMap::new();
+
+    for item_id in player.carried_body_items() {
+        queue.push_back((item_id, None));
+    }
+
+    while let Some((item_id, container_hint)) = queue.pop_front() {
+        if visited.contains_key(&item_id) {
+            continue;
+        }
+        visited.insert(item_id.clone(), ());
+
+        let Some(obj) = objects.get(&item_id) else {
+            continue;
+        };
+        if !obj.is_active() {
+            continue;
+        }
+
+        if obj.is_key() && Object::key_unlocks_container(obj, container) {
+            matches.push(KeyMatch {
+                id: item_id.clone(),
+                location_hint: key_location_hint(player, &item_id, container_hint.as_deref()),
+            });
+        }
+
+        if obj.is_container() && obj.container_is_open() {
+            let hint = obj.name.to_lowercase();
+            for content_id in obj.container_contents() {
+                queue.push_back((content_id, Some(hint.clone())));
+            }
+        }
+    }
+
+    matches
+}
+
+fn format_ambiguous_keys_message(
+    container_name: &str,
+    matches: &[KeyMatch],
+    objects: &HashMap<ObjectId, Object>,
+) -> String {
+    let mut lines = vec![format!(
+        "You have more than one key that fits the {}:",
+        container_name.to_lowercase()
+    )];
+    for m in matches {
+        let name = objects
+            .get(&m.id)
+            .map(|o| o.name.to_lowercase())
+            .unwrap_or_default();
+        lines.push(format!("  {} ({})", name, m.location_hint));
+    }
+    lines.push(format!(
+        "Try: unlock {} with <key>",
+        container_name.to_lowercase()
+    ));
+    lines.join("\n")
 }
 
 fn resolve_room_or_carried_container(
@@ -899,11 +1007,14 @@ pub fn lock_container(
     Ok(format!("You lock the {}.", container.name.to_lowercase()))
 }
 
-/// Unlock a container using a matching key (carried or in the room).
+/// Unlock a container using a matching key.
+///
+/// When `key_name` is `None`, searches player possession (body slots and open carried
+/// containers) for a single matching key.
 pub fn unlock_container(
     ctx: &mut InventoryContext<'_>,
     container_name: &str,
-    key_name: &str,
+    key_name: Option<&str>,
 ) -> Result<String, InventoryError> {
     let container_id = resolve_room_or_carried_container(ctx, container_name)?;
     let container = ctx
@@ -925,19 +1036,46 @@ pub fn unlock_container(
         ));
     }
 
-    let room_id = ctx.room_id.cloned();
-    let key_id = resolve_inventory_target(
-        key_name,
-        room_id.as_ref(),
-        ctx.player_id,
-        ctx.objects,
-        ResolveScope::CarriedOrGround,
-    )?;
+    let key_id = match key_name {
+        Some(name) => {
+            let room_id = ctx.room_id.cloned();
+            resolve_inventory_target(
+                name,
+                room_id.as_ref(),
+                ctx.player_id,
+                ctx.objects,
+                ResolveScope::CarriedOrGround,
+            )?
+        }
+        None => {
+            let matches =
+                find_matching_keys_in_possession(ctx.player_id, &container, ctx.objects);
+            match matches.len() {
+                0 => {
+                    return Err(InventoryError::NoMatchingKey(
+                        container.name.to_lowercase(),
+                    ));
+                }
+                1 => matches[0].id.clone(),
+                _ => {
+                    return Err(InventoryError::InvalidTarget(
+                        format_ambiguous_keys_message(
+                            &container.name,
+                            &matches,
+                            ctx.objects,
+                        ),
+                    ));
+                }
+            }
+        }
+    };
 
     let key = ctx
         .objects
         .get(&key_id)
-        .ok_or_else(|| InventoryError::NotFound(key_name.to_string()))?
+        .ok_or_else(|| {
+            InventoryError::NotFound(key_name.unwrap_or("key").to_string())
+        })?
         .clone();
 
     if !key.is_key() {
@@ -3430,7 +3568,7 @@ mod tests {
         let err = open_container(&mut ctx, "chest").unwrap_err();
         assert_eq!(err, InventoryError::ContainerLocked("travel chest".to_string()));
 
-        let unlock_msg = unlock_container(&mut ctx, "chest", "brass key").unwrap();
+        let unlock_msg = unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
         assert_eq!(unlock_msg, "You unlock the travel chest with the brass key.");
 
         let open_msg = open_container(&mut ctx, "chest").unwrap();
@@ -3476,7 +3614,266 @@ mod tests {
             dirty: None,
         };
 
-        let err = unlock_container(&mut ctx, "chest", "iron key").unwrap_err();
+        let err = unlock_container(&mut ctx, "chest", Some("iron key")).unwrap_err();
         assert_eq!(err, InventoryError::WrongKey("iron key".to_string()));
+    }
+
+    #[test]
+    fn parse_unlock_args_accepts_container_only() {
+        let (container, key) = parse_unlock_args("travel chest").unwrap();
+        assert_eq!(container, "travel chest");
+        assert_eq!(key, None);
+    }
+
+    #[test]
+    fn parse_unlock_args_accepts_explicit_key() {
+        let (container, key) = parse_unlock_args("chest with brass key").unwrap();
+        assert_eq!(container, "chest");
+        assert_eq!(key.as_deref(), Some("brass key"));
+    }
+
+    #[tokio::test]
+    async fn unlock_auto_finds_key_in_hand() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = unlock_container(&mut ctx, "chest", None).unwrap();
+        assert_eq!(msg, "You unlock the travel chest with the brass key.");
+    }
+
+    #[tokio::test]
+    async fn unlock_auto_finds_key_in_open_carried_container() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let mut pouch = factory
+            .create_container_with_spec(
+                "belt pouch",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+        pouch.add_to_list_property("contents", key.id.clone());
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(pouch.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(pouch.id.clone(), pouch);
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = unlock_container(&mut ctx, "chest", None).unwrap();
+        assert_eq!(msg, "You unlock the chest with the brass key.");
+    }
+
+    #[tokio::test]
+    async fn unlock_auto_fails_without_matching_key() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+        objects.insert(chest.id.clone(), chest);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = unlock_container(&mut ctx, "chest", None).unwrap_err();
+        assert_eq!(err, InventoryError::NoMatchingKey("chest".to_string()));
+    }
+
+    #[tokio::test]
+    async fn unlock_auto_ignores_key_in_closed_carried_container() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let mut pouch = factory
+            .create_container_with_spec(
+                "belt pouch",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+        pouch.add_to_list_property("contents", key.id.clone());
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(pouch.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(pouch.id.clone(), pouch);
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = unlock_container(&mut ctx, "chest", None).unwrap_err();
+        assert_eq!(err, InventoryError::NoMatchingKey("chest".to_string()));
+    }
+
+    #[tokio::test]
+    async fn unlock_auto_requires_disambiguation_for_multiple_keys() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let key_a = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+        let key_b = factory
+            .create_key("spare brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key_a.id.clone()));
+        player.set_body_slot("left_hand", Some(key_b.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(key_a.id.clone(), key_a);
+        objects.insert(key_b.id.clone(), key_b);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = unlock_container(&mut ctx, "chest", None).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("more than one key"));
+        assert!(msg.contains("brass key"));
+        assert!(msg.contains("spare brass key"));
+        assert!(msg.contains("unlock chest with <key>"));
     }
 }

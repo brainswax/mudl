@@ -258,6 +258,12 @@ mod tests {
             .unwrap();
         assert_eq!(key.location, "scene-mailbox");
 
+        let note = instances
+            .iter()
+            .find(|i| i.base_name == "mailbox-folded-note")
+            .unwrap();
+        assert_eq!(note.location, "scene-mailbox");
+
         let blade = instances
             .iter()
             .find(|i| i.base_name == "chest-chipped-blade")

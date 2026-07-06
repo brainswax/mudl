@@ -306,7 +306,7 @@ pub async fn bootstrap_world<P: Persistence>(
 mod tests {
     use super::*;
     use crate::inventory::{
-        close_container, open_container, put_item, read_item, take_item, unlock_container,
+        close_container, open_container, read_item, take_item, unlock_container,
         InventoryContext, InventoryError,
     };
     use crate::mudl::load_module;
@@ -359,7 +359,7 @@ mod tests {
             .filter_map(|id| objects.iter().find(|o| &o.id == id))
             .map(|o| o.name.as_str())
             .collect();
-        assert_eq!(mailbox_contents, vec!["Brass Key"]);
+        assert_eq!(mailbox_contents, vec!["Brass Key", "Folded Note"]);
 
         let key = objects.iter().find(|o| o.name == "Brass Key").unwrap();
         assert!(key.is_key());
@@ -382,7 +382,7 @@ mod tests {
         assert!(chest_contents.contains(&"Iron Lantern"));
         assert!(chest_contents.contains(&"Trail Rations"));
         assert!(chest_contents.contains(&"Tinderbox"));
-        assert!(chest_contents.contains(&"Folded Note"));
+        assert!(!chest_contents.contains(&"Folded Note"));
 
         let note = objects
             .iter()
@@ -434,8 +434,11 @@ mod tests {
         let open_mailbox = open_container(&mut ctx, "mailbox").unwrap();
         assert_eq!(
             open_mailbox,
-            "You open the worn mailbox. Inside you see a brass key."
+            "You open the worn mailbox. Inside you see a brass key and folded note."
         );
+
+        let read_note = read_item(&ctx, "note").unwrap();
+        assert!(read_note.contains("Mind the dark below"));
 
         let take_key = take_item(&mut ctx, "key").unwrap();
         assert!(take_key.contains("pick up"));
@@ -447,7 +450,7 @@ mod tests {
             InventoryError::ContainerLocked("travel chest".to_string())
         );
 
-        let unlock_msg = unlock_container(&mut ctx, "chest", "key").unwrap();
+        let unlock_msg = unlock_container(&mut ctx, "chest", None).unwrap();
         assert_eq!(
             unlock_msg,
             "You unlock the travel chest with the brass key."
@@ -455,10 +458,7 @@ mod tests {
 
         let open_chest = open_container(&mut ctx, "chest").unwrap();
         assert!(open_chest.starts_with("You open the travel chest."));
-        assert!(open_chest.contains("folded note"));
-
-        let read_note = read_item(&ctx, "note").unwrap();
-        assert!(read_note.contains("Mind the dark below"));
+        assert!(!open_chest.contains("folded note"));
 
         close_container(&mut ctx, "mailbox").unwrap();
         let mailbox = ctx
