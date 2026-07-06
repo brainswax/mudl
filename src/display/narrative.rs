@@ -20,6 +20,7 @@ fn format_value_narrative(value: &Value, objects: &HashMap<ObjectId, Object>) ->
     match value {
         Value::String(s) => s.clone(),
         Value::Int(n) => n.to_string(),
+        Value::Float(f) => crate::object::format_weight_amount(*f),
         Value::Bool(b) => b.to_string(),
         Value::ObjectRef(id) => object_name(id, objects),
         Value::List(items) => format!(
@@ -134,20 +135,24 @@ pub fn narrate_no_exit(direction: &str) -> String {
     format!("You can't go {direction} from here.")
 }
 
+/// Builder: field set on an object via `@set`.
+pub fn narrate_field_set(obj: &Object, key: &str) -> String {
+    format!("You set {key} on {}.", obj.name)
+}
+
+/// Builder: field removed from an object via `@unset`.
+pub fn narrate_field_unset(obj: &Object, key: &str) -> String {
+    format!("You clear {key} from {}.", obj.name)
+}
+
 /// Builder: property added to an object.
 pub fn narrate_property_added(obj: &Object, prop_name: &str) -> String {
-    format!(
-        "You inscribe \"{prop_name}\" upon {}.",
-        obj.name
-    )
+    format!("You inscribe \"{prop_name}\" upon {}.", obj.name)
 }
 
 /// Builder: verb added to an object.
 pub fn narrate_verb_added(obj: &Object, verb_name: &str) -> String {
-    format!(
-        "You teach {} the \"{verb_name}\" verb.",
-        obj.name
-    )
+    format!("You teach {} the \"{verb_name}\" verb.", obj.name)
 }
 
 /// Wizard: soft-delete an object.
@@ -182,16 +187,12 @@ pub fn narrate_not_in_cache() -> String {
 
 /// Builder: module reloaded.
 pub fn narrate_module_reloaded(universe: &str, world: &str) -> String {
-    format!(
-        "Reality shimmers as \"{universe}\" / \"{world}\" reloads from disk."
-    )
+    format!("Reality shimmers as \"{universe}\" / \"{world}\" reloads from disk.")
 }
 
 /// Builder: module bundled.
 pub fn narrate_module_bundled(module_dir: &str, output_dir: &str, file_count: usize) -> String {
-    format!(
-        "You bundle {file_count} files from \"{module_dir}\" into \"{output_dir}\"."
-    )
+    format!("You bundle {file_count} files from \"{module_dir}\" into \"{output_dir}\".")
 }
 
 /// Immersive creation failure.
@@ -200,7 +201,11 @@ pub fn narrate_create_failed(reason: &str) -> String {
 }
 
 /// Resolve an owner ID to a friendly label for builder examine.
-pub fn owner_label(owner: &ObjectId, observer: &ObjectId, objects: &HashMap<ObjectId, Object>) -> String {
+pub fn owner_label(
+    owner: &ObjectId,
+    observer: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> String {
     if owner == observer {
         "you".to_string()
     } else {
@@ -209,10 +214,7 @@ pub fn owner_label(owner: &ObjectId, observer: &ObjectId, objects: &HashMap<Obje
 }
 
 /// Resolve a location ID to a friendly label for builder examine.
-pub fn location_label(
-    location: &ObjectId,
-    objects: &HashMap<ObjectId, Object>,
-) -> String {
+pub fn location_label(location: &ObjectId, objects: &HashMap<ObjectId, Object>) -> String {
     object_name(location, objects)
 }
 

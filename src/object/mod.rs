@@ -1,12 +1,26 @@
+mod editor;
+mod factory;
+mod fields;
+mod location;
+mod roles;
+mod weight;
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use bitflags::bitflags;
 
 use crate::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
-use crate::inventory::describe_carried;
-use crate::mudl::{AnatomyRegistry, PlayerTemplate};
-use crate::persistence::Persistence;
+pub use editor::{parse_value_literal, resolve_object_ref, set_field, unset_field, EditError};
+pub use factory::ObjectFactory;
+pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS};
+pub use location::LocationRef;
+pub use roles::{ContainerSpec, ItemPhysSpec, ObjectRoles, RoleKind, StackableSpec, WearableSpec};
+pub use weight::{
+    format_weight_amount, is_unlimited_weight, owner_player_of_container, player_carried_weight,
+    player_weight_bearer, transfer_weight, weight_limit_applies, would_exceed_player_max_weight,
+    DEFAULT_PLAYER_MAX_WEIGHT, UNLIMITED_WEIGHT,
+};
 
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,13 +53,13 @@ impl std::fmt::Display for ObjectId {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Behavior {
     pub code: String,
     pub permissions: PermissionFlags,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Property {
     pub name: String,
     pub value: Value,
@@ -53,24 +67,25 @@ pub struct Property {
     pub behavior: Option<Behavior>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Verb {
     pub name: String,
     pub code: String,
     pub permissions: PermissionFlags,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Value {
     String(String),
     Int(i64),
+    Float(f64),
     Bool(bool),
     List(Vec<Value>),
     ObjectRef(ObjectId),
     Map(HashMap<String, Value>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Object {
     pub id: ObjectId,
     pub name: String,
@@ -89,6 +104,9 @@ pub struct Object {
     #[serde(default)]
     pub deleted_at: Option<String>,
 }
+
+/// Maximum length of the name segment in generated object IDs.
+pub const ID_BASE_MAX_LEN: usize = 16;
 
 /// Convert a display name into a lowercase hyphenated slug for object IDs.
 pub fn slugify_display_name(name: &str) -> String {
@@ -113,125 +131,36 @@ pub fn slugify_display_name(name: &str) -> String {
     }
 }
 
+/// Truncate a slug to [`ID_BASE_MAX_LEN`] on a char boundary.
+pub fn constrain_id_base(slug: &str) -> String {
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        return "object".to_string();
+    }
+    if slug.len() <= ID_BASE_MAX_LEN {
+        return slug.to_string();
+    }
+    let mut end = ID_BASE_MAX_LEN;
+    while end > 0 && !slug.is_char_boundary(end) {
+        end -= 1;
+    }
+    let trimmed = slug[..end].trim_end_matches('-');
+    if trimmed.is_empty() {
+        "object".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Slugify a display name and constrain it for use in object IDs.
+pub fn id_base_from_display_name(name: &str) -> String {
+    constrain_id_base(&slugify_display_name(name))
+}
+
 pub fn generate_object_id(obj_type: &str, base_name: &str, counter: u32) -> ObjectId {
     let ty = obj_type.to_ascii_lowercase();
-    let base = base_name.to_ascii_lowercase();
+    let base = constrain_id_base(&base_name.to_ascii_lowercase());
     ObjectId(format!("{ty}:{base}-{counter:03x}"))
-}
-
-pub struct ObjectFactory<P: Persistence> {
-    persistence: P,
-}
-
-impl<P: Persistence> ObjectFactory<P> {
-    pub fn new(persistence: P) -> Self {
-        Self { persistence }
-    }
-
-    pub fn persistence(&self) -> &P {
-        &self.persistence
-    }
-
-    pub async fn create_player(
-        &self,
-        display_name: &str,
-        owner: ObjectId,
-        anatomy: &AnatomyRegistry,
-    ) -> anyhow::Result<Object> {
-        let template = anatomy
-            .default_template()
-            .cloned()
-            .unwrap_or(PlayerTemplate {
-                name: "default".to_string(),
-                creature: "human".to_string(),
-                gender: "neutral".to_string(),
-            });
-        let slug = slugify_display_name(display_name);
-        let mut player = self
-            .create_named("player", &slug, display_name, owner)
-            .await?;
-        player.init_body(&template);
-        self.persistence.save_object(&player).await?;
-        Ok(player)
-    }
-
-    pub async fn create_item(&self, display_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(display_name);
-        let mut item = self
-            .create_named("item", &slug, display_name, owner)
-            .await?;
-        item.init_item_defaults(true);
-        self.persistence.save_object(&item).await?;
-        Ok(item)
-    }
-
-    pub async fn create_container(
-        &self,
-        display_name: &str,
-        owner: ObjectId,
-        capacity: u32,
-        wearable: bool,
-    ) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(display_name);
-        let mut container = self
-            .create_named("item", &slug, display_name, owner)
-            .await?;
-        container.init_container_defaults(capacity, wearable);
-        self.persistence.save_object(&container).await?;
-        Ok(container)
-    }
-
-    /// Create an object using a slug for the ID and a separate display name.
-    pub async fn create_named(
-        &self,
-        type_name: &str,
-        slug: &str,
-        display_name: &str,
-        owner: ObjectId,
-    ) -> anyhow::Result<Object> {
-        let slug = slugify_display_name(slug);
-        let type_name = type_name.to_ascii_lowercase();
-        let counter = self
-            .persistence
-            .get_next_id_counter(&type_name, &slug)
-            .await?;
-        let id = generate_object_id(&type_name, &slug, counter);
-        self.persistence
-            .increment_counter(&type_name, &slug)
-            .await?;
-
-        let object = Object {
-            id,
-            name: display_name.to_string(),
-            aliases: Vec::new(),
-            location: None,
-            prototype: None,
-            owner,
-            permissions: PermissionFlags::OWNER,
-            properties: HashMap::new(),
-            verbs: HashMap::new(),
-            event_handlers: HashMap::new(),
-            is_deleted: false,
-            deleted_at: None,
-        };
-
-        self.persistence.save_object(&object).await?;
-        Ok(object)
-    }
-
-    /// Create an object where the slug and display name are the same (bootstrap/tests).
-    pub async fn create(
-        &self,
-        type_name: &str,
-        slug: &str,
-        owner: ObjectId,
-    ) -> anyhow::Result<Object> {
-        self.create_named(type_name, slug, slug, owner).await
-    }
-
-    pub async fn load_object(&self, id: &ObjectId) -> anyhow::Result<Option<Object>> {
-        self.persistence.load_object(id).await
-    }
 }
 
 impl Object {
@@ -360,23 +289,6 @@ impl Object {
             .collect()
     }
 
-    /// Initialize a naked player from a MUDL player template and creature definition.
-    pub fn init_body(&mut self, template: &PlayerTemplate) {
-        self.add_property(Property {
-            name: "creature".to_string(),
-            value: Value::String(template.creature.clone()),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-        self.add_property(Property {
-            name: "gender".to_string(),
-            value: Value::String(template.gender.clone()),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-        self.set_property_map("body_slots", HashMap::new());
-    }
-
     pub fn creature_name(&self) -> Option<String> {
         self.get_property("creature")
             .or_else(|| self.get_property("body_plan"))
@@ -404,6 +316,7 @@ impl Object {
         })
     }
 
+    /// Body-slot map (slot name → item id). Graph logic lives in [`crate::world::possession`].
     pub fn body_slots(&self) -> HashMap<String, ObjectId> {
         self.get_object_map_property("body_slots")
     }
@@ -477,183 +390,39 @@ impl Object {
     }
 }
 
-fn format_value(value: &Value, objects: &HashMap<ObjectId, Object>) -> String {
-    crate::display::format_property_value(value, objects)
-}
-
-fn format_exits_player(exits: &HashMap<String, ObjectId>) -> String {
-    if exits.is_empty() {
-        return String::new();
-    }
-    let mut dirs: Vec<&str> = exits.keys().map(String::as_str).collect();
-    dirs.sort_unstable();
-    format!("Obvious exits: {}", dirs.join(", "))
-}
-
-fn format_contents_player(obj: &Object, ctx: &DisplayContext) -> String {
-    let contents: Vec<String> = obj
-        .contents(&ctx.objects)
-        .into_iter()
-        .filter(|item| item.id != ctx.observer)
-        .map(|item| match item.object_type() {
-            "player" => item.name.clone(),
-            "item" | "thing" => {
-                if let Some(desc) = item.get_description() {
-                    format!("{} — {}", item.name, desc)
-                } else {
-                    item.name.clone()
-                }
-            }
-            _ => item.name.clone(),
-        })
-        .collect();
-
-    if contents.is_empty() {
-        String::new()
-    } else {
-        format!("You see: {}", contents.join("; "))
-    }
-}
-
-fn format_properties_builder(obj: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    if obj.properties.is_empty() {
-        return "  (none)".to_string();
-    }
-    let mut names: Vec<&str> = obj.properties.keys().map(String::as_str).collect();
-    names.sort_unstable();
-    names
-        .into_iter()
-        .map(|name| {
-            let prop = &obj.properties[name];
-            format!(
-                "  {}: {}",
-                name,
-                format_value(&prop.value, objects)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn format_verbs_builder(obj: &Object) -> String {
-    if obj.verbs.is_empty() {
-        return "  (none)".to_string();
-    }
-    let mut names: Vec<&str> = obj.verbs.keys().map(String::as_str).collect();
-    names.sort_unstable();
-    names
-        .into_iter()
-        .map(|name| {
-            let verb = &obj.verbs[name];
-            format!("  {}: {}", name, verb.code)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 fn describe_room_player(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![obj.name.clone()];
-
-    if ctx.flags.contains(DisplayFlags::DARK) {
-        lines.push("It is pitch black.".to_string());
-    } else if let Some(desc) = obj.get_description() {
-        lines.push(desc);
-    }
-
-    let exits = format_exits_player(&obj.get_exits());
-    if !exits.is_empty() {
-        lines.push(exits);
-    }
-
-    let contents = format_contents_player(obj, ctx);
-    if !contents.is_empty() {
-        lines.push(contents);
-    }
-
-    lines.join("\n")
+    crate::display::format_room_look_player(obj, ctx)
 }
 
 fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![obj.name.clone()];
-    if let Some(desc) = obj.get_description() {
-        lines.push(desc);
-    }
+    let brief = ctx.flags.contains(DisplayFlags::BRIEF);
+
     if obj.object_type() == "player" && obj.id == ctx.observer {
-        lines.push(describe_carried(obj, &ctx.objects, &ctx.anatomy));
+        let player = ctx.objects.get(&ctx.observer).unwrap_or(obj);
+        if brief {
+            return crate::display::format_look_self_summary(player, &ctx.objects, &ctx.anatomy);
+        }
+        return crate::display::format_examine_self(player, &ctx.objects, &ctx.anatomy);
     }
-    lines.join("\n")
+
+    // In-character `examine`: natural sentences, no leading name, stats when relevant.
+    if !brief {
+        if obj.is_container() {
+            return crate::display::format_examine_container_player(obj, &ctx.objects);
+        }
+        return crate::display::format_examine_item_player(obj);
+    }
+
+    // In-character `look`: short natural prose, no leading name (IRC-friendly).
+    crate::display::format_look_object_player(obj, &ctx.objects)
 }
 
 fn describe_room_builder(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![obj.name.clone()];
-
-    lines.push(format!(
-        "Owner: {}",
-        crate::display::owner_label(&obj.owner, &ctx.observer, &ctx.objects)
-    ));
-
-    if let Some(desc) = obj.get_description() {
-        lines.push(desc);
-    }
-
-    let exits = obj.get_exits();
-    if !exits.is_empty() {
-        let mut dirs: Vec<&str> = exits.keys().map(String::as_str).collect();
-        dirs.sort_unstable();
-        let exit_list: Vec<String> = dirs
-            .into_iter()
-            .map(|dir| {
-                format!(
-                    "{} to {}",
-                    dir,
-                    crate::display::object_name(&exits[dir], &ctx.objects)
-                )
-            })
-            .collect();
-        lines.push(format!("Exits: {}", exit_list.join(", ")));
-    }
-
-    let contents: Vec<String> = obj
-        .contents(&ctx.objects)
-        .into_iter()
-        .map(|item| item.name.clone())
-        .collect();
-    if !contents.is_empty() {
-        lines.push(format!("Present: {}", contents.join(", ")));
-    }
-
-    lines.push("Properties:".to_string());
-    lines.push(format_properties_builder(obj, &ctx.objects));
-    lines.push("Verbs:".to_string());
-    lines.push(format_verbs_builder(obj));
-
-    lines.join("\n")
+    crate::display::format_builder_examine_room(obj, ctx)
 }
 
 fn describe_entity_builder(obj: &Object, ctx: &DisplayContext) -> String {
-    let mut lines = vec![obj.name.clone()];
-
-    lines.push(format!(
-        "Owner: {}",
-        crate::display::owner_label(&obj.owner, &ctx.observer, &ctx.objects)
-    ));
-
-    if let Some(loc) = &obj.location {
-        lines.push(format!(
-            "Location: {}",
-            crate::display::location_label(loc, &ctx.objects)
-        ));
-    }
-    if let Some(desc) = obj.get_description() {
-        lines.push(desc);
-    }
-
-    lines.push("Properties:".to_string());
-    lines.push(format_properties_builder(obj, &ctx.objects));
-    lines.push("Verbs:".to_string());
-    lines.push(format_verbs_builder(obj));
-
-    lines.join("\n")
+    crate::display::format_builder_examine_entity(obj, ctx)
 }
 
 impl Describable for Object {
@@ -698,5 +467,184 @@ mod tests {
     fn generate_object_id_is_always_lowercase() {
         let id = generate_object_id("Sword", "Rusty-Sword", 1);
         assert_eq!(id.as_str(), "sword:rusty-sword-001");
+    }
+
+    #[test]
+    fn constrain_id_base_truncates_long_names() {
+        let long = slugify_display_name("extraordinarily-long-container-name");
+        assert!(long.len() > ID_BASE_MAX_LEN);
+        let base = constrain_id_base(&long);
+        assert!(base.len() <= ID_BASE_MAX_LEN);
+        assert_eq!(base, "extraordinarily");
+    }
+
+    #[test]
+    fn id_base_from_display_name_is_bounded() {
+        let base = id_base_from_display_name("Purse");
+        assert_eq!(base, "purse");
+        assert!(base.len() <= ID_BASE_MAX_LEN);
+    }
+
+    #[test]
+    fn direct_look_stackable_shows_quantity() {
+        let owner = ObjectId::new("player:admin-001");
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(owner.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.apply_stackable_role(&StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        coins.add_property(Property {
+            name: "description".to_string(),
+            value: Value::String("Shiny gold coins.".to_string()),
+            permissions: PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(coins.id.clone(), coins.clone());
+
+        let look_ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_objects(objects.clone())
+            .with_flags(DisplayFlags::BRIEF);
+        let look_out = coins.describe(&look_ctx);
+        assert_eq!(look_out, "Shiny gold coins.");
+
+        let examine_ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let examine_out = coins.describe(&examine_ctx);
+        assert!(examine_out.contains("Shiny gold coins."));
+        assert!(examine_out.contains("The stack of 20 coins weighs 20 in total."));
+        assert!(!examine_out.starts_with("20 coins"));
+    }
+
+    #[test]
+    fn look_self_uses_fresh_player_from_context() {
+        use crate::display::DisplayFlags;
+        use crate::mudl::load_module;
+
+        let anatomy = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .anatomy
+            .clone();
+        let owner = ObjectId::new("player:hero-001");
+
+        let mut stale_player = Object {
+            id: owner.clone(),
+            name: "Hero".to_string(),
+            aliases: Vec::new(),
+            location: Some(ObjectId::new("room:void-001")),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        stale_player.init_creature_role(anatomy.player_template("default").unwrap());
+
+        let mut fresh_player = stale_player.clone();
+        let mut bars = Object {
+            id: ObjectId::new("item:gold-bar-001"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(owner.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        bars.apply_stackable_role(&StackableSpec {
+            count: 1,
+            max_stack: 99,
+        });
+        fresh_player.set_body_slot("right_hand", Some(bars.id.clone()));
+
+        let mut objects = HashMap::new();
+        objects.insert(bars.id.clone(), bars);
+        objects.insert(owner.clone(), fresh_player);
+
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
+            .with_objects(objects)
+            .with_anatomy(anatomy)
+            .with_flags(DisplayFlags::BRIEF);
+
+        let output = stale_player.describe(&ctx);
+        assert!(
+            output.contains("gold bar"),
+            "look self should use updated body slots from context, got: {output}"
+        );
+    }
+
+    #[test]
+    fn room_look_shows_stackable_quantity() {
+        let owner = ObjectId::new("player:admin-001");
+        let room_id = ObjectId::new("room:void-001");
+        let mut room = Object {
+            id: room_id.clone(),
+            name: "The Void".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        room.add_property(Property {
+            name: "description".to_string(),
+            value: Value::String("Empty.".to_string()),
+            permissions: PermissionFlags::EVERYONE,
+            behavior: None,
+        });
+
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.apply_stackable_role(&StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+
+        let mut objects = HashMap::new();
+        objects.insert(room.id.clone(), room.clone());
+        objects.insert(coins.id.clone(), coins);
+
+        let ctx = DisplayContext::new(owner, DisplayMode::Player).with_objects(objects);
+        let output = room.describe(&ctx);
+        assert!(output.contains("You see 20 coins here."));
     }
 }

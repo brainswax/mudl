@@ -65,13 +65,15 @@ Type `help` at the prompt to see the list of commands at any time.
 | `create <type> <name...>` | Create a new object at your current location  | `create sword Rusty Sword`           |
 | `list`                   | Builder: names in session working memory         | `list`                               |
 | `look [target]` (`l`)    | Immersive player view (current room if no target) | `look`, `look here`, `look daisy`   |
-| `examine [target]` (`x`) | Builder view: properties, verbs, named exits     | `examine`, `examine daisy`           |
+| `examine [target]` (`x`) | In-game detail; `self` shows gear, slot use, weight | `examine self`, `examine self body`, `examine coins.parent` |
+| `@examine [target] [parent]` | Wizard: properties, anatomy, prototype chain | `@examine self`, `@examine coins parent` |
 | `@dump [target]`         | Full JSON dump of an object (debug mode)         | `@dump room:the-void-001`            |
+| `@create <type> <name...> [key=value...]` | Wizard create with role options | `@create container "Leather Bag" capacity=8 max_weight=40` |
 | `go <dir>`               | Move in a direction from the current room        | `go north`                           |
 | `inventory` (`i`)        | Show hands, pockets, worn containers, and contents | `i`                                |
 | `get` / `take <item>`    | Pick up an item from the ground (not held items) | `take sword`                         |
 | `drop <item>`            | Drop a carried item into the room                | `drop coin`                          |
-| `put <item> in <container>` | Stow a carried item in a container            | `put coin in wallet`                 |
+| `put [count] <item> in <container>` | Stow carried items (optional stack count) | `put 10 coins in purse`              |
 | `remove <item> from <container>` | Take an item out of a container          | `remove coin from wallet`            |
 | `wield <item>`           | Hold or wield an item in your hand(s)             | `wield sword`                        |
 | `wear <item>`            | Wear a container or garment                      | `wear backpack`                      |
@@ -97,7 +99,8 @@ MUDL aims for **MOO-like immersion**: player commands speak in narrative prose; 
 | Command | Mode | What you see |
 |---------|------|--------------|
 | `look` / `l`, `take`, `create`, `go`, `inventory`, … | **Player** | Immersive text — names, descriptions, exits, natural inventory. No IDs. |
-| `examine` / `x`, `add_prop`, `add_verb`, `load`, `save`, `list`, … | **Builder** | Contextual detail — owner (as *you* or a name), properties, verbs, exits as place names |
+| `examine` / `x` | **Player** | Weight, capacity, carried gear, body plan summary; `examine <obj>.parent` for prototype properties |
+| `@examine`, `load`, `save`, `list`, `@set`, … | **Builder** | Structured fields — owner, properties, anatomy slots, inherited prototype values |
 | `@dump` | **Debug** | Full JSON serialization of the object |
 
 Technical bootstrap and persistence events log to stderr when `RUST_LOG=info` (or higher). See [LANGUAGE.md](../LANGUAGE.md#player-facing-output) for the full output model and future MUDL customization hooks.
@@ -111,11 +114,29 @@ Players spawn as **naked humans** from the active world's `creatures.mudl` (`@cr
 - **In hands** — `left_hand` / `right_hand` grasp slots; two-handed items (`hand_slot: both`) occupy both
 - **Worn** — items on `wear` slots (e.g. `torso` for a backpack via `wear_slot`)
 - **Inside containers** — nested via each container's `contents` list
-- **On the ground** — items with `location` set to your current area/room appear in `look` as `You see: …`
+- **On the ground** — items with `location` set to your current area/room appear in `look` as `You see an anvil and a boulder here.`
 
-`create <type> <name...>` places the new object at your current location (area, room, or any navigable place). Multi-word names are supported; IDs are lowercase slugs (`Rusty Sword` → `sword:rusty-sword-001`). Quote names if needed: `create sword "Rusty Sword"`.
+`create <type> <name...>` places the new object at your current location (area, room, or any navigable place). Multi-word names are supported; IDs are lowercase slugs capped at 16 characters (`Rusty Sword` → `sword:rusty-sword-001`). Quote names if needed: `create sword "Rusty Sword"`.
+
+Options are separate from the name: `create container purse capacity=3 max_weight=10` creates an object named **purse** with ID `item:purse-001`, not `purse capacity=3 max_weight=10`.
 
 `take` / `get` only search the ground in your current location — items already in your hands are ignored. One ground match takes silently; multiple ground matches prompt "Which X do you mean?".
+
+`@create` supports role-aware types: `container`, `wearable`, `stackable`, plus `key=value` options (`capacity`, `max_weight`, `max_volume`, `count`, `prototype`). Example:
+
+```text
+> @create container "Leather Bag" capacity=8 max_weight=40
+You forge a Leather Bag, and it clatters to the ground in The Void.
+> @create stackable "Gold Coin" count=25
+You forge a Gold Coin, and it clatters to the ground in The Void.
+> put 10 coins in purse
+You put 10 coins in your purse.
+> put coins in purse
+You put 10 coins in your purse. 10 won't fit.
+> look purse
+purse
+Inside the purse: 10 coins
+```
 
 Example output:
 
@@ -123,15 +144,14 @@ Example output:
 > create sword Rusty Sword
 You forge a Rusty Sword, and it clatters to the ground in The Void.
 > look
-The Void
 You are in a featureless void.
-You see: Rusty Sword
+You see a Rusty Sword here.
 > take rusty sword
-You pick up the Rusty Sword.
+You pick up a Rusty Sword.
 > look self
-Admin
-You are completely naked.
-You are holding Rusty Sword in your right hand.
+You are holding a Rusty Sword.
+> examine self
+You're a human carrying a Rusty Sword. You have a carry capacity of 1/10 and are carrying 1 of 100 weight.
 > inventory
 You are completely naked.
 You are carrying:
@@ -148,7 +168,6 @@ After bootstrap, your player starts in The Void:
 
 ```
 > look
-The Void
 You are in a featureless void. This is the starting point for new players.
 
 Obvious exits: north
@@ -199,8 +218,7 @@ Builder `examine` resolves exit targets and owners to display names — no raw I
 
 ```
 > look self
-Admin
-You are completely naked and empty-handed.
+You aren't holding or wearing anything.
 > inventory
 You are completely naked.
 Your hands are empty.
@@ -218,8 +236,7 @@ You inscribe "hand_slot" upon sword.
 > take sword
 You pick up the sword.
 > look self
-Admin
-You are holding sword in your right hand.
+You are holding a sword.
 ```
 
 ### 7. Create and inspect an item

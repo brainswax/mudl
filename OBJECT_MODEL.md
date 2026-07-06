@@ -6,7 +6,9 @@ This document defines the core data structures and rules that power the MUDL wor
 
 ## Philosophy
 - **Everything is an Object** — rooms, items, players, NPCs, exits, abstract systems, even the world itself.
-- **Prototype-based inheritance** — objects inherit from a parent (like classic MOO or JavaScript prototypes).
+- **Composition over inheritance** — capabilities are **roles** (Container, Wearable, Creature, Stackable) stored as properties, composed at creation time via `ObjectFactory` or MUDL `MudlRoleProps`.
+- **Prototype-based inheritance** — objects inherit from a parent (like classic MOO or JavaScript prototypes) for shared defaults and stackable item templates. Inspect with `examine <object>.parent` or `@examine <object> parent`.
+- **Creature body plans** — anatomy slots (grasp, wear, limb) are defined in MUDL (`@creature human`) and referenced by the player's `creature` property. Inspect with `examine human` or `examine #parent` (for self).
 - **Runtime modifiable** — the world can add, change, or remove properties, verbs, and behaviors while running.
 - **Secure by default** — all mutations go through the API Gateway + RBAC checks.
 
@@ -136,11 +138,14 @@ Every object has a unique, immutable internal identifier.
 **Format**: `type:base-name-counter`
 
 - `type`: Category (room, item, npc, exit, player, abstract, etc.)
-- `base-name`: Human-readable name (lowercase, hyphenated)
+- `base-name`: Slug derived from the **display name only** (lowercase, hyphenated, max **16 characters**). Creation options (`capacity=3`, etc.) are never included.
 - `counter`: 3-digit hexadecimal (000–FFF). Automatically increments when duplicates are created. Extends to 4+ digits if needed.
+
+**Display name vs ID base**: `create container purse capacity=3` sets `name = "purse"` and generates `item:purse-001`. Role parameters are stored as properties, not appended to the name or ID.
 
 **Examples**:
 - `room:cozy-kitchen-001`
+- `item:purse-001` (from display name "purse")
 - `item:silver-sword-00a`
 - `npc:old-mage-0f3`
 - `exit:north-042`
@@ -205,17 +210,60 @@ Implementations:
 - **Player/Thing**: name + description, owner info in Builder mode
 - Default fallback to property-based rendering.
 
+## Composable Roles (Milestone 1)
+
+Roles are property bundles applied via `Object::apply_*_role()` or `MudlRoleProps::apply_to()`. An object may hold multiple roles (e.g. a wearable backpack that is also a container).
+
+| Role | Key properties | Factory helper |
+|------|----------------|----------------|
+| **Creature** | `creature`, `gender`, `body_slots` | `create_player` |
+| **Container** | `is_container`, `contents`, `capacity`, `max_weight`, `max_volume` | `create_container`, `create_container_with_spec` |
+| **Wearable** | `is_wearable`, `wear_slot`, `weight`, `volume` | `create_wearable` |
+| **Stackable** | `stackable`, `stack_count`, `max_stack` | `create_stackable_item` |
+| **Item (base)** | `weight`, `volume`, `is_pocketable`, `hand_slot` | `create_item` |
+
+**LocationRef** (`src/object/location.rs`) types where an object resides:
+
+```rust
+pub enum LocationRef {
+    Room(ObjectId),
+    Inventory(ObjectId),
+    Container(ObjectId, Option<String>),
+    BodySlot(ObjectId, String),
+    Nowhere,
+}
+```
+
+**MoveManager** (`src/world/move_manager.rs`) implements `move_object(src, dst, obj)` with capacity, weight, and volume checks. **ContainerFit** (`src/world/container_fit.rs`) computes how many stackable units fit (by slot count, `max_weight`, and `max_volume` using `unit_weight * count`). Partial puts split stacks; compatible stacks merge by prototype or name. Inventory verbs delegate here. An `on_move` hook stub exists for future event triggers.
+
+**Dirty tracking**: `DirtyTracker` records mutated object IDs; `persist_dirty()` saves only those rows.
+
+**Look / examine**: In-character commands use natural sentences without a leading object name. Room look: description + `You see an anvil and a boulder here.` (no room title line). Container look: `The purse contains 20 coins.` Container examine adds capacity/weight in one short paragraph. `examine self`: creature + gear prose, slot occupancy (`carry capacity of 2/10`), and weight. Stackables show quantity in content lists (`20 coins`). `@look` / `@examine` show structured builder fields. See [COMMANDS.md](COMMANDS.md) style guidelines.
+
+**Target resolution** (`src/display/resolve.rs`): verbs resolve names with possession-first priority (body slots → BFS through carried containers → room ground → global). Duplicate matches prompt disambiguation with short IDs and container hints (`coins-042 (in purse)`). Inventory verbs map to scoped lookups (`PossessionOnly`, `RoomOnly`, `PossessionOrRoom`).
+
+**Put quantity**: `put 10 coins in purse` caps transfer count; `put coins in purse` moves as many units as fit (weight/volume/slots). Partial transfers update `stack_count` on source and target; incompatible remainder gets `N won't fit.` feedback.
+
+**Weight** (`src/object/weight.rs`): `Object::weight()` returns unit weight × `stack_count` for stackables. `Object::total_weight(objects)` recursively sums shell weight plus nested container contents (cycle-safe). `Object::contents_weight(objects)` sums direct contents' total weights for capacity checks. `player_carried_weight` totals across body slots. New players default to `max_weight: 100`; `max_weight: -1` means unlimited (skipped in fit checks). Display: `look` omits weight (`DisplayFlags::BRIEF`); in-game `examine` shows capacity messages (`You can carry up to 100 weight.`, `The purse can hold up to 10 weight.`, or unlimited variants); `@examine` shows `Max weight:` lines. See [COMMANDS.md](COMMANDS.md).
+
 ## Anatomy and Inventory
 
-Body plans are defined in MUDL (`anatomy/*.mudl`) and loaded into an `AnatomyRegistry`. Players reference a plan via `body_plan` and track occupancy in `body_slots` (a map of slot name → item ID).
+Body plans are defined in MUDL (`creatures.mudl`) and loaded into an `AnatomyRegistry`. Players reference a plan via `creature` / `body_plan` and track occupancy in `body_slots` (a map of slot name → item ID, including worn items).
 
 | Property | On | Type | Purpose |
 |----------|-----|------|---------|
-| `body_plan` | player | String | Loaded plan name (e.g. `human`) |
+| `creature` | player | String | Loaded plan name (e.g. `human`) |
 | `gender` | player | String | Description hint from player template |
-| `body_slots` | player | Map\<String, ObjectRef\> | Occupied anatomical slots |
+| `body_slots` | player | Map\<String, ObjectRef\> | Occupied anatomical slots (grasp + wear) |
 | `contents` | container | List\<ObjectRef\> | Items inside a container |
-| `capacity` | container | Int | Max items the container holds |
+| `capacity` | container | Int | Max discrete items the container holds |
+| `max_weight` | container | Int | Max total weight of contents (optional) |
+| `max_volume` | container | Int | Max total volume of contents (optional) |
+| `weight` | item | Int | Unit weight (× `stack_count` when stackable) |
+| `volume` | item | Int | Unit volume (× `stack_count` when stackable) |
+| `stackable` | item | Bool | Identical units collapse into one object |
+| `stack_count` | item | Int | Number of identical units in a stack |
+| `max_stack` | item | Int | Maximum stack size |
 | `carried_slot` | item | String | Body slot name when held/worn |
 | `is_wearable` | item | Bool | Can be worn on a `wear` slot |
 | `wear_slot` | item | String | Target slot (e.g. `torso`, `head`) |
@@ -224,7 +272,7 @@ Body plans are defined in MUDL (`anatomy/*.mudl`) and loaded into an `AnatomyReg
 
 Default naked humans have **no pockets** — only biological `grasp`, `wear`, and `limb` slots from the human body plan. Pockets will come from clothing in a follow-up.
 
-Factory helpers: `create_player` (uses anatomy template), `create_item`, `create_container`. Anatomy loader: `src/core/anatomy.rs`. Inventory operations: `src/core/inventory.rs`.
+Factory helpers: `create_player`, `create_item`, `create_container`, `create_wearable`, `create_stackable_item`, `create_item_instances`. MUDL integration: `MudlRoleProps` in `src/mudl/roles.rs`. Move operations: `src/world/move_manager.rs`. Inventory commands: `src/inventory/mod.rs`.
 
 ## Persistence Notes
 - Use ObjectFactory for creation.

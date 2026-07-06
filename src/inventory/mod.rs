@@ -1,13 +1,31 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::display::{
+    display_name_for_single_unit, format_stack_transfer_message, item_lookup_variants,
+    name_looks_plural, resolve_object, stack_quantity_phrase, ResolveScope as LookupScope,
+    StackRemainderLocation, TargetResolution,
+};
+use crate::display::grammar::indefinite_article;
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
-use crate::object::{Object, ObjectId, PermissionFlags, Property, Value};
+use crate::object::{LocationRef, Object, ObjectId};
+use crate::world::move_manager::{
+    move_object, move_to_container, move_to_grasp, move_to_room, MoveContext, MoveError, MoveHooks,
+};
+use crate::world::possession::{
+    grasp_action_phrase, is_carried_by as possession_is_carried_by, PossessionError,
+};
 
 /// Errors returned by inventory operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InventoryError {
     NotFound(String),
+    /// Item exists on the ground but must be carried for this command (put, drop, etc.).
+    NotCarriedButOnGround(String),
+    /// Item is already in the player's possession (take/get).
+    AlreadyHolding(String),
+    /// Container is on the ground but must be worn/carried (put in).
+    ContainerNotCarriedButOnGround(String),
     NotInRoom,
     NotCarried,
     HandsFull,
@@ -20,6 +38,7 @@ pub enum InventoryError {
     ContainerNotCarried,
     NoRoom,
     NoBodyPlan,
+    TooHeavy(String),
     InvalidTarget(String),
 }
 
@@ -27,6 +46,15 @@ impl fmt::Display for InventoryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotFound(name) => write!(f, "You don't see any {name} here."),
+            Self::NotCarriedButOnGround(name) => write!(
+                f,
+                "You aren't holding any {name}, but there are {name} on the ground. Try: get {name}"
+            ),
+            Self::AlreadyHolding(name) => write!(f, "You're already holding {name}."),
+            Self::ContainerNotCarriedButOnGround(name) => write!(
+                f,
+                "You aren't carrying the {name}, but it's here on the ground. Try: get {name}"
+            ),
             Self::NotInRoom => write!(f, "That isn't here."),
             Self::NotCarried => write!(f, "You aren't carrying that."),
             Self::HandsFull => write!(f, "Your hands are full."),
@@ -41,6 +69,7 @@ impl fmt::Display for InventoryError {
             Self::ContainerNotCarried => write!(f, "You aren't carrying that container."),
             Self::NoRoom => write!(f, "You aren't anywhere."),
             Self::NoBodyPlan => write!(f, "You have no body plan."),
+            Self::TooHeavy(name) => write!(f, "The {name} is too heavy for you to carry."),
             Self::InvalidTarget(msg) => write!(f, "{msg}"),
         }
     }
@@ -54,167 +83,21 @@ pub struct InventoryContext<'a> {
     pub room_id: Option<&'a ObjectId>,
     pub objects: &'a mut HashMap<ObjectId, Object>,
     pub anatomy: &'a AnatomyRegistry,
+    /// When set, move operations mark touched object IDs for incremental persist.
+    pub dirty: Option<&'a mut crate::world::DirtyTracker>,
 }
 
-impl Object {
-    pub fn init_item_defaults(&mut self, pocketable: bool) {
-        self.set_property_bool("is_pocketable", pocketable);
-        self.set_property_bool("is_wearable", false);
-        self.set_property_bool("is_container", false);
-    }
-
-    pub fn init_container_defaults(&mut self, capacity: u32, wearable: bool) {
-        self.set_property_bool("is_container", true);
-        self.set_property_int("capacity", i64::from(capacity));
-        self.set_property_list("contents", vec![]);
-        self.set_property_bool("is_wearable", wearable);
-        self.set_property_bool("is_pocketable", false);
-        if wearable {
-            self.set_property_string("wear_slot", "torso");
-        }
-    }
-
-    pub fn set_property_bool(&mut self, name: &str, value: bool) {
-        self.add_property(Property {
-            name: name.to_string(),
-            value: Value::Bool(value),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-    }
-
-    pub fn set_property_int(&mut self, name: &str, value: i64) {
-        self.add_property(Property {
-            name: name.to_string(),
-            value: Value::Int(value),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-    }
-
-    pub fn set_property_string(&mut self, name: &str, value: impl Into<String>) {
-        self.add_property(Property {
-            name: name.to_string(),
-            value: Value::String(value.into()),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-    }
-
-    pub fn set_property_list(&mut self, name: &str, items: Vec<ObjectId>) {
-        self.add_property(Property {
-            name: name.to_string(),
-            value: Value::List(items.into_iter().map(Value::ObjectRef).collect()),
-            permissions: PermissionFlags::OWNER,
-            behavior: None,
-        });
-    }
-
-    pub fn get_bool_property(&self, name: &str) -> Option<bool> {
-        self.get_property(name).and_then(|p| {
-            if let Value::Bool(b) = &p.value {
-                Some(*b)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn get_int_property(&self, name: &str) -> Option<i64> {
-        self.get_property(name).and_then(|p| {
-            if let Value::Int(n) = &p.value {
-                Some(*n)
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn get_string_property(&self, name: &str) -> Option<String> {
-        self.get_property(name).and_then(|p| {
-            if let Value::String(s) = &p.value {
-                Some(s.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn get_object_list_property(&self, name: &str) -> Vec<ObjectId> {
-        self.get_property(name)
-            .and_then(|p| {
-                if let Value::List(items) = &p.value {
-                    Some(
-                        items
-                            .iter()
-                            .filter_map(|v| {
-                                if let Value::ObjectRef(id) = v {
-                                    Some(id.clone())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect(),
-                    )
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_default()
-    }
-
-    pub fn is_container(&self) -> bool {
-        self.get_bool_property("is_container").unwrap_or(false)
-    }
-
-    pub fn is_wearable(&self) -> bool {
-        self.get_bool_property("is_wearable").unwrap_or(false)
-    }
-
-    pub fn hand_slot(&self) -> Option<String> {
-        self.get_string_property("hand_slot")
-    }
-
-    pub fn wear_slot(&self) -> Option<String> {
-        self.get_string_property("wear_slot")
-    }
-
-    pub fn container_capacity(&self) -> Option<u32> {
-        self.get_int_property("capacity").map(|c| c as u32)
-    }
-
-    pub fn container_contents(&self) -> Vec<ObjectId> {
-        self.get_object_list_property("contents")
-    }
-
-    pub fn carried_slot(&self) -> Option<String> {
-        self.get_string_property("carried_slot")
-    }
-
-    pub fn set_carried_slot(&mut self, slot: Option<&str>) {
-        if let Some(slot) = slot {
-            self.set_property_string("carried_slot", slot);
-        } else {
-            self.properties.remove("carried_slot");
-        }
-    }
-
-    fn add_to_list_property(&mut self, prop: &str, id: ObjectId) {
-        let mut list = self.get_object_list_property(prop);
-        if !list.contains(&id) {
-            list.push(id);
-            self.set_property_list(prop, list);
-        }
-    }
-
-    fn remove_from_list_property(&mut self, prop: &str, id: &ObjectId) {
-        let list: Vec<ObjectId> = self
-            .get_object_list_property(prop)
-            .into_iter()
-            .filter(|item| item != id)
-            .collect();
-        self.set_property_list(prop, list);
-    }
+fn with_move_ctx<'a, 'b, F, T>(ctx: &'a mut InventoryContext<'b>, f: F) -> Result<T, InventoryError>
+where
+    F: FnOnce(&mut MoveContext<'a>) -> Result<T, MoveError>,
+{
+    let mut move_ctx = MoveContext {
+        objects: ctx.objects,
+        anatomy: Some(ctx.anatomy),
+        hooks: MoveHooks::default(),
+        dirty: ctx.dirty.as_deref_mut(),
+    };
+    f(&mut move_ctx).map_err(Into::into)
 }
 
 fn player_body_plan<'a>(
@@ -225,19 +108,6 @@ fn player_body_plan<'a>(
     anatomy
         .body_plan(&plan_name)
         .ok_or(InventoryError::NoBodyPlan)
-}
-
-fn name_matches(needle: &str, obj: &Object) -> bool {
-    let name_lower = obj.name.to_lowercase();
-    name_lower == needle
-        || name_lower.contains(needle)
-        || name_lower
-            .split_whitespace()
-            .any(|word| word == needle || word.starts_with(needle))
-        || obj.aliases.iter().any(|a| {
-            let alias = a.to_lowercase();
-            alias == needle || alias.contains(needle)
-        })
 }
 
 /// Where to search when resolving an inventory command target.
@@ -251,14 +121,12 @@ enum ResolveScope {
     CarriedOrGround,
 }
 
-fn is_on_ground(
-    obj: &Object,
-    obj_id: &ObjectId,
-    room_id: &ObjectId,
-    player_id: &ObjectId,
-    objects: &HashMap<ObjectId, Object>,
-) -> bool {
-    obj.location.as_ref() == Some(room_id) && !is_carried_by(player_id, obj_id, objects)
+fn resolve_scope_to_lookup(scope: ResolveScope) -> LookupScope {
+    match scope {
+        ResolveScope::Carried => LookupScope::PossessionOnly,
+        ResolveScope::Ground => LookupScope::RoomOnly,
+        ResolveScope::CarriedOrGround => LookupScope::PossessionOrRoom,
+    }
 }
 
 fn resolve_inventory_target(
@@ -268,59 +136,247 @@ fn resolve_inventory_target(
     objects: &HashMap<ObjectId, Object>,
     scope: ResolveScope,
 ) -> Result<ObjectId, InventoryError> {
-    let needle = name.to_lowercase();
-
-    if needle == "self" || needle == "me" {
-        return Ok(player_id.clone());
-    }
-
-    if needle == "here" {
-        return room_id.cloned().ok_or(InventoryError::NoRoom);
-    }
-
-    let id = ObjectId::new(name);
-    if let Some(obj) = objects.get(&id) {
-        if obj.is_active() && scope_matches(obj, &id, room_id, player_id, objects, scope) {
-            return Ok(id);
+    match resolve_object(
+        name,
+        player_id,
+        room_id,
+        objects,
+        resolve_scope_to_lookup(scope),
+    ) {
+        TargetResolution::Found(id) => Ok(id),
+        TargetResolution::Ambiguous(msg) => Err(InventoryError::InvalidTarget(msg)),
+        TargetResolution::NotFound => {
+            if name.to_lowercase() == "here" {
+                Err(InventoryError::NoRoom)
+            } else {
+                Err(InventoryError::NotFound(name.to_string()))
+            }
         }
-    }
-
-    let mut matches = Vec::new();
-    for (obj_id, obj) in objects {
-        if !obj.is_active() {
-            continue;
-        }
-        if name_matches(&needle, obj) && scope_matches(obj, obj_id, room_id, player_id, objects, scope)
-        {
-            matches.push(obj_id.clone());
-        }
-    }
-
-    match matches.len() {
-        0 => Err(InventoryError::NotFound(name.to_string())),
-        1 => Ok(matches[0].clone()),
-        _ => Err(InventoryError::InvalidTarget(format!(
-            "Which {name} do you mean?"
-        ))),
     }
 }
 
-fn scope_matches(
-    obj: &Object,
-    obj_id: &ObjectId,
-    room_id: Option<&ObjectId>,
+fn target_visible_on_ground(
+    name: &str,
+    room_id: &ObjectId,
     player_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
-    scope: ResolveScope,
 ) -> bool {
-    match scope {
-        ResolveScope::Carried => is_carried_by(player_id, obj_id, objects),
-        ResolveScope::Ground => room_id
-            .is_some_and(|room| is_on_ground(obj, obj_id, room, player_id, objects)),
-        ResolveScope::CarriedOrGround => {
-            is_carried_by(player_id, obj_id, objects)
-                || room_id.is_some_and(|room| obj.location.as_ref() == Some(room))
+    matches!(
+        resolve_object(
+            name,
+            player_id,
+            Some(room_id),
+            objects,
+            LookupScope::RoomOnly,
+        ),
+        TargetResolution::Found(_) | TargetResolution::Ambiguous(_)
+    )
+}
+
+fn target_carried_by_player(
+    name: &str,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> bool {
+    matches!(
+        resolve_object(
+            name,
+            player_id,
+            None,
+            objects,
+            LookupScope::PossessionOnly,
+        ),
+        TargetResolution::Found(_)
+    )
+}
+
+fn resolve_carried_item(
+    ctx: &InventoryContext<'_>,
+    item_name: &str,
+) -> Result<ObjectId, InventoryError> {
+    match resolve_inventory_target(
+        item_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    ) {
+        Ok(id) => Ok(id),
+        Err(InventoryError::NotFound(_)) => {
+            if let Some(room_id) = ctx.room_id {
+                if target_visible_on_ground(item_name, room_id, ctx.player_id, ctx.objects) {
+                    return Err(InventoryError::NotCarriedButOnGround(item_name.to_string()));
+                }
+            }
+            Err(InventoryError::NotFound(item_name.to_string()))
         }
+        Err(e) => Err(e),
+    }
+}
+
+fn resolve_carried_container(
+    ctx: &InventoryContext<'_>,
+    container_name: &str,
+) -> Result<ObjectId, InventoryError> {
+    match resolve_inventory_target(
+        container_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    ) {
+        Ok(id) => Ok(id),
+        Err(InventoryError::NotFound(_)) => {
+            if let Some(room_id) = ctx.room_id {
+                if target_visible_on_ground(container_name, room_id, ctx.player_id, ctx.objects) {
+                    return Err(InventoryError::ContainerNotCarriedButOnGround(
+                        container_name.to_string(),
+                    ));
+                }
+            }
+            Err(InventoryError::NotFound(container_name.to_string()))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn resolve_ground_item(
+    ctx: &InventoryContext<'_>,
+    item_name: &str,
+    room_id: &ObjectId,
+) -> Result<ObjectId, InventoryError> {
+    if !target_visible_on_ground(item_name, room_id, ctx.player_id, ctx.objects)
+        && target_carried_by_player(item_name, ctx.player_id, ctx.objects)
+    {
+        return Err(InventoryError::AlreadyHolding(item_name.to_string()));
+    }
+
+    resolve_item_with_variants(
+        item_name,
+        |name| {
+            resolve_inventory_target(
+                name,
+                Some(room_id),
+                ctx.player_id,
+                ctx.objects,
+                ResolveScope::Ground,
+            )
+        },
+        || {
+            if target_carried_by_player(item_name, ctx.player_id, ctx.objects) {
+                Err(InventoryError::AlreadyHolding(item_name.to_string()))
+            } else {
+                Err(InventoryError::NotFound(item_name.to_string()))
+            }
+        },
+    )
+}
+
+fn resolve_carried_item_with_variants(
+    ctx: &InventoryContext<'_>,
+    item_name: &str,
+) -> Result<ObjectId, InventoryError> {
+    resolve_item_with_variants(
+        item_name,
+        |name| resolve_carried_item(ctx, name),
+        || Err(InventoryError::NotFound(item_name.to_string())),
+    )
+}
+
+fn resolve_item_with_variants<F, G>(
+    item_name: &str,
+    mut resolve_one: F,
+    mut on_not_found: G,
+) -> Result<ObjectId, InventoryError>
+where
+    F: FnMut(&str) -> Result<ObjectId, InventoryError>,
+    G: FnMut() -> Result<ObjectId, InventoryError>,
+{
+    let variants = item_lookup_variants(item_name);
+    for name in &variants {
+        match resolve_one(name) {
+            Ok(id) => return Ok(id),
+            Err(InventoryError::AlreadyHolding(_)) => return Err(InventoryError::AlreadyHolding(
+                item_name.to_string(),
+            )),
+            Err(InventoryError::NotCarriedButOnGround(n)) => {
+                return Err(InventoryError::NotCarriedButOnGround(n));
+            }
+            Err(InventoryError::ContainerNotCarriedButOnGround(n)) => {
+                return Err(InventoryError::ContainerNotCarriedButOnGround(n));
+            }
+            Err(InventoryError::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    on_not_found()
+}
+
+/// Parsed `take|drop [count] <item>` quantity semantics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemQuantityRequest {
+    /// `None` = entire stack; `Some(n)` = explicit count (singular defaults to 1).
+    pub quantity: Option<u32>,
+    pub item_name: String,
+}
+
+/// Parse `take 5 gold bar`, `take gold bars`, or `take gold bar` (singular → 1).
+pub fn parse_item_quantity_args(rest: &str) -> Result<ItemQuantityRequest, InventoryError> {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Err(InventoryError::InvalidTarget(
+            "You must name an item.".into(),
+        ));
+    }
+
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() >= 2 {
+        if let Ok(qty) = tokens[0].parse::<u32>() {
+            if qty == 0 {
+                return Err(InventoryError::InvalidTarget(
+                    "You must move at least one.".into(),
+                ));
+            }
+            return Ok(ItemQuantityRequest {
+                quantity: Some(qty),
+                item_name: tokens[1..].join(" "),
+            });
+        }
+    }
+
+    let item_name = rest.to_string();
+    let quantity = if name_looks_plural(&item_name) {
+        None
+    } else {
+        Some(1)
+    };
+    Ok(ItemQuantityRequest {
+        quantity,
+        item_name,
+    })
+}
+
+/// Units to transfer for a stackable or single item.
+pub fn effective_transfer_units(item: &Object, req: &ItemQuantityRequest) -> u32 {
+    if !item.is_stackable() {
+        return 1;
+    }
+    let available = item.stack_count();
+    match req.quantity {
+        None => available,
+        Some(n) => n.min(available),
+    }
+}
+
+fn move_units_for_request(item: &Object, req: &ItemQuantityRequest) -> Option<u32> {
+    if !item.is_stackable() {
+        return None;
+    }
+    let units = effective_transfer_units(item, req);
+    if units >= item.stack_count() {
+        None
+    } else {
+        Some(units)
     }
 }
 
@@ -329,143 +385,31 @@ pub fn is_carried_by(
     item_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
 ) -> bool {
-    let Some(player) = objects.get(player_id) else {
-        return false;
-    };
-
-    if player.body_slots().values().any(|id| id == item_id) {
-        return true;
-    }
-
-    for carried_id in player.carried_body_items() {
-        if let Some(container) = objects.get(&carried_id) {
-            if container.is_container() && container.container_contents().contains(item_id) {
-                return true;
-            }
-        }
-    }
-
-    item_id == player_id
+    possession_is_carried_by(player_id, item_id, objects)
 }
 
-fn grasp_slot_free(player: &Object, slot: &str) -> bool {
-    player.body_slot_item(slot).is_none()
-}
-
-fn place_in_grasp_slots(
-    player_id: &ObjectId,
-    item_id: &ObjectId,
-    plan: &BodyPlan,
-    objects: &mut HashMap<ObjectId, Object>,
-) -> Result<Vec<String>, InventoryError> {
-    let item = objects
-        .get(item_id)
-        .ok_or(InventoryError::NotCarried)?
-        .clone();
-    let player = objects.get(player_id).unwrap().clone();
-    let hand_pref = item.hand_slot();
-    let preference = hand_pref.as_deref().unwrap_or("right");
-
-    let grasp_names: Vec<String> = plan.grasp_slots().iter().map(|s| s.name.clone()).collect();
-
-    let (target_slots, carried_label) = if preference == "both" {
-        let left = "left_hand";
-        let right = "right_hand";
-        if !grasp_slot_free(&player, left) || !grasp_slot_free(&player, right) {
-            return Err(InventoryError::HandsFull);
-        }
-        (
-            vec![left.to_string(), right.to_string()],
-            Some(left.to_string()),
-        )
-    } else if preference == "left" {
-        if !grasp_slot_free(&player, "left_hand") {
-            return Err(InventoryError::HandsFull);
-        }
-        (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-    } else {
-        if grasp_slot_free(&player, "right_hand") {
-            (
-                vec!["right_hand".to_string()],
-                Some("right_hand".to_string()),
-            )
-        } else if grasp_slot_free(&player, "left_hand") {
-            (vec!["left_hand".to_string()], Some("left_hand".to_string()))
-        } else {
-            return Err(InventoryError::HandsFull);
-        }
-    };
-
-    for slot in &grasp_names {
-        if target_slots.contains(slot) && !grasp_slot_free(&player, slot) {
-            return Err(InventoryError::HandsFull);
+impl From<PossessionError> for InventoryError {
+    fn from(err: PossessionError) -> Self {
+        match err {
+            PossessionError::HandsFull => Self::HandsFull,
+            PossessionError::NotCarried => Self::NotCarried,
+            PossessionError::NotFound(name) => Self::NotFound(name),
         }
     }
-
-    let mut player = objects.get(player_id).unwrap().clone();
-    for slot in &target_slots {
-        player.set_body_slot(slot, Some(item_id.clone()));
-    }
-    objects.insert(player_id.clone(), player);
-
-    let mut item = objects.get(item_id).unwrap().clone();
-    item.location = Some(player_id.clone());
-    item.set_carried_slot(carried_label.as_deref().or(Some(target_slots[0].as_str())));
-    objects.insert(item_id.clone(), item);
-
-    Ok(target_slots)
-}
-
-fn place_in_wear_slot(
-    player_id: &ObjectId,
-    item_id: &ObjectId,
-    slot: &str,
-    objects: &mut HashMap<ObjectId, Object>,
-) -> Result<(), InventoryError> {
-    let player = objects.get(player_id).unwrap().clone();
-    if player.body_slot_item(slot).is_some() {
-        return Err(InventoryError::SlotFull(slot.to_string()));
-    }
-
-    let mut player = objects.get(player_id).unwrap().clone();
-    player.set_body_slot(slot, Some(item_id.clone()));
-    objects.insert(player_id.clone(), player);
-
-    let mut item = objects.get(item_id).unwrap().clone();
-    item.location = Some(player_id.clone());
-    item.set_carried_slot(Some(slot));
-    objects.insert(item_id.clone(), item);
-
-    Ok(())
-}
-
-fn remove_from_player(
-    player_id: &ObjectId,
-    item_id: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-) {
-    let mut player = objects.get(player_id).unwrap().clone();
-    player.clear_item_from_body_slots(item_id);
-    objects.insert(player_id.clone(), player);
 }
 
 pub fn take_item(
     ctx: &mut InventoryContext<'_>,
-    item_name: &str,
+    args: &str,
 ) -> Result<String, InventoryError> {
+    let req = parse_item_quantity_args(args)?;
     let room_id = ctx.room_id.ok_or(InventoryError::NoRoom)?.clone();
-    let item_id = resolve_inventory_target(
-        item_name,
-        Some(&room_id),
-        ctx.player_id,
-        ctx.objects,
-        ResolveScope::Ground,
-    )?;
+    let item_id = resolve_ground_item(ctx, &req.item_name, &room_id)?;
 
     let item = ctx
         .objects
         .get(&item_id)
-        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?
+        .ok_or_else(|| InventoryError::NotFound(req.item_name.clone()))?
         .clone();
 
     if item.location.as_ref() != Some(&room_id) {
@@ -475,34 +419,57 @@ pub fn take_item(
         return Err(InventoryError::AlreadyCarrying);
     }
 
-    let player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    let plan = player_body_plan(&player, ctx.anatomy)?;
-    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
+    let units = effective_transfer_units(&item, &req);
+    let move_units = move_units_for_request(&item, &req);
 
-    Ok(format!("You pick up the {}.", item.name))
+    let player_id = ctx.player_id.clone();
+    let result = with_move_ctx(ctx, |mctx| {
+        move_object(
+            mctx,
+            &item_id,
+            LocationRef::Room(room_id.clone()),
+            LocationRef::Inventory(player_id),
+            move_units,
+        )
+    })?;
+
+    let transferred = result.units_transferred.unwrap_or(units);
+    let remainder_on_ground = ctx
+        .objects
+        .get(&item_id)
+        .filter(|o| o.location.as_ref() == Some(&room_id))
+        .map(|o| o.stack_count())
+        .unwrap_or(0);
+    let remainder = if transferred < units && remainder_on_ground > 0 {
+        Some((remainder_on_ground, StackRemainderLocation::OnGround))
+    } else {
+        None
+    };
+    Ok(format_stack_transfer_message(
+        "pick up",
+        &item,
+        transferred,
+        remainder,
+    ))
 }
 
 pub fn drop_item(
     ctx: &mut InventoryContext<'_>,
-    item_name: &str,
+    args: &str,
 ) -> Result<String, InventoryError> {
+    let req = parse_item_quantity_args(args)?;
     let room_id = ctx.room_id.ok_or(InventoryError::NoRoom)?.clone();
-    let item_id = resolve_inventory_target(
-        item_name,
-        None,
-        ctx.player_id,
-        ctx.objects,
-        ResolveScope::Carried,
-    )?;
+    let item_id = resolve_carried_item_with_variants(ctx, &req.item_name)?;
 
     if !is_carried_by(ctx.player_id, &item_id, ctx.objects) {
         return Err(InventoryError::NotCarried);
     }
 
     let item = ctx.objects.get(&item_id).unwrap().clone();
-    let item_name_display = item.name.clone();
+    let units = effective_transfer_units(&item, &req);
+    let move_units = move_units_for_request(&item, &req);
 
-    if item.is_container() {
+    if item.is_container() && move_units.is_none() {
         for contained in item.container_contents() {
             if let Some(mut inner) = ctx.objects.get(&contained).cloned() {
                 inner.location = Some(room_id.clone());
@@ -512,36 +479,125 @@ pub fn drop_item(
         }
     }
 
-    remove_from_player(ctx.player_id, &item_id, ctx.objects);
+    let result = with_move_ctx(ctx, |mctx| move_to_room(mctx, &item_id, &room_id, move_units))?;
+    let transferred = result.units_transferred.unwrap_or(units);
+    let remainder_in_hand = ctx
+        .objects
+        .get(&item_id)
+        .filter(|_| is_carried_by(ctx.player_id, &item_id, ctx.objects))
+        .map(|o| o.stack_count())
+        .unwrap_or(0);
+    let remainder = if transferred < units && remainder_in_hand > 0 {
+        Some((remainder_in_hand, StackRemainderLocation::InHand))
+    } else {
+        None
+    };
+    Ok(format_stack_transfer_message(
+        "drop",
+        &item,
+        transferred,
+        remainder,
+    ))
+}
 
-    let mut item = ctx.objects.get(&item_id).unwrap().clone();
-    item.location = Some(room_id);
-    item.set_carried_slot(None);
-    ctx.objects.insert(item_id, item);
+/// Parsed `put [count] <item> in <container>` command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PutRequest {
+    pub quantity: Option<u32>,
+    pub item_name: String,
+    pub container_name: String,
+}
 
-    Ok(format!("You drop the {item_name_display}."))
+/// Parse `put 10 coins in purse` or `put coins in purse`.
+pub fn parse_put_args(rest: &str) -> Result<PutRequest, InventoryError> {
+    let (left, container_name) = rest.split_once(" in ").ok_or_else(|| {
+        InventoryError::InvalidTarget("Usage: put [count] <item> in <container>".into())
+    })?;
+    let container_name = container_name.trim().to_string();
+    if left.trim().is_empty() || container_name.is_empty() {
+        return Err(InventoryError::InvalidTarget(
+            "Usage: put [count] <item> in <container>".into(),
+        ));
+    }
+
+    let item_req = parse_item_quantity_args(left.trim())?;
+    Ok(PutRequest {
+        quantity: item_req.quantity,
+        item_name: item_req.item_name,
+        container_name,
+    })
+}
+
+/// Build player feedback after a put operation.
+pub fn format_put_message(
+    item: &Object,
+    container_display: &str,
+    transferred: u32,
+    total_held: u32,
+    quantity: Option<u32>,
+) -> String {
+    let remainder_in_hand = total_held.saturating_sub(transferred);
+
+    let mut snap = item.clone();
+    snap.set_stack_count(transferred);
+    let item_label = if transferred == 1 {
+        display_name_for_single_unit(&item.name)
+    } else {
+        stack_quantity_phrase(&snap)
+    };
+
+    let base = if transferred == 1 && quantity.is_none() && total_held == 1 {
+        format!(
+            "You put {} {item_label} in your {container_display}",
+            indefinite_article(&item_label)
+        )
+    } else {
+        format!("You put {item_label} in your {container_display}")
+    };
+
+    if let Some(req) = quantity {
+        if transferred < req {
+            return format!(
+                "{base}, {}.",
+                format_remainder_in_hand_clause(item, req.saturating_sub(transferred))
+            );
+        }
+        format!("{base}.")
+    } else if remainder_in_hand > 0 {
+        format!(
+            "{base}, {}.",
+            format_remainder_in_hand_clause(item, remainder_in_hand)
+        )
+    } else {
+        format!("{base}.")
+    }
+}
+
+fn format_remainder_in_hand_clause(item: &Object, count: u32) -> String {
+    if count == 1 {
+        let label = display_name_for_single_unit(&item.name);
+        format!(
+            "but {} remains in your hand",
+            indefinite_article(&label)
+        )
+    } else {
+        let mut snap = item.clone();
+        snap.set_stack_count(count);
+        format!(
+            "but {} remain in your hand",
+            stack_quantity_phrase(&snap)
+        )
+    }
 }
 
 pub fn put_item(
     ctx: &mut InventoryContext<'_>,
     item_name: &str,
     container_name: &str,
+    quantity: Option<u32>,
 ) -> Result<String, InventoryError> {
-    let item_id = resolve_inventory_target(
-        item_name,
-        None,
-        ctx.player_id,
-        ctx.objects,
-        ResolveScope::Carried,
-    )?;
-    let container_id =
-        resolve_inventory_target(
-            container_name,
-            None,
-            ctx.player_id,
-            ctx.objects,
-            ResolveScope::Carried,
-        )?;
+    let item_id = resolve_carried_item_with_variants(ctx, item_name)?;
+    let container_id = resolve_carried_container(ctx, container_name)?;
 
     if item_id == container_id {
         return Err(InventoryError::InvalidTarget(
@@ -566,28 +622,25 @@ pub fn put_item(
         return Err(InventoryError::ContainerNotCarried);
     }
 
-    let capacity = container.container_capacity().unwrap_or(10) as usize;
-    if container.container_contents().len() >= capacity {
-        return Err(InventoryError::ContainerFull);
-    }
-
     let item = ctx.objects.get(&item_id).unwrap().clone();
-    let item_display = item.name.clone();
     let container_display = container.name.clone();
+    let total_count = if item.is_stackable() {
+        item.stack_count()
+    } else {
+        1
+    };
 
-    remove_from_player(ctx.player_id, &item_id, ctx.objects);
+    let result = with_move_ctx(ctx, |mctx| {
+        move_to_container(mctx, &item_id, &container_id, quantity)
+    })?;
 
-    let mut container = ctx.objects.get(&container_id).unwrap().clone();
-    container.add_to_list_property("contents", item_id.clone());
-    ctx.objects.insert(container_id.clone(), container);
-
-    let mut item = ctx.objects.get(&item_id).unwrap().clone();
-    item.location = Some(container_id);
-    item.set_carried_slot(None);
-    ctx.objects.insert(item_id, item);
-
-    Ok(format!(
-        "You put the {item_display} in your {container_display}."
+    let transferred = result.units_transferred.unwrap_or(total_count);
+    Ok(format_put_message(
+        &item,
+        &container_display,
+        transferred,
+        total_count,
+        quantity,
     ))
 }
 
@@ -596,14 +649,13 @@ pub fn remove_item(
     item_name: &str,
     container_name: &str,
 ) -> Result<String, InventoryError> {
-    let container_id =
-        resolve_inventory_target(
-            container_name,
-            None,
-            ctx.player_id,
-            ctx.objects,
-            ResolveScope::Carried,
-        )?;
+    let container_id = resolve_inventory_target(
+        container_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    )?;
 
     let container = ctx
         .objects
@@ -619,27 +671,47 @@ pub fn remove_item(
     }
 
     let needle = item_name.to_lowercase();
-    let item_id = container
+    let mut matches: Vec<ObjectId> = container
         .container_contents()
         .into_iter()
-        .find(|id| {
+        .filter(|id| {
             ctx.objects
                 .get(id)
-                .is_some_and(|obj| name_matches(&needle, obj))
+                .is_some_and(|obj| obj.is_active() && crate::display::name_matches(&needle, obj))
         })
-        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?;
+        .collect();
+
+    let item_id = match matches.len() {
+        0 => return Err(InventoryError::NotFound(item_name.to_string())),
+        1 => matches.remove(0),
+        _ => {
+            let resolved: Vec<_> = matches
+                .into_iter()
+                .map(|id| crate::display::ResolvedMatch {
+                    id,
+                    location_hint: Some(format!("in {}", container.name.to_lowercase())),
+                })
+                .collect();
+            return Err(InventoryError::InvalidTarget(
+                crate::display::format_disambiguation(item_name, &resolved),
+            ));
+        }
+    };
 
     let item = ctx.objects.get(&item_id).unwrap().clone();
     let item_display = item.name.clone();
     let container_display = container.name.clone();
 
-    let mut container = ctx.objects.get(&container_id).unwrap().clone();
-    container.remove_from_list_property("contents", &item_id);
-    ctx.objects.insert(container_id.clone(), container);
-
-    let player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    let plan = player_body_plan(&player, ctx.anatomy)?;
-    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
+    let player_id = ctx.player_id.clone();
+    with_move_ctx(ctx, |mctx| {
+        move_object(
+            mctx,
+            &item_id,
+            LocationRef::Container(container_id.clone(), None),
+            LocationRef::Inventory(player_id),
+            None,
+        )
+    })?;
 
     Ok(format!(
         "You remove the {item_display} from your {container_display}."
@@ -667,26 +739,14 @@ pub fn wield_item(
         return Err(InventoryError::NotWieldable);
     }
 
-    remove_from_player(ctx.player_id, &item_id, ctx.objects);
-
-    let player = ctx.objects.get(ctx.player_id).unwrap().clone();
-    let plan = player_body_plan(&player, ctx.anatomy)?;
-    place_in_grasp_slots(ctx.player_id, &item_id, plan, ctx.objects)?;
+    let display = item.name.clone();
+    let player_id = ctx.player_id.clone();
+    with_move_ctx(ctx, |mctx| move_to_grasp(mctx, &item_id, &player_id, None))?;
 
     let item = ctx.objects.get(&item_id).unwrap();
-    let display = item.name.clone();
     let player = ctx.objects.get(ctx.player_id).unwrap();
-    let left = player.body_slot_item("left_hand");
-    let right = player.body_slot_item("right_hand");
-
-    let phrase = if item.hand_slot().as_deref() == Some("both") || (left == right && left.is_some())
-    {
-        "wield"
-    } else if right.as_ref() == Some(&item_id) {
-        "hold in your right hand"
-    } else {
-        "hold in your left hand"
-    };
+    let plan = player_body_plan(player, ctx.anatomy)?;
+    let phrase = grasp_action_phrase(item, player, &item_id, plan);
 
     Ok(format!("You {phrase} the {display}."))
 }
@@ -714,12 +774,6 @@ pub fn wear_item(
         return Err(InventoryError::NotWearable);
     }
 
-    if is_carried_by(ctx.player_id, &item_id, ctx.objects) {
-        remove_from_player(ctx.player_id, &item_id, ctx.objects);
-    } else if item.location.as_ref() != Some(&room_id) {
-        return Err(InventoryError::NotInRoom);
-    }
-
     let player = ctx.objects.get(ctx.player_id).unwrap().clone();
     let plan = player_body_plan(&player, ctx.anatomy)?;
     let target_slot = item
@@ -731,9 +785,27 @@ pub fn wear_item(
         return Err(InventoryError::NotWearable);
     }
 
-    place_in_wear_slot(ctx.player_id, &item_id, &target_slot, ctx.objects)?;
+    let src = if is_carried_by(ctx.player_id, &item_id, ctx.objects) {
+        crate::world::move_manager::resolve_location(&item_id, ctx.objects)
+            .ok_or(InventoryError::NotCarried)?
+    } else if item.location.as_ref() == Some(&room_id) {
+        LocationRef::Room(room_id)
+    } else {
+        return Err(InventoryError::NotInRoom);
+    };
 
-    let display = ctx.objects.get(&item_id).unwrap().name.clone();
+    let player_id = ctx.player_id.clone();
+    let display = item.name.clone();
+    with_move_ctx(ctx, |mctx| {
+        move_object(
+            mctx,
+            &item_id,
+            src,
+            LocationRef::BodySlot(player_id, target_slot),
+            None,
+        )
+    })?;
+
     Ok(format!("You wear the {display}."))
 }
 
@@ -770,7 +842,7 @@ fn grasp_held_items(
                     held.push(HeldInGrasp {
                         slot_name: slot.name.clone(),
                         slot: slot_display_name(&slot.name),
-                        item_name: obj.name.clone(),
+                        item_name: crate::display::format_stackable_label(obj),
                     });
                 }
             }
@@ -796,7 +868,10 @@ fn describe_grasp(
         if left_id == right_id {
             if let Some(obj) = objects.get(left_id) {
                 if obj.is_active() {
-                    return Some(format!("You are wielding {} with both hands.", obj.name));
+                    return Some(format!(
+                        "You are wielding {} with both hands.",
+                        crate::display::format_stackable_label(obj)
+                    ));
                 }
             }
         }
@@ -891,15 +966,14 @@ pub fn describe_inventory(
                 } else {
                     format!("in your {}", slot_display_name(slot))
                 };
-                entries.push(format!("  {} — {}", obj.name, placement));
+                let label = crate::display::format_stackable_label(obj);
+                entries.push(format!("  {label} — {placement}"));
 
                 if obj.is_container() {
                     for inner_id in obj.container_contents() {
                         if let Some(inner) = objects.get(&inner_id) {
-                            entries.push(format!(
-                                "    {} — inside your {}",
-                                inner.name, obj.name
-                            ));
+                            let label = crate::display::format_stackable_label(inner);
+                            entries.push(format!("    {label} — inside your {}", obj.name));
                         }
                     }
                 }
@@ -1000,6 +1074,705 @@ mod tests {
         assert!(player.get_property("pockets").is_none());
         assert_eq!(player.body_plan_name(), Some("human".to_string()));
         assert!(player.body_slots().is_empty());
+        assert_eq!(
+            player.get_int_property("max_weight"),
+            Some(crate::object::DEFAULT_PLAYER_MAX_WEIGHT)
+        );
+    }
+
+    #[tokio::test]
+    async fn take_rejects_item_heavier_than_max_weight() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut boulder = Object {
+            id: ObjectId::new("item:boulder-001"),
+            name: "boulder".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        boulder.set_property_int("weight", 200);
+        objects.insert(boulder.id.clone(), boulder.clone());
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = take_item(&mut ctx, "boulder").unwrap_err();
+        assert_eq!(err, InventoryError::TooHeavy("boulder".to_string()));
+        assert_eq!(
+            objects.get(&boulder.id).unwrap().location.as_ref(),
+            Some(&room_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn take_rejects_when_carrying_would_exceed_max_weight() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut heavy = Object {
+            id: ObjectId::new("item:heavy-001"),
+            name: "iron ingot".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        heavy.set_property_int("weight", 60);
+
+        let mut boulder = Object {
+            id: ObjectId::new("item:boulder-001"),
+            name: "boulder".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        boulder.set_property_int("weight", 50);
+        objects.insert(heavy.id.clone(), heavy);
+        objects.insert(boulder.id.clone(), boulder);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        take_item(&mut ctx, "iron ingot").unwrap();
+        let err = take_item(&mut ctx, "boulder").unwrap_err();
+        assert_eq!(err, InventoryError::TooHeavy("boulder".to_string()));
+    }
+
+    #[tokio::test]
+    async fn take_allows_item_within_max_weight() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        take_item(&mut ctx, "coin").unwrap();
+        let player = objects.get(&player_id).unwrap();
+        assert!(
+            player.body_slot_item("left_hand").is_some()
+                || player.body_slot_item("right_hand").is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn take_allows_heavy_item_when_max_weight_unlimited() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        if let Some(player) = objects.get_mut(&player_id) {
+            player.set_property_int("max_weight", crate::object::UNLIMITED_WEIGHT);
+        }
+
+        let mut boulder = Object {
+            id: ObjectId::new("item:boulder-001"),
+            name: "boulder".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        boulder.set_property_int("weight", 200);
+        objects.insert(boulder.id.clone(), boulder);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        take_item(&mut ctx, "boulder").unwrap();
+        let player = objects.get(&player_id).unwrap();
+        assert!(
+            player.body_slot_item("left_hand").is_some()
+                || player.body_slot_item("right_hand").is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn take_singular_splits_stack_on_ground() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut bars = Object {
+            id: ObjectId::new("item:bars-001"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        bars.apply_stackable_role(&crate::object::StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        objects.insert(bars.id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = take_item(&mut ctx, "gold bar").unwrap();
+        assert_eq!(msg, "You pick up a gold bar.");
+
+        let ground = objects.get(&ObjectId::new("item:bars-001")).unwrap();
+        assert_eq!(ground.stack_count(), 9);
+        assert_eq!(ground.location.as_ref(), Some(&room_id));
+
+        let held: Vec<_> = objects
+            .values()
+            .filter(|o| o.stack_count() == 1 && o.location.as_ref() == Some(&player_id))
+            .collect();
+        assert_eq!(held.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn take_plural_takes_entire_stack() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut bars = Object {
+            id: ObjectId::new("item:bars-001"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        bars.apply_stackable_role(&crate::object::StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        objects.insert(bars.id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = take_item(&mut ctx, "gold bars").unwrap();
+        assert_eq!(msg, "You pick up 10 gold bars.");
+
+        let ground = objects.get(&ObjectId::new("item:bars-001")).unwrap();
+        assert_ne!(ground.location.as_ref(), Some(&room_id));
+    }
+
+    #[tokio::test]
+    async fn take_partial_respects_weight_limit() {
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut bars = Object {
+            id: ObjectId::new("item:bars-001"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        bars.set_property_int("weight", 20);
+        bars.apply_stackable_role(&crate::object::StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        objects.insert(bars.id.clone(), bars);
+
+        if let Some(player) = objects.get_mut(&player_id) {
+            player.set_property_int("max_weight", 100);
+        }
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = take_item(&mut ctx, "10 gold bars").unwrap();
+        assert_eq!(
+            msg,
+            "You pick up 5 gold bars, but leave 5 on the ground."
+        );
+
+        let ground = objects.get(&ObjectId::new("item:bars-001")).unwrap();
+        assert_eq!(ground.stack_count(), 5);
+        assert_eq!(ground.location.as_ref(), Some(&room_id));
+    }
+
+    #[tokio::test]
+    async fn take_merges_into_held_stack_when_hands_occupied() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 3)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        held.location = Some(player_id.clone());
+        let held_id = held.id.clone();
+
+        let mut ground = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 7)
+            .await
+            .unwrap();
+        ground.name = "gold bar".to_string();
+        ground.location = Some(room_id.clone());
+        let ground_id = ground.id.clone();
+
+        let mut sword = factory.create_item("sword", player_id.clone()).await.unwrap();
+        sword.name = "Rusty Sword".to_string();
+        sword.set_property_string("hand_slot", "right");
+        sword.location = Some(player_id.clone());
+        let sword_id = sword.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(sword_id.clone()));
+        player.set_body_slot("left_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(held_id.clone(), held);
+        objects.insert(ground_id.clone(), ground);
+        objects.insert(sword_id, sword);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = take_item(&mut ctx, "gold bars").unwrap();
+        assert_eq!(msg, "You pick up 7 gold bars.");
+
+        let merged = objects.get(&held_id).unwrap();
+        assert_eq!(merged.stack_count(), 10);
+        assert_eq!(merged.location.as_ref(), Some(&player_id));
+        assert!(objects.get(&ground_id).is_none());
+    }
+
+    #[tokio::test]
+    async fn take_singular_merges_one_into_held_stack() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 5)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        held.location = Some(player_id.clone());
+        let held_id = held.id.clone();
+
+        let mut ground = Object {
+            id: ObjectId::new("item:bars-ground"),
+            name: "gold bar".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: held.prototype.clone(),
+            owner: player_id.clone(),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        ground.apply_stackable_role(&crate::object::StackableSpec {
+            count: 10,
+            max_stack: 99,
+        });
+        let ground_id = ground.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(held_id.clone(), held);
+        objects.insert(ground_id.clone(), ground);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = take_item(&mut ctx, "gold bar").unwrap();
+        assert_eq!(msg, "You pick up a gold bar.");
+
+        let merged = objects.get(&held_id).unwrap();
+        assert_eq!(merged.stack_count(), 6);
+        let remainder = objects.get(&ground_id).unwrap();
+        assert_eq!(remainder.stack_count(), 9);
+    }
+
+    #[tokio::test]
+    async fn take_by_short_id_after_split_stack_disambiguation() {
+        use crate::display::short_id;
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        // Nearly-full ground stack: dropping 15 merges 9 and leaves 6 as a split pile.
+        let mut main_stack = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 90)
+            .await
+            .unwrap();
+        main_stack.name = "gold bar".to_string();
+        main_stack.location = Some(room_id.clone());
+        let main_id = main_stack.id.clone();
+        let shared_proto = main_stack.prototype.clone();
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), shared_proto, 15)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        let held_id = held.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(main_id.clone(), main_stack);
+        objects.insert(held_id.clone(), held);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        drop_item(&mut ctx, "gold bars").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("right_hand").is_none());
+        assert!(player.body_slot_item("left_hand").is_none());
+
+        let ground_piles: Vec<_> = ctx
+            .objects
+            .values()
+            .filter(|o| {
+                o.name == "gold bar"
+                    && o.location.as_ref() == Some(&room_id)
+                    && !is_carried_by(ctx.player_id, &o.id, ctx.objects)
+            })
+            .collect();
+        assert_eq!(ground_piles.len(), 2, "drop should leave two ground piles");
+        let split_id = ground_piles
+            .iter()
+            .find(|o| o.id != main_id)
+            .unwrap()
+            .id
+            .clone();
+
+        let main = ctx.objects.get(&main_id).unwrap();
+        assert_eq!(main.stack_count(), 99);
+        let split = ctx.objects.get(&split_id).unwrap();
+        assert_eq!(split.stack_count(), 6);
+
+        let err = take_item(&mut ctx, "gold bars").unwrap_err();
+        match err {
+            InventoryError::InvalidTarget(msg) => {
+                assert!(msg.contains("Which gold bar do you mean?"));
+                assert!(msg.contains(&short_id(&main_id)));
+                assert!(msg.contains(&short_id(&split_id)));
+            }
+            other => panic!("expected ambiguous InvalidTarget, got {other:?}"),
+        }
+
+        let by_main = take_item(&mut ctx, &short_id(&main_id)).unwrap();
+        assert!(by_main.contains("gold bar"));
+
+        let main = ctx.objects.get(&main_id).unwrap();
+        assert_eq!(main.stack_count(), 98);
+        assert_eq!(main.location.as_ref(), Some(&room_id));
+        assert_eq!(ctx.objects.get(&split_id).unwrap().location.as_ref(), Some(&room_id));
+
+        take_item(&mut ctx, &format!("6 {}", short_id(&split_id))).unwrap();
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert!(
+            player.body_slot_item("right_hand").is_some()
+                || player.body_slot_item("left_hand").is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn take_fails_hands_full_only_when_no_merge_and_no_slot() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 99)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        held.set_property_int("weight", 0);
+        held.apply_stackable_role(&crate::object::StackableSpec {
+            count: 99,
+            max_stack: 99,
+        });
+        held.location = Some(player_id.clone());
+        held.set_carried_slot(Some("left_hand"));
+        let held_id = held.id.clone();
+
+        let mut ground = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 5)
+            .await
+            .unwrap();
+        ground.name = "gold bar".to_string();
+        ground.set_property_int("weight", 0);
+        ground.location = Some(room_id.clone());
+
+        let mut sword = factory.create_item("sword", player_id.clone()).await.unwrap();
+        sword.name = "Sword".to_string();
+        sword.set_property_int("weight", 0);
+        sword.location = Some(player_id.clone());
+        sword.set_carried_slot(Some("right_hand"));
+        let sword_id = sword.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_property_int("max_weight", crate::object::UNLIMITED_WEIGHT);
+        player.set_body_slot("right_hand", Some(sword_id.clone()));
+        player.set_body_slot("left_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(held_id, held);
+        objects.insert(ground.id.clone(), ground);
+        objects.insert(sword_id, sword);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = take_item(&mut ctx, "gold bars").unwrap_err();
+        assert_eq!(err, InventoryError::HandsFull);
+    }
+
+    #[tokio::test]
+    async fn drop_full_stack_clears_grasp_slots() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 15)
+            .await
+            .unwrap();
+        bars.name = "gold bar".to_string();
+        let bars_id = bars.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(bars_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(bars_id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        drop_item(&mut ctx, "gold bars").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("right_hand").is_none());
+        assert!(player.body_slot_item("left_hand").is_none());
+
+        let dropped = ctx.objects.get(&bars_id).unwrap();
+        assert_eq!(dropped.location.as_ref(), Some(&room_id));
+    }
+
+    #[tokio::test]
+    async fn take_drop_take_cycle_keeps_hands_available() {
+        use crate::display::format_look_self_summary;
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 10)
+            .await
+            .unwrap();
+        bars.name = "gold bar".to_string();
+        bars.location = Some(room_id.clone());
+        objects.insert(bars.id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        take_item(&mut ctx, "gold bar").unwrap();
+        drop_item(&mut ctx, "gold bar").unwrap();
+        take_item(&mut ctx, "gold bar").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        let summary = format_look_self_summary(player, ctx.objects, &anatomy);
+        assert!(summary.contains("gold bar"));
+        assert!(player.body_slot_item("right_hand").is_some()
+            || player.body_slot_item("left_hand").is_some());
+    }
+
+    #[tokio::test]
+    async fn drop_split_stack_on_ground_clears_slots_for_next_take() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut main_stack = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 90)
+            .await
+            .unwrap();
+        main_stack.name = "gold bar".to_string();
+        main_stack.location = Some(room_id.clone());
+        let main_id = main_stack.id.clone();
+        let shared_proto = main_stack.prototype.clone();
+
+        let mut held = factory
+            .create_stackable_item("gold bar", player_id.clone(), shared_proto, 15)
+            .await
+            .unwrap();
+        held.name = "gold bar".to_string();
+        let held_id = held.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(held_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(main_id.clone(), main_stack);
+        objects.insert(held_id.clone(), held);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        drop_item(&mut ctx, "gold bars").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("right_hand").is_none());
+
+        let split_id = ctx
+            .objects
+            .values()
+            .find(|o| o.name == "gold bar" && o.stack_count() == 6)
+            .unwrap()
+            .id
+            .clone();
+        take_item(&mut ctx, &format!("1 {}", crate::display::short_id(&split_id))).unwrap();
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert!(
+            player.body_slot_item("right_hand").is_some()
+                || player.body_slot_item("left_hand").is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn drop_singular_leaves_remainder_in_hand() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 10)
+            .await
+            .unwrap();
+        bars.name = "gold bar".to_string();
+        let bars_id = bars.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(bars_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(bars_id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = drop_item(&mut ctx, "gold bar").unwrap();
+        assert_eq!(msg, "You drop a gold bar.");
+
+        let held = objects.get(&bars_id).unwrap();
+        assert_eq!(held.stack_count(), 9);
+
+        let on_ground: Vec<_> = objects
+            .values()
+            .filter(|o| {
+                o.name == "gold bar"
+                    && o.stack_count() == 1
+                    && o.location.as_ref() == Some(&room_id)
+            })
+            .collect();
+        assert_eq!(on_ground.len(), 1);
     }
 
     #[tokio::test]
@@ -1028,6 +1801,7 @@ mod tests {
             room_id: Some(&area_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "coin").unwrap();
@@ -1047,6 +1821,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "coin").unwrap();
@@ -1066,6 +1841,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "rusty").unwrap();
@@ -1087,6 +1863,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "greatsword").unwrap();
@@ -1112,6 +1889,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
         take_item(&mut ctx, "rusty").unwrap();
 
@@ -1145,6 +1923,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "rusty").unwrap();
@@ -1222,6 +2001,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, "sword").unwrap();
@@ -1258,6 +2038,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         take_item(&mut ctx, sword1.id.as_str()).unwrap();
@@ -1296,13 +2077,17 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         let err = take_item(&mut ctx, "sword").unwrap_err();
-        assert_eq!(
-            err,
-            InventoryError::InvalidTarget("Which sword do you mean?".to_string())
-        );
+        match err {
+            InventoryError::InvalidTarget(msg) => {
+                assert!(msg.contains("Which sword do you mean?"));
+                assert!(msg.contains("sword-"));
+            }
+            other => panic!("expected InvalidTarget, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1321,6 +2106,7 @@ mod tests {
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dirty: None,
         };
 
         wear_item(&mut ctx, "backpack").unwrap();
@@ -1330,7 +2116,7 @@ mod tests {
         );
 
         take_item(&mut ctx, "coin").unwrap();
-        put_item(&mut ctx, "coin", "backpack").unwrap();
+        put_item(&mut ctx, "coin", "backpack", None).unwrap();
 
         let coin_id = objects
             .values()
@@ -1343,5 +2129,609 @@ mod tests {
             .unwrap()
             .container_contents()
             .contains(&coin_id));
+    }
+
+    #[tokio::test]
+    async fn put_coins_in_purse_partial_by_weight() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut purse = factory
+            .create_container_with_spec(
+                "purse",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 3,
+                    max_weight: Some(10),
+                    max_volume: None,
+                    wearable: true,
+                    wear_slot: Some("torso".to_string()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        purse.name = "purse".to_string();
+        purse.location = Some(room_id.clone());
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.set_property_int("weight", 1);
+        coins.set_property_int("volume", 1);
+        coins.location = Some(player_id.clone());
+
+        let purse_id = purse.id.clone();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(purse_id.clone()));
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(purse_id.clone(), purse);
+        objects.insert(coins_id.clone(), coins);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = put_item(&mut ctx, "coins", "purse", None).unwrap();
+        assert!(msg.contains("10"));
+        assert!(msg.contains("remain in your hand"));
+        assert!(msg.contains("purse"));
+
+        let purse = objects.get(&purse_id).unwrap();
+        assert_eq!(purse.container_contents().len(), 1);
+        let stored = objects.get(&purse.container_contents()[0]).unwrap();
+        assert_eq!(stored.stack_count(), 10);
+
+        let held = objects.get(&coins_id).unwrap();
+        assert_eq!(held.stack_count(), 10);
+    }
+
+    #[test]
+    fn parse_put_args_with_quantity() {
+        let req = parse_put_args("10 coins in purse").unwrap();
+        assert_eq!(req.quantity, Some(10));
+        assert_eq!(req.item_name, "coins");
+        assert_eq!(req.container_name, "purse");
+    }
+
+    #[test]
+    fn parse_put_args_without_quantity() {
+        let req = parse_put_args("coins in purse").unwrap();
+        assert_eq!(req.quantity, None);
+        assert_eq!(req.item_name, "coins");
+    }
+
+    #[test]
+    fn format_put_message_partial_auto() {
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: ObjectId::new("player:hero-001"),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.apply_stackable_role(&crate::object::StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        let msg = format_put_message(&coins, "purse", 15, 20, None);
+        assert_eq!(
+            msg,
+            "You put 15 coins in your purse, but 5 coins remain in your hand."
+        );
+    }
+
+    #[test]
+    fn format_put_message_exact_quantity() {
+        let mut coins = Object {
+            id: ObjectId::new("item:coins-001"),
+            name: "coins".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: ObjectId::new("player:hero-001"),
+            permissions: crate::object::PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        coins.apply_stackable_role(&crate::object::StackableSpec {
+            count: 20,
+            max_stack: 99,
+        });
+        let msg = format_put_message(&coins, "purse", 10, 20, Some(10));
+        assert_eq!(msg, "You put 10 coins in your purse.");
+    }
+
+    #[test]
+    fn parse_take_singular_implies_one() {
+        let req = parse_item_quantity_args("gold bar").unwrap();
+        assert_eq!(req.quantity, Some(1));
+        assert_eq!(req.item_name, "gold bar");
+    }
+
+    #[test]
+    fn parse_take_plural_implies_all() {
+        let req = parse_item_quantity_args("gold bars").unwrap();
+        assert_eq!(req.quantity, None);
+        assert_eq!(req.item_name, "gold bars");
+    }
+
+    #[test]
+    fn parse_take_explicit_quantity() {
+        let req = parse_item_quantity_args("5 gold bar").unwrap();
+        assert_eq!(req.quantity, Some(5));
+        assert_eq!(req.item_name, "gold bar");
+    }
+
+    #[tokio::test]
+    async fn put_item_on_ground_hints_to_get_first() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut backpack = factory
+            .create_container("backpack", player_id.clone(), 5, true)
+            .await
+            .unwrap();
+        backpack.name = "backpack".to_string();
+        let backpack_id = backpack.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(backpack_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(backpack_id, backpack);
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 10)
+            .await
+            .unwrap();
+        coins.name = "coins".to_string();
+        coins.location = Some(room_id.clone());
+        objects.insert(coins.id.clone(), coins);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = put_item(&mut ctx, "coins", "backpack", None).unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::NotCarriedButOnGround("coins".to_string())
+        );
+        assert!(err.to_string().contains("on the ground"));
+        assert!(err.to_string().contains("get coins"));
+    }
+
+    #[tokio::test]
+    async fn put_item_container_on_ground_hints_to_get_first() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 5)
+            .await
+            .unwrap();
+        coins.name = "coins".to_string();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(coins_id, coins);
+
+        let mut backpack = factory
+            .create_container("backpack", player_id.clone(), 5, true)
+            .await
+            .unwrap();
+        backpack.name = "backpack".to_string();
+        backpack.location = Some(room_id.clone());
+        objects.insert(backpack.id.clone(), backpack);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = put_item(&mut ctx, "coins", "backpack", None).unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::ContainerNotCarriedButOnGround("backpack".to_string())
+        );
+        assert!(err.to_string().contains("get backpack"));
+    }
+
+    #[tokio::test]
+    async fn take_item_already_held_hints_instead_of_not_found() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 10)
+            .await
+            .unwrap();
+        coins.name = "coins".to_string();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(coins_id, coins);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = take_item(&mut ctx, "coins").unwrap_err();
+        assert_eq!(err, InventoryError::AlreadyHolding("coins".to_string()));
+        assert!(err.to_string().contains("already holding"));
+    }
+
+    #[tokio::test]
+    async fn put_specified_quantity_in_purse() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut purse = factory
+            .create_container_with_spec(
+                "purse",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 3,
+                    max_weight: Some(10),
+                    max_volume: None,
+                    wearable: true,
+                    wear_slot: Some("torso".to_string()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        purse.name = "purse".to_string();
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.set_property_int("weight", 1);
+        coins.location = Some(player_id.clone());
+
+        let purse_id = purse.id.clone();
+        let coins_id = coins.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(purse_id.clone()));
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(purse_id.clone(), purse);
+        objects.insert(coins_id.clone(), coins);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = put_item(&mut ctx, "coins", "purse", Some(10)).unwrap();
+        assert_eq!(msg, "You put 10 coins in your purse.");
+
+        let held = objects.get(&coins_id).unwrap();
+        assert_eq!(held.stack_count(), 10);
+        let purse = objects.get(&purse_id).unwrap();
+        let stored = objects.get(&purse.container_contents()[0]).unwrap();
+        assert_eq!(stored.stack_count(), 10);
+    }
+
+    #[tokio::test]
+    async fn look_self_shows_gold_bar_after_take_from_ground() {
+        use crate::display::format_look_self_summary;
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 10)
+            .await
+            .unwrap();
+        bars.name = "gold bar".to_string();
+        bars.location = Some(room_id.clone());
+        objects.insert(bars.id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        take_item(&mut ctx, "gold bar").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        let summary = format_look_self_summary(player, ctx.objects, &anatomy);
+        assert!(
+            summary.contains("gold bar"),
+            "look self should list held gold bar, got: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn look_self_shows_partial_stack_after_take_by_short_id() {
+        use crate::display::format_look_self_summary;
+        use crate::display::short_id;
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut split = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 6)
+            .await
+            .unwrap();
+        split.name = "gold bar".to_string();
+        split.location = Some(room_id.clone());
+        let split_id = split.id.clone();
+        objects.insert(split_id.clone(), split);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        take_item(&mut ctx, &format!("6 {}", short_id(&split_id))).unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        let summary = format_look_self_summary(player, ctx.objects, &anatomy);
+        assert!(
+            summary.contains("6 gold bars"),
+            "look self should show partial stack count, got: {summary}"
+        );
+    }
+
+    #[tokio::test]
+    async fn look_self_shows_stackable_quantity_in_hand() {
+        let (factory, anatomy, player_id, _room_id, mut objects) = setup_world().await;
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.location = Some(player_id.clone());
+
+        let coins_id = coins.id.clone();
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(coins_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(coins_id, coins);
+
+        let player = objects.get(&player_id).unwrap();
+        let carried = describe_carried(player, &objects, &anatomy);
+        assert!(carried.contains("20 coins"));
+        assert!(carried.contains("right hand"));
+
+        let inv = describe_inventory(player, &objects, &anatomy);
+        assert!(inv.contains("20 coins — in your right hand"));
+    }
+
+    #[tokio::test]
+    async fn look_purse_shows_stackable_contents() {
+        use crate::display::{Describable, DisplayContext, DisplayMode};
+
+        let (factory, anatomy, player_id, _room_id, mut objects) = setup_world().await;
+
+        let mut purse = factory
+            .create_container_with_spec(
+                "purse",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 3,
+                    max_weight: Some(10),
+                    max_volume: None,
+                    wearable: false,
+                    wear_slot: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        purse.name = "purse".to_string();
+
+        let mut coins = factory
+            .create_stackable_item("coins", player_id.clone(), None, 20)
+            .await
+            .unwrap();
+        coins.location = Some(purse.id.clone());
+        purse.set_property_list("contents", vec![coins.id.clone()]);
+
+        objects.insert(purse.id.clone(), purse.clone());
+        objects.insert(coins.id.clone(), coins);
+
+        let ctx = DisplayContext::new(player_id.clone(), DisplayMode::Player)
+            .with_objects(objects)
+            .with_anatomy(anatomy);
+
+        let output = purse.describe(&ctx);
+        assert!(output.contains("The purse contains 20 coins"));
+    }
+
+    #[tokio::test]
+    async fn drop_worn_backpack_clears_torso_slot() {
+        use crate::display::format_look_self_summary;
+
+        let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let backpack_id = objects
+            .values()
+            .find(|o| o.name == "Backpack")
+            .unwrap()
+            .id
+            .clone();
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        wear_item(&mut ctx, "backpack").unwrap();
+        drop_item(&mut ctx, "backpack").unwrap();
+
+        let player = ctx.objects.get(&player_id).unwrap();
+        assert!(player.body_slot_item("torso").is_none());
+        assert_eq!(
+            ctx.objects.get(&backpack_id).unwrap().location.as_ref(),
+            Some(&room_id)
+        );
+
+        let summary = format_look_self_summary(player, ctx.objects, &anatomy);
+        assert!(!summary.contains("unknown"));
+        assert!(!summary.contains("backpack"));
+    }
+
+    #[tokio::test]
+    async fn put_merges_coins_into_existing_purse_stack() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut purse = factory
+            .create_container_with_spec(
+                "purse",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 3,
+                    max_weight: Some(100),
+                    max_volume: None,
+                    wearable: true,
+                    wear_slot: Some("torso".to_string()),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        purse.name = "purse".to_string();
+
+        let proto = factory
+            .create_item("coin", player_id.clone())
+            .await
+            .unwrap();
+
+        let mut in_purse = factory
+            .create_stackable_item("coins", player_id.clone(), Some(proto.id.clone()), 5)
+            .await
+            .unwrap();
+        in_purse.location = Some(purse.id.clone());
+        purse.set_property_list("contents", vec![in_purse.id.clone()]);
+
+        let mut in_hand = factory
+            .create_stackable_item("coins", player_id.clone(), Some(proto.id), 7)
+            .await
+            .unwrap();
+        in_hand.set_property_int("weight", 1);
+        in_hand.location = Some(player_id.clone());
+
+        let purse_id = purse.id.clone();
+        let in_hand_id = in_hand.id.clone();
+        let in_purse_id = in_purse.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("torso", Some(purse_id.clone()));
+        player.set_body_slot("right_hand", Some(in_hand_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(purse_id.clone(), purse);
+        objects.insert(in_purse_id.clone(), in_purse);
+        objects.insert(in_hand_id.clone(), in_hand);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        put_item(&mut ctx, "coins", "purse", None).unwrap();
+
+        let merged = objects.get(&in_purse_id).unwrap();
+        assert_eq!(merged.stack_count(), 12);
+        assert!(objects.get(&in_hand_id).is_none());
+        assert_eq!(objects.get(&purse_id).unwrap().container_contents().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn put_into_unlimited_weight_container_accepts_full_stack() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    capacity: 5,
+                    max_weight: Some(crate::object::UNLIMITED_WEIGHT),
+                    max_volume: None,
+                    wearable: false,
+                    wear_slot: None,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.name = "chest".to_string();
+
+        let mut bars = factory
+            .create_stackable_item("gold bar", player_id.clone(), None, 50)
+            .await
+            .unwrap();
+        bars.set_property_int("weight", 10);
+        bars.location = Some(player_id.clone());
+
+        let chest_id = chest.id.clone();
+        let bars_id = bars.id.clone();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(bars_id.clone()));
+        player.set_body_slot("torso", Some(chest_id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest_id.clone(), chest);
+        objects.insert(bars_id.clone(), bars);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = put_item(&mut ctx, "gold bars", "chest", None).unwrap();
+        assert!(!msg.contains("remain in your hand"));
+
+        let stored_id = objects.get(&chest_id).unwrap().container_contents()[0].clone();
+        assert_eq!(objects.get(&stored_id).unwrap().stack_count(), 50);
     }
 }

@@ -1,17 +1,21 @@
 use std::collections::HashMap;
 
-use crate::object::{Object, ObjectId, ObjectFactory};
+use crate::object::{Object, ObjectFactory, ObjectId};
 use crate::persistence::Persistence;
+use crate::world::dirty::DirtyTracker;
 
 /// Hydrated world state restored from persistence on startup.
 #[derive(Debug, Clone)]
 pub struct WorldSession {
     pub objects: HashMap<ObjectId, Object>,
     pub current_location: Option<ObjectId>,
+    pub dirty: DirtyTracker,
 }
 
 /// Load all active objects from persistence into an in-memory map.
-pub async fn hydrate_world<P: Persistence>(persistence: &P) -> anyhow::Result<HashMap<ObjectId, Object>> {
+pub async fn hydrate_world<P: Persistence>(
+    persistence: &P,
+) -> anyhow::Result<HashMap<ObjectId, Object>> {
     let mut objects = HashMap::new();
     for obj in persistence.list_objects(false).await? {
         objects.insert(obj.id.clone(), obj);
@@ -49,6 +53,7 @@ pub async fn restore_session<P: Persistence>(
     Ok(WorldSession {
         objects,
         current_location,
+        dirty: DirtyTracker::default(),
     })
 }
 

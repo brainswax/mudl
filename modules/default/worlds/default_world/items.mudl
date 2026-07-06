@@ -1,1 +1,111 @@
-# Item prototypes (future).
+# Starting scene — clearing with mailbox and supply chest (evocative, not Zork).
+# Prototypes are templates; @item blocks place instances via bootstrap + Factory.
+
+@prototype worn-mailbox
+  name=Worn Mailbox
+  description=An old wooden mailbox, slightly askew. The metal flag rests in the down position.
+  weight=8.0
+  volume=6.0
+  pocketable=false
+  alias=mailbox
+@end
+
+@prototype travel-chest
+  name=Travel Chest
+  description=A sturdy wooden chest banded with iron. The lid is shut but not locked.
+  is_container=true
+  capacity=8
+  max_weight=100
+  weight=18.0
+  volume=24.0
+  pocketable=false
+  alias=chest
+@end
+
+@prototype chipped-blade
+  name=Chipped Blade
+  description=A notched iron blade. Scars along the edge speak of hard use.
+  weight=4.0
+  volume=3.0
+  hand_slot=right
+  alias=sword
+  alias=blade
+@end
+
+@prototype iron-lantern
+  name=Iron Lantern
+  description=A soot-darkened lantern. The wick looks ready to light.
+  weight=2.5
+  volume=2.0
+  hand_slot=right
+  alias=lantern
+  alias=lamp
+@end
+
+@prototype trail-rations
+  name=Trail Rations
+  description=Wax-paper bundles of dried fruit and hardtack.
+  stackable=true
+  stack_count=3
+  weight=0.5
+  volume=0.5
+  pocketable=true
+  alias=rations
+  alias=food
+@end
+
+@prototype tinderbox
+  name=Tinderbox
+  description=A small tin holding flint, steel, and dry tinder.
+  weight=0.3
+  volume=0.4
+  pocketable=true
+  alias=tinder
+@end
+
+@prototype folded-note
+  name=Folded Note
+  description=A creased slip of paper. Faint ink reads: "Supplies within — mind the dark."
+  weight=0.1
+  volume=0.1
+  pocketable=true
+  alias=note
+  alias=paper
+@end
+
+# --- Instances in the starting clearing (the-void) ---
+
+@item scene-mailbox
+  prototype=worn-mailbox
+  location=the-void
+@end
+
+@item scene-chest
+  prototype=travel-chest
+  location=the-void
+@end
+
+@item chest-chipped-blade
+  prototype=chipped-blade
+  location=scene-chest
+@end
+
+@item chest-iron-lantern
+  prototype=iron-lantern
+  location=scene-chest
+@end
+
+@item chest-trail-rations
+  prototype=trail-rations
+  location=scene-chest
+@end
+
+@item chest-tinderbox
+  prototype=tinderbox
+  location=scene-chest
+@end
+
+@item chest-folded-note
+  prototype=folded-note
+  location=scene-chest
+@end

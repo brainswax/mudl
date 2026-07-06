@@ -2,7 +2,7 @@
 
 **MUDL** (working name) — An IRC-first, programmable MUD/MOO with a custom domain-specific language (DSL), self-modifying world capabilities, and multi-modal authoring (IRC chat, REPL, files, GitHub).
 
-**Status**: High-level design (MVP phase). This document will evolve as we implement.
+**Status**: High-level design + **Milestone 1 implemented** (object roles, movement, inventory, persistence). This document tracks both target architecture and known M1 gaps.
 
 ## Vision
 A living, collaborative text world where:
@@ -14,7 +14,69 @@ A living, collaborative text world where:
 
 The system emphasizes **separation of concerns**, extensibility, and safety (especially for live/LLM-generated code).
 
-## High-Level Architecture
+## Milestone 1 — As Built (2026)
+
+M1 delivers a working object graph, centralized movement, REPL inventory verbs, and SQLite roundtrip. The diagram below shows **actual** module dependencies today (solid = implemented, dashed = planned).
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Frontends: REPL (src/bin/repl.rs)          IRC / Gateway (planned)    │
+└───────────────────────────────┬─────────────────────────────────────────┘
+                                │ parse_command_line, InventoryContext
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Command layer (src/command/)                                           │
+│  create / bootstrap / persist helpers / @meta parse                     │
+└───────┬─────────────────────────────┬───────────────────────────────────┘
+        │                             │
+        ▼                             ▼
+┌───────────────────┐       ┌─────────────────────────────────────────────┐
+│ Inventory         │       │ Display (src/display/)                      │
+│ take/drop/put/    │──────▶│ resolve, look/examine, grammar, equipment   │
+│ wear/wield        │       │ (resolve delegates possession queries)      │
+└─────────┬─────────┘       └─────────────────────────────────────────────┘
+          │ delegates
+          ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  MoveManager (src/world/move_manager.rs) — single authority for moves  │
+│  + possession (body slots, carried gear, anatomy-driven grasp placement)│
+│  + stack_transfer (merge/split plans) + LocationRef resolution          │
+└─────────┬───────────────────────────────┬───────────────────────────────┘
+          │                               │
+          ▼                               ▼
+┌─────────────────────┐         ┌─────────────────────────────────────────┐
+│ Object model        │         │ MUDL loader (src/mudl/)                 │
+│ roles, factory,     │◀────────│ anatomy, map, MudlRoleProps             │
+│ weight, editor      │         │ items.mudl prototypes (placeholder)     │
+└─────────┬───────────┘         └─────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Persistence trait → SqlitePersistence (JSON Object rows + counters)    │
+│  hydrate_world / persist_all / DirtyTracker (incremental, underused)    │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### M1 strengths
+
+| Area | What works well |
+|------|-----------------|
+| **Movement** | `MoveManager` owns validation, stack merge/split, capacity/weight/volume; `move_to_grasp` / `possession` handle hand placement |
+| **Roles** | Composable properties (`is_container`, `stackable`, `body_slots`, …) + `MudlRoleProps` bridge |
+| **Anatomy** | Creature slots loaded from MUDL; grasp/wear resolution uses `BodyPlan` |
+| **Persistence** | Full JSON roundtrip verified (222 tests); complex graphs (containers, stacks, slots) reload identically |
+| **Factory** | `ObjectFactory<P: Persistence>` abstracts creation + ID counters |
+| **Presentation** | Clean split: player (`look`) vs builder (`@examine`); centralized `resolve_object` |
+
+### M1 known gaps (see review priorities below)
+
+- ~~**Dual graph state** in REPL~~ — resolved: `repl::Session` is the single authority (IRC still needs per-connection registry)
+- **`object` → `display` coupling** (`Describable` on `Object`) — core imports presentation
+- **`items.mudl` starter scene** — West Clearing mailbox + supply chest spawn at bootstrap; expand for more world data
+- **No gateway, events, or multi-user session isolation** yet
+- **Graph invariants** (`location`, `contents`, `body_slots`) enforced by ad-hoc prune/clear, not a single validator
+
+## High-Level Architecture (target)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Frontends / Input Layers                  │
@@ -55,10 +117,12 @@ The system emphasizes **separation of concerns**, extensibility, and safety (esp
 
 ### 1. Object Model (Fundamental)
 - Everything is an **Object** (rooms, items, players, NPCs, abstract concepts).
-- Properties: key-value data with optional behaviors.
+- **Composable roles** (not deep inheritance): `Container`, `Wearable`, `Creature`, `Stackable`, plus location types (`room`, `area`, …).
+- `LocationRef` enum models the object graph: `Room`, `Inventory`, `Container`, `BodySlot`, `Nowhere`.
+- Properties: key-value data with optional behaviors (`weight`, `volume`, `capacity`, `contents`, `body_slots`, …).
 - Verbs/Behaviors: executable code attached to objects.
-- Events/Hooks: `on_enter`, `on_say`, `on_use`, custom events.
-- Prototype/parent system for inheritance.
+- Events/Hooks: `on_enter`, `on_say`, `on_use`, custom events; `MoveManager` stubs `on_move` for future triggers.
+- Prototype/parent system for inheritance and stackable/identical items.
 
 ### 2. DSL Interpreter
 - Custom language ("MUDL") designed for MUD concepts.
@@ -110,14 +174,15 @@ The system emphasizes **separation of concerns**, extensibility, and safety (esp
 ```
 mudl/
 ├── src/                    # Rust engine only
-│   ├── object/             # Object model + ObjectFactory
-│   ├── mudl/               # MUDL parser, anatomy, @include loader
-│   ├── world/              # Module bootstrap + packaging
+│   ├── object/             # Object model, roles, LocationRef, ObjectFactory
+│   ├── mudl/               # MUDL parser, anatomy, role props, @include loader
+│   ├── world/              # Bootstrap, MoveManager, possession, dirty tracking, session
 │   ├── command/            # Shared command/bootstrap helpers
 │   ├── display/            # Player/builder/debug presentation
-│   ├── inventory/          # Body-slot inventory operations
+│   ├── inventory/          # Body-slot inventory (delegates to MoveManager)
+│   ├── repl/               # Per-player Session (REPL + future IRC)
 │   ├── persistence/        # SQLite abstraction
-│   └── bin/repl.rs         # Development REPL
+│   └── bin/repl.rs         # Development REPL (thin adapter over repl::Session)
 ├── modules/                # MUDL game data (not Rust)
 │   └── default/            # Official baseline universe
 │       ├── universe.mudl   # Universe entrypoint (@universe, @include-world)
@@ -178,32 +243,95 @@ Builders/DMs can fork `modules/default/` to create custom universe packs:
 
 The object model's prototype/parent system (`prototype: Option<ObjectId>`) is the runtime foundation for this — MUDL modules define the authoritative data; the engine resolves inheritance when spawning and displaying objects.
 
+## Builder & Wizard Tools
+
+See **[BUILDER.md](BUILDER.md)** for the builder/wizard command design: `@set` / `@unset`, the Properties / State / Status model, permissions, and `@examine` format.
+
 ## Player Commands (REPL / MVP)
 
-- **`create <type> <name>`** — Creates an object via `ObjectFactory`. When the player has a current location, the new object is placed there automatically (works for `area`, `room`, `location`, or any navigable place — not hardcoded to rooms).
-- **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
-- **`look`** — Locations (`room`, `area`, …) list ground items via `You see: …`. **`look self`** and **`inventory`** reflect held items using creature slot state.
+See **[COMMANDS.md](COMMANDS.md)** for the full command reference.
 
-Command helpers live in `src/command/`; inventory slot logic in `src/inventory/`; presentation in `src/display/` and `Object::is_location()`.
+- **`create <type> <name> [key=value...]`** — Creates an object via `ObjectFactory`. The display name is parsed separately from options (`capacity=3`, `max_weight=10`, etc.); options become properties, not part of `name` or the ID slug. ID base names are slugified and capped at 16 characters (`purse` → `item:purse-001`). When the player has a current location, the new object is placed there automatically.
+- **`take` / `get <item>`** — Picks up a visible item from the ground in the current location (carried items are excluded from target resolution). Uses grasp slots from the player's creature anatomy. One ground match takes silently; multiple ground matches disambiguate with short IDs. Failure messages: *"You don't see any X here."*, *"Your hands are full."*, etc.
+- **`look`** / **`examine`** — In-character, IRC-friendly natural language (`DisplayFlags::BRIEF` for look). No leading object name on items. Containers: `The backpack contains 20 coins.` `look self`: one gear sentence. `examine self`: creature + gear prose, slot occupancy, and weight. See `COMMANDS.md` style guidelines.
+- **`@look`** / **`@examine`** — Out-of-character builder views (`DisplayMode::Builder`): structured properties, state, status.
+- **`@dump`** — Raw JSON debug dump.
+- **`inventory`** — Full slot-by-slot listing (use `examine self` for weight totals).
+
+### Command conventions (`@` meta-commands)
+
+Player verbs have no prefix (`look`, `examine`, `take`, …). Wizard/builder meta-commands use a leading **`@`**:
+
+| Player (in-character) | Wizard (out-of-character) |
+|--------|--------|
+| `look backpack` | `@look backpack` |
+| `examine coins` | `@examine coins` |
+| `create sword …` | `@create container … capacity=3` |
+| — | `@dump`, `@delete`, `@undelete` |
+
+The parser (`src/command/parse.rs`) strips `@`, lowercases the verb, and routes to meta handlers after a permission check (`has_wizard_permission`, stubbed). Future meta-commands (`@set`, …) follow the same pattern.
+
+**Target resolution** (`src/display/resolve.rs`) is centralized for `look`, `examine`, `get`, `put`, and related verbs:
+
+1. Immediate possession (body slots)
+2. Nested containers carried/worn by the player (BFS queue — no deep recursion)
+3. Ground in the current room (player-owned first)
+4. Global fallback (any active object)
+
+Multiple matches in the same tier prompt disambiguation: `Which coins do you mean?` with lines like `coins-042 (in purse)`. Possession is searched before room scans to avoid full-world iteration.
+
+Command helpers live in `src/command/`; possession graph logic in `src/world/possession.rs`; inventory verbs in `src/inventory/`; presentation in `src/display/`.
+
+## Move Semantics
+
+`MoveManager` (`src/world/move_manager.rs`) is the single authority for relocating objects:
+
+- `move_object(src: LocationRef, dst: LocationRef, obj: ObjId)` validates source placement, checks destination capacity/weight/volume, updates holder lists (`contents`, `body_slots`), and fires `on_move` hooks.
+- Inventory commands (`take`, `drop`, `put`, `remove`, `wear`) delegate to `MoveManager` convenience wrappers.
+- `ObjectFactory::create_stackable_item` creates one instance with `stack_count`; `create_item_instances` spawns separate IDs for non-stacked duplicates.
+- `put [count] <item> in <container>` transfers a specific stack quantity; omitting count moves as many units as fit (weight/volume/slots). Remainder stays carried with feedback (`5 won't fit.`).
+- `look <container>` shows `The purse contains 20 coins.` using stack-aware labels (`src/display/container.rs`).
 
 ## Persistence Strategy
 
-All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID counter table.
+All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID counter table. New role fields (`weight`, `volume`, `max_weight`, `stack_count`, etc.) live inside the JSON blob — no schema migration required.
 
 | When | What is saved |
 |------|----------------|
 | `ObjectFactory::create*` | New object immediately (`save_object`) |
-| `create` / `create_at_location` | Object + updated `location` |
-| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Full active object graph after mutation (`persist_all`) |
+| `create` / `create_at_location` / `@create` | Object + updated `location` |
+| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Full active object graph after mutation (`persist_all`); `DirtyTracker` + `persist_dirty` available for incremental saves |
 | `go` | Player `location` |
 | `add_prop`, `add_verb`, `save` | Target object |
 | Bootstrap | World areas, exits, default player (idempotent) |
 
 **Startup**: `bootstrap_world()` ensures MUDL-defined content exists, then `restore_session()` hydrates all active objects from the DB and restores the player's `current_location` from their persisted `location` field.
 
+**Roundtrip guarantee (M1)**: `milestone1_complex_scene_persist_reload_identical` builds a post-play graph (worn container, nested stack, two-handed wield, split ground piles), runs `persist_all` → `hydrate_world`, and asserts byte-identical `Object` equality for every node plus reference integrity across the graph.
+
+**Incremental saves**: `MoveContext.dirty` + `DirtyTracker` mark touched IDs during moves; REPL still calls `persist_all` after inventory verbs — wire dirty tracking through REPL before scaling object counts.
+
 **Soft deletes**: Objects are never hard-deleted. `is_deleted` and `deleted_at` on `Object` mark removal; `list_objects(false)` hides them from normal play. Wizard commands `@delete <target>` and `@undelete <id>` toggle the flag. Deleted objects remain loadable by ID for recovery.
 
 **Schema**: `objects(id, data, is_deleted, deleted_at)` and `counters(type_base, counter)`. Older DB files are migrated with `ALTER TABLE` on connect.
+
+## Refactor Roadmap (post-M1 review)
+
+### Do soon (before doc/examples drift)
+
+1. ~~**Unify wield through MoveManager**~~ — Done: `move_to_grasp` + `possession::select_grasp_slots` (anatomy-driven); `wield` routes through MoveManager.
+2. ~~**REPL session model**~~ — Done: `repl::Session` owns the object graph, location, anatomy, and `DirtyTracker`; REPL uses incremental `persist_changes`.
+3. ~~**Factory ordering**~~ — Done: fixed pipeline (allocate → prototype → role → defaults-if-unset → commit).
+4. ~~**Populate `items.mudl`**~~ — Done: `@prototype` / `@item` parser + bootstrap spawn; West Clearing starter scene.
+
+### Defer (next milestones)
+
+- Gateway + per-player world views (multi-user / IRC)
+- Event bus wiring `MoveHooks.on_move` → `event_handlers`
+- Prototype inheritance resolver in world state (not just factory copy)
+- Location/exits as first-class `LocationRef` / exit objects (beyond `exits` map on areas)
+- Graph consistency validator (orphan `contents`, stale `body_slots`) on load
+- SQLite transactions wrapping multi-object moves
 
 ## Future Directions
 - Full LLM content generation pipeline.

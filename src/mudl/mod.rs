@@ -1,5 +1,7 @@
 pub mod anatomy;
+pub mod item_def;
 pub mod loader;
+pub mod roles;
 pub mod world_def;
 
 pub use anatomy::{
@@ -10,4 +12,6 @@ pub use loader::{
     default_module_dir, default_universe_path, load_module, load_universe, LoadedUniverse,
     LoadedWorld,
 };
+pub use item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
+pub use roles::MudlRoleProps;
 pub use world_def::{parse_world_file, WorldDef};
