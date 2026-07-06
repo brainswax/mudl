@@ -101,7 +101,69 @@ pub struct KeySpec {
     pub lock_id: String,
 }
 
-/// Configuration for a door — a lockable gate on a room exit.
+/// Kind of exit portal — doors, windows, and future teleporters share one model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PortalKind {
+    Door,
+    Window,
+    Teleport,
+}
+
+impl PortalKind {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "door" => Some(Self::Door),
+            "window" => Some(Self::Window),
+            "teleport" | "portal" => Some(Self::Teleport),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Door => "door",
+            Self::Window => "window",
+            Self::Teleport => "teleport",
+        }
+    }
+
+    pub fn default_passable(self) -> bool {
+        matches!(self, Self::Door | Self::Teleport)
+    }
+
+    pub fn default_transparent(self) -> bool {
+        matches!(self, Self::Window)
+    }
+
+    /// Player-facing noun for messages (`door`, `window`, `portal`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Door => "door",
+            Self::Window => "window",
+            Self::Teleport => "portal",
+        }
+    }
+}
+
+/// Configuration for an exit portal (door, window, or teleport).
+#[derive(Debug, Clone)]
+pub struct PortalSpec {
+    pub kind: PortalKind,
+    /// Exit or view direction (`in`, `out`, `north`, …).
+    pub direction: String,
+    /// Destination area base name (resolved to an object id at bootstrap).
+    pub destination: String,
+    /// Whether the portal starts open. Doors and windows default to closed.
+    pub open: bool,
+    pub lock_id: Option<String>,
+    pub locked: bool,
+    /// When set, overrides the kind default (windows are not passable by default).
+    pub passable: Option<bool>,
+    /// When set, overrides the kind default (windows are transparent by default).
+    pub transparent: Option<bool>,
+}
+
+/// Configuration for a door — convenience wrapper around [`PortalSpec`].
 #[derive(Debug, Clone)]
 pub struct DoorSpec {
     /// Exit direction this door guards (`in`, `out`, `north`, …).
@@ -338,54 +400,154 @@ impl Object {
         }
     }
 
-    pub fn is_door(&self) -> bool {
-        self.get_bool_property("is_door").unwrap_or(false)
+    pub fn portal_kind(&self) -> Option<PortalKind> {
+        self.get_string_property("portal_kind")
+            .and_then(|s| PortalKind::parse(&s))
+            .or_else(|| {
+                if self.get_bool_property("is_window").unwrap_or(false) {
+                    Some(PortalKind::Window)
+                } else if self.get_bool_property("is_door").unwrap_or(false) {
+                    Some(PortalKind::Door)
+                } else {
+                    None
+                }
+            })
     }
 
-    pub fn door_direction(&self) -> Option<String> {
+    pub fn is_portal(&self) -> bool {
+        self.portal_kind().is_some()
+    }
+
+    pub fn is_door(&self) -> bool {
+        self.portal_kind() == Some(PortalKind::Door)
+    }
+
+    pub fn is_window(&self) -> bool {
+        self.portal_kind() == Some(PortalKind::Window)
+    }
+
+    pub fn portal_direction(&self) -> Option<String> {
         self.get_string_property("door_direction")
     }
 
+    pub fn door_direction(&self) -> Option<String> {
+        self.portal_direction()
+    }
+
     /// Resolved destination room id (set at bootstrap).
-    pub fn door_destination(&self) -> Option<ObjectId> {
+    pub fn portal_destination(&self) -> Option<ObjectId> {
         self.get_object_ref_property("door_destination")
     }
 
+    pub fn door_destination(&self) -> Option<ObjectId> {
+        self.portal_destination()
+    }
+
     /// Destination area base name from MUDL (before bootstrap resolution).
-    pub fn door_destination_base(&self) -> Option<String> {
+    pub fn portal_destination_base(&self) -> Option<String> {
         self.get_string_property("door_destination_base")
     }
 
-    pub fn set_door_destination(&mut self, destination: ObjectId) {
+    pub fn door_destination_base(&self) -> Option<String> {
+        self.portal_destination_base()
+    }
+
+    pub fn set_portal_destination(&mut self, destination: ObjectId) {
         self.set_property_object_ref("door_destination", destination);
     }
 
-    pub fn apply_door_role(&mut self, spec: &DoorSpec) {
-        self.set_property_bool("is_door", true);
+    pub fn set_door_destination(&mut self, destination: ObjectId) {
+        self.set_portal_destination(destination);
+    }
+
+    pub fn portal_passable(&self) -> bool {
+        self.get_bool_property("portal_passable")
+            .unwrap_or_else(|| {
+                self.portal_kind()
+                    .map(PortalKind::default_passable)
+                    .unwrap_or(false)
+            })
+    }
+
+    pub fn portal_transparent(&self) -> bool {
+        self.get_bool_property("portal_transparent")
+            .unwrap_or_else(|| {
+                self.portal_kind()
+                    .map(PortalKind::default_transparent)
+                    .unwrap_or(false)
+            })
+    }
+
+    /// Whether the player can see through this portal into its destination.
+    pub fn portal_allows_view(&self) -> bool {
+        if !self.is_portal() {
+            return false;
+        }
+        if self.gate_is_locked() {
+            return false;
+        }
+        self.portal_transparent() || self.gate_is_open()
+    }
+
+    pub fn apply_portal_role(&mut self, spec: &PortalSpec) {
+        self.set_property_bool("is_portal", true);
+        self.set_property_string("portal_kind", spec.kind.as_str());
+        match spec.kind {
+            PortalKind::Door => self.set_property_bool("is_door", true),
+            PortalKind::Window => self.set_property_bool("is_window", true),
+            PortalKind::Teleport => {}
+        }
         self.set_property_string("door_direction", &spec.direction);
         self.set_property_string("door_destination_base", &spec.destination);
         self.set_property_bool("is_open", spec.open);
+        self.set_property_bool(
+            "portal_passable",
+            spec.passable.unwrap_or_else(|| spec.kind.default_passable()),
+        );
+        self.set_property_bool(
+            "portal_transparent",
+            spec.transparent
+                .unwrap_or_else(|| spec.kind.default_transparent()),
+        );
         self.set_property_bool("is_pocketable", false);
         if let Some(ref lock_id) = spec.lock_id {
             self.set_container_lock_id(lock_id);
             self.set_container_locked(spec.locked);
         }
+        let (default_weight, default_volume) = match spec.kind {
+            PortalKind::Window => (2.0, 1.0),
+            PortalKind::Door => (5.0, 4.0),
+            PortalKind::Teleport => (1.0, 1.0),
+        };
         if self.get_numeric_property("weight").is_none() {
-            self.set_property_numeric("weight", 5.0);
+            self.set_property_numeric("weight", default_weight);
         }
         if self.get_numeric_property("volume").is_none() {
-            self.set_property_numeric("volume", 4.0);
+            self.set_property_numeric("volume", default_volume);
         }
     }
 
-    /// Whether this object has a lock (`lock_id` set) — containers and doors.
+    pub fn apply_door_role(&mut self, spec: &DoorSpec) {
+        self.apply_portal_role(&PortalSpec {
+            kind: PortalKind::Door,
+            direction: spec.direction.clone(),
+            destination: spec.destination.clone(),
+            open: spec.open,
+            lock_id: spec.lock_id.clone(),
+            locked: spec.locked,
+            passable: None,
+            transparent: None,
+        });
+    }
+
+    /// Whether this object has a lock (`lock_id` set) — containers and portals.
     pub fn gate_has_lock(&self) -> bool {
         self.container_lock_id().is_some()
     }
 
-    /// Open state for a door or container.
+    /// Open state for a portal or container.
     pub fn gate_is_open(&self) -> bool {
-        if self.is_door() {
+        if self.is_portal() {
             return self.get_bool_property("is_open").unwrap_or(false);
         }
         if self.is_container() {
@@ -406,7 +568,7 @@ impl Object {
         self.set_property_bool("is_locked", locked);
     }
 
-    /// Whether `key` opens a lockable gate (container or door).
+    /// Whether `key` opens a lockable gate (container or portal).
     pub fn key_unlocks_gate(key: &Object, gate: &Object) -> bool {
         if !key.is_key() || !gate.gate_has_lock() {
             return false;

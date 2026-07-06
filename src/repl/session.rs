@@ -8,7 +8,9 @@ use crate::display::{
     format_room_look_player, narrate_go, narrate_no_exit, narrate_no_location, resolve_object,
     DisplayContext, DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::world::door::{door_for_direction, door_passage_block, door_permits_exit, DoorBlock};
+use crate::world::portal::{
+    portal_for_direction, portal_passage_block, portal_permits_exit, PortalBlock,
+};
 use crate::world::navigation::{normalize_direction, resolve_exit};
 use crate::inventory::InventoryContext;
 use crate::mudl::AnatomyRegistry;
@@ -230,14 +232,14 @@ impl Session {
         let (dir_label, target_id) = resolve_exit(&exits, direction)
             .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
 
-        if let Some(door) = door_for_direction(&loc_id, dir_label, &self.objects) {
-            if !door_permits_exit(door, &target_id) {
+        if let Some(portal) = portal_for_direction(&loc_id, dir_label, &self.objects) {
+            if !portal_permits_exit(portal, &target_id) {
                 return Err(SessionError::NoExit(direction.to_string()));
             }
-            let name = door.name.to_lowercase();
-            match door_passage_block(door) {
-                Some(DoorBlock::Closed) => return Err(SessionError::DoorClosed(name)),
-                Some(DoorBlock::Locked) => return Err(SessionError::DoorLocked(name)),
+            let name = portal.name.to_lowercase();
+            match portal_passage_block(portal) {
+                Some(PortalBlock::Closed) => return Err(SessionError::DoorClosed(name)),
+                Some(PortalBlock::Locked) => return Err(SessionError::DoorLocked(name)),
                 None => {}
             }
         }

@@ -926,7 +926,7 @@ fn resolve_gate_target(
             if ctx
                 .objects
                 .get(&id)
-                .is_some_and(|obj| obj.is_door() && obj.is_active())
+                .is_some_and(|obj| obj.is_portal() && obj.is_active())
             {
                 return Ok(id);
             }
@@ -937,7 +937,7 @@ fn resolve_gate_target(
         .objects
         .get(&id)
         .ok_or_else(|| InventoryError::NotFound(name.to_string()))?;
-    if obj.is_door() || obj.is_container() {
+    if obj.is_portal() || obj.is_container() {
         Ok(id)
     } else {
         Err(InventoryError::NotContainer)

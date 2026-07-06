@@ -1,8 +1,8 @@
 //! Apply composable object roles from MUDL property definitions.
 
 use crate::object::{
-    ContainerSpec, DoorSpec, ItemPhysSpec, KeySpec, Object, ReadableSpec, StackableSpec,
-    WearableSpec,
+    ContainerSpec, ItemPhysSpec, KeySpec, Object, PortalKind, PortalSpec, ReadableSpec,
+    StackableSpec, WearableSpec,
 };
 
 /// Key-value role properties parsed from MUDL item/object blocks.
@@ -31,8 +31,12 @@ pub struct MudlRoleProps {
     pub is_key: Option<bool>,
     pub allowed_types: Option<String>,
     pub is_door: Option<bool>,
+    pub is_window: Option<bool>,
+    pub portal_kind: Option<String>,
     pub door_direction: Option<String>,
     pub door_destination: Option<String>,
+    pub portal_passable: Option<bool>,
+    pub portal_transparent: Option<bool>,
 }
 
 impl MudlRoleProps {
@@ -64,11 +68,19 @@ impl MudlRoleProps {
                 "is_key" | "key" => props.is_key = Some(*value == "true"),
                 "allowed_types" => props.allowed_types = Some(value.to_string()),
                 "is_door" | "door" => props.is_door = Some(*value == "true"),
-                "door_direction" | "direction" => {
+                "is_window" | "window" => props.is_window = Some(*value == "true"),
+                "portal_kind" | "portal" => props.portal_kind = Some(value.to_string()),
+                "door_direction" | "portal_direction" | "direction" => {
                     props.door_direction = Some(value.to_string())
                 }
-                "door_destination" | "destination" => {
+                "door_destination" | "portal_destination" | "destination" => {
                     props.door_destination = Some(value.to_string())
+                }
+                "portal_passable" | "passable" => {
+                    props.portal_passable = Some(*value == "true")
+                }
+                "portal_transparent" | "transparent" => {
+                    props.portal_transparent = Some(*value == "true")
                 }
                 _ => {}
             }
@@ -103,20 +115,37 @@ impl MudlRoleProps {
     /// Apply parsed role properties onto an object (composable — multiple roles allowed).
     pub fn apply_to(&self, obj: &mut Object) {
         if self.is_door == Some(true)
+            || self.is_window == Some(true)
+            || self.portal_kind.is_some()
             || self.door_direction.is_some()
             || self.door_destination.is_some()
         {
+            let kind = self
+                .portal_kind
+                .as_deref()
+                .and_then(PortalKind::parse)
+                .or_else(|| {
+                    if self.is_window == Some(true) {
+                        Some(PortalKind::Window)
+                    } else if self.is_door == Some(true) {
+                        Some(PortalKind::Door)
+                    } else {
+                        obj.portal_kind()
+                    }
+                })
+                .unwrap_or(PortalKind::Door);
             let direction = self
                 .door_direction
                 .clone()
-                .or_else(|| obj.door_direction())
+                .or_else(|| obj.portal_direction())
                 .unwrap_or_else(|| "in".to_string());
             let destination = self
                 .door_destination
                 .clone()
-                .or_else(|| obj.door_destination_base())
+                .or_else(|| obj.portal_destination_base())
                 .unwrap_or_default();
-            obj.apply_door_role(&DoorSpec {
+            obj.apply_portal_role(&PortalSpec {
+                kind,
                 direction,
                 destination,
                 open: self
@@ -128,6 +157,8 @@ impl MudlRoleProps {
                     .locked
                     .or_else(|| obj.get_bool_property("is_locked"))
                     .unwrap_or(false),
+                passable: self.portal_passable,
+                transparent: self.portal_transparent,
             });
             if let Some(w) = self.weight {
                 obj.set_property_numeric("weight", w);
@@ -294,14 +325,32 @@ mod tests {
         let mut obj = bare("item:door-001");
         props.apply_to(&mut obj);
         assert!(obj.is_door());
-        assert_eq!(obj.door_direction().as_deref(), Some("in"));
+        assert_eq!(obj.portal_direction().as_deref(), Some("in"));
         assert_eq!(
-            obj.door_destination_base().as_deref(),
+            obj.portal_destination_base().as_deref(),
             Some("cottage-interior")
         );
         assert!(!obj.gate_is_open());
         assert!(obj.gate_is_locked());
         assert_eq!(obj.container_lock_id().as_deref(), Some("cottage-door"));
+        assert!(obj.portal_passable());
+        assert!(!obj.portal_transparent());
+    }
+
+    #[test]
+    fn mudl_role_props_apply_window() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("is_window", "true"),
+            ("door_direction", "east"),
+            ("door_destination", "cottage-rear"),
+            ("is_open", "false"),
+        ]);
+        let mut obj = bare("item:window-001");
+        props.apply_to(&mut obj);
+        assert!(obj.is_window());
+        assert!(!obj.portal_passable());
+        assert!(obj.portal_transparent());
+        assert!(obj.portal_allows_view());
     }
 
     #[test]

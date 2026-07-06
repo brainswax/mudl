@@ -121,6 +121,17 @@
   alias=door
 @end
 
+@prototype cottage-window
+  name=Small Window
+  description=A small paned window set high in the wall.
+  is_window=true
+  is_open=false
+  weight=2.0
+  volume=1.0
+  pocketable=false
+  alias=window
+@end
+
 @prototype cottage-key
   name=Cottage Key
   description=A small iron key on a frayed string.
@@ -200,4 +211,11 @@
   location=cottage-interior
   door_direction=out
   door_destination=cottage-front
+@end
+
+@item cottage-interior-window
+  prototype=cottage-window
+  location=cottage-interior
+  door_direction=east
+  door_destination=cottage-rear
 @end

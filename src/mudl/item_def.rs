@@ -242,6 +242,18 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.door_destination.is_some() {
         target.door_destination = extra.door_destination.clone();
     }
+    if extra.is_window.is_some() {
+        target.is_window = extra.is_window;
+    }
+    if extra.portal_kind.is_some() {
+        target.portal_kind = extra.portal_kind.clone();
+    }
+    if extra.portal_passable.is_some() {
+        target.portal_passable = extra.portal_passable;
+    }
+    if extra.portal_transparent.is_some() {
+        target.portal_transparent = extra.portal_transparent;
+    }
 }
 
 #[cfg(test)]

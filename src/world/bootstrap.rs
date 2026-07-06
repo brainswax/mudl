@@ -152,16 +152,16 @@ async fn spawn_instance<P: Persistence>(
         objects.insert(parent_id.clone(), parent);
     }
 
-    if obj.is_door() {
-        if let Some(base) = obj.door_destination_base() {
+    if obj.is_portal() {
+        if let Some(base) = obj.portal_destination_base() {
             let dest_id = placements.get(&base).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Unknown door destination '{}' for item '{}'",
+                    "Unknown portal destination '{}' for item '{}'",
                     base,
                     def.base_name
                 )
             })?;
-            obj.set_door_destination(dest_id.clone());
+            obj.set_portal_destination(dest_id.clone());
         }
     }
 
@@ -570,6 +570,61 @@ mod tests {
             interior_door.door_destination().as_ref(),
             Some(&cottage_front.id)
         );
+
+        let cottage_rear = objects
+            .iter()
+            .find(|o| o.name == "Behind the Cottage")
+            .expect("cottage rear");
+        let interior_window = objects
+            .iter()
+            .find(|o| {
+                o.is_window()
+                    && o.location.as_ref() == Some(&cottage_interior.id)
+                    && o.portal_direction().as_deref() == Some("east")
+            })
+            .expect("interior window");
+        assert!(!interior_window.portal_passable());
+        assert!(interior_window.portal_transparent());
+        assert!(interior_window.portal_allows_view());
+        assert_eq!(
+            interior_window.portal_destination().as_ref(),
+            Some(&cottage_rear.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn cottage_interior_window_shows_rear_view_on_look() {
+        use crate::display::format_room_look_player;
+        use crate::display::{DisplayContext, DisplayMode};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let owner = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        bootstrap_world(&factory, owner, &world).await.unwrap();
+
+        let objects: Vec<Object> = persistence.list_objects(false).await.unwrap();
+        let interior_id = objects
+            .iter()
+            .find(|o| o.name == "Cottage Interior")
+            .expect("cottage interior")
+            .id
+            .clone();
+
+        let object_map: HashMap<ObjectId, Object> =
+            objects.into_iter().map(|o| (o.id.clone(), o)).collect();
+        let interior = object_map
+            .get(&interior_id)
+            .expect("interior object")
+            .clone();
+        let look = format_room_look_player(
+            &interior,
+            &DisplayContext::new(ObjectId::new("player:hero-001"), DisplayMode::Player)
+                .with_objects(object_map),
+        );
+        assert!(look.contains("Through the east window you see:"));
+        assert!(look.contains("stacked firewood"));
     }
 
     #[tokio::test]

@@ -17,7 +17,8 @@ pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS
 pub use location::LocationRef;
 pub use roles::{
     allowed_type_label, format_allowed_type_labels, parse_allowed_types, ContainerSpec,
-    DoorSpec, ItemPhysSpec, KeySpec, ObjectRoles, ReadableSpec, RoleKind, StackableSpec,
+    DoorSpec, ItemPhysSpec, KeySpec, ObjectRoles, PortalKind, PortalSpec, ReadableSpec,
+    RoleKind, StackableSpec,
     WearableSpec,
 };
 pub use weight::{
