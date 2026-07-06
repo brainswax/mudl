@@ -988,23 +988,25 @@ pub fn lock_container(
     if !container.container_has_lock() {
         return Err(InventoryError::NoLock(container.name.to_lowercase()));
     }
-    if container.container_is_open() {
-        return Err(InventoryError::InvalidTarget(
-            "You should close it before you lock it.".into(),
-        ));
-    }
+
+    let display = container.name.to_lowercase();
     if container.container_is_locked() {
-        return Ok(format!(
-            "The {} is already locked.",
-            container.name.to_lowercase()
-        ));
+        return Ok(format!("The {display} is already locked."));
     }
 
+    let was_open = container.container_is_open();
     let mut container = container;
+    if was_open {
+        container.set_container_open(false);
+    }
     container.set_container_locked(true);
     ctx.objects.insert(container_id, container.clone());
 
-    Ok(format!("You lock the {}.", container.name.to_lowercase()))
+    if was_open {
+        Ok(format!("You close the {display} and lock it."))
+    } else {
+        Ok(format!("You lock the {display}."))
+    }
 }
 
 /// Unlock a container using a matching key.
@@ -3541,6 +3543,7 @@ mod tests {
             .await
             .unwrap();
         chest.location = Some(room_id.clone());
+        let chest_id = chest.id.clone();
 
         let key = factory
             .create_key("brass key", player_id.clone(), "chest-demo", None)
@@ -3573,6 +3576,12 @@ mod tests {
 
         let open_msg = open_container(&mut ctx, "chest").unwrap();
         assert_eq!(open_msg, "You open the travel chest. It is empty.");
+
+        let lock_open_msg = lock_container(&mut ctx, "chest").unwrap();
+        assert_eq!(lock_open_msg, "You close the travel chest and lock it.");
+        let chest = ctx.objects.get(&chest_id).unwrap();
+        assert!(!chest.container_is_open());
+        assert!(chest.container_is_locked());
     }
 
     #[tokio::test]
