@@ -83,6 +83,13 @@ pub struct StackableSpec {
     pub max_stack: u32,
 }
 
+/// Configuration for objects with readable (and optionally writable) text.
+#[derive(Debug, Clone)]
+pub struct ReadableSpec {
+    pub text: String,
+    pub writable: bool,
+}
+
 impl Default for StackableSpec {
     fn default() -> Self {
         Self {
@@ -429,6 +436,40 @@ impl Object {
         self.has_wearable_role()
     }
 
+    /// Whether this object has text the player can read.
+    pub fn is_readable(&self) -> bool {
+        self.get_bool_property("is_readable").unwrap_or(false)
+            || self
+                .read_text()
+                .is_some_and(|text| !text.trim().is_empty())
+    }
+
+    /// Text shown by the `read` command.
+    pub fn read_text(&self) -> Option<String> {
+        self.get_string_property("read_text")
+    }
+
+    /// Whether the player may write on this object (future `write` command).
+    pub fn is_writable(&self) -> bool {
+        self.get_bool_property("is_writable").unwrap_or(false)
+    }
+
+    /// Player-written content; falls back to [`Self::read_text`] when empty.
+    pub fn write_text(&self) -> Option<String> {
+        self.get_string_property("write_text")
+    }
+
+    pub fn set_write_text(&mut self, text: impl Into<String>) {
+        self.set_property_string("write_text", text);
+        self.set_property_bool("is_writable", true);
+    }
+
+    pub fn apply_readable_role(&mut self, spec: &ReadableSpec) {
+        self.set_property_bool("is_readable", true);
+        self.set_property_string("read_text", &spec.text);
+        self.set_property_bool("is_writable", spec.writable);
+    }
+
     pub fn hand_slot(&self) -> Option<String> {
         self.get_string_property("hand_slot")
     }
@@ -515,6 +556,18 @@ mod tests {
         assert!(!obj.container_is_open());
         obj.set_container_open(true);
         assert!(obj.container_is_open());
+    }
+
+    #[test]
+    fn readable_role_sets_text_properties() {
+        let mut obj = bare_object("item:note-001");
+        obj.apply_readable_role(&ReadableSpec {
+            text: "Mind the dark.".to_string(),
+            writable: true,
+        });
+        assert!(obj.is_readable());
+        assert_eq!(obj.read_text().as_deref(), Some("Mind the dark."));
+        assert!(obj.is_writable());
     }
 
     #[test]

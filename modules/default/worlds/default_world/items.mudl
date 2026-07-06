@@ -4,6 +4,8 @@
 @prototype worn-mailbox
   name=Worn Mailbox
   description=An old wooden mailbox, slightly askew. The metal flag rests in the down position.
+  readable=true
+  read_text=The faded lettering reads: WEST CLEARING — Edge of Nowhere. For wanderers without a return address.
   weight=8.0
   volume=6.0
   pocketable=false
@@ -66,7 +68,9 @@
 
 @prototype folded-note
   name=Folded Note
-  description=A creased slip of paper. Faint ink reads: "Supplies within — mind the dark."
+  description=A creased slip of paper, its edges worn soft.
+  readable=true
+  read_text=Supplies within — mind the dark.
   weight=0.1
   volume=0.1
   pocketable=true

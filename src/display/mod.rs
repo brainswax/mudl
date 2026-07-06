@@ -13,6 +13,7 @@ pub mod examine_target;
 pub mod grammar;
 pub mod narrative;
 pub mod object_look;
+pub mod readable;
 pub mod resolve;
 pub mod room_look;
 pub mod self_examine;
@@ -30,6 +31,7 @@ pub use stackable::{
     stack_quantity_phrase, StackRemainderLocation,
 };
 pub use object_look::{format_look_item_player, format_look_object_player};
+pub use readable::{effective_read_text, format_read_message};
 pub use room_look::format_room_look_player;
 pub use weight::format_examine_item_player;
 pub use body_plan::{creature_definition, format_body_detail_player};

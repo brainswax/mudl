@@ -209,6 +209,18 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.hand_slot.is_some() {
         target.hand_slot = extra.hand_slot.clone();
     }
+    if extra.readable.is_some() {
+        target.readable = extra.readable;
+    }
+    if extra.read_text.is_some() {
+        target.read_text = extra.read_text.clone();
+    }
+    if extra.writable.is_some() {
+        target.writable = extra.writable;
+    }
+    if extra.write_text.is_some() {
+        target.write_text = extra.write_text.clone();
+    }
 }
 
 #[cfg(test)]
@@ -242,5 +254,21 @@ mod tests {
             .find(|p| p.base_name == "travel-chest")
             .unwrap();
         assert_eq!(chest_proto.props.is_open, Some(false));
+
+        let note_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "folded-note")
+            .unwrap();
+        assert_eq!(note_proto.props.readable, Some(true));
+        assert_eq!(
+            note_proto.props.read_text.as_deref(),
+            Some("Supplies within — mind the dark.")
+        );
+
+        let mailbox_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "worn-mailbox")
+            .unwrap();
+        assert!(mailbox_proto.props.read_text.is_some());
     }
 }

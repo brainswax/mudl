@@ -181,6 +181,10 @@ impl<P: Persistence> ObjectFactory<P> {
             "stackable",
             "max_stack",
             "description",
+            "is_readable",
+            "read_text",
+            "is_writable",
+            "write_text",
         ] {
             if let Some(prop) = prototype.get_property(key) {
                 target.add_property(prop.clone());

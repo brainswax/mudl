@@ -1,6 +1,8 @@
 //! Apply composable object roles from MUDL property definitions.
 
-use crate::object::{ContainerSpec, ItemPhysSpec, Object, StackableSpec, WearableSpec};
+use crate::object::{
+    ContainerSpec, ItemPhysSpec, Object, ReadableSpec, StackableSpec, WearableSpec,
+};
 
 /// Key-value role properties parsed from MUDL item/object blocks.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -19,6 +21,10 @@ pub struct MudlRoleProps {
     pub stack_count: Option<u32>,
     pub max_stack: Option<u32>,
     pub hand_slot: Option<String>,
+    pub readable: Option<bool>,
+    pub read_text: Option<String>,
+    pub writable: Option<bool>,
+    pub write_text: Option<String>,
 }
 
 impl MudlRoleProps {
@@ -41,6 +47,10 @@ impl MudlRoleProps {
                 "stack_count" => props.stack_count = value.parse().ok(),
                 "max_stack" => props.max_stack = value.parse().ok(),
                 "hand_slot" => props.hand_slot = Some(value.to_string()),
+                "readable" | "is_readable" => props.readable = Some(*value == "true"),
+                "read_text" | "text" => props.read_text = Some(value.to_string()),
+                "writable" | "is_writable" => props.writable = Some(*value == "true"),
+                "write_text" => props.write_text = Some(value.to_string()),
                 _ => {}
             }
         }
@@ -117,6 +127,16 @@ impl MudlRoleProps {
         if let Some(ref slot) = self.hand_slot {
             obj.set_property_string("hand_slot", slot);
         }
+
+        if self.readable == Some(true) || self.read_text.is_some() {
+            obj.apply_readable_role(&ReadableSpec {
+                text: self.read_text.clone().unwrap_or_default(),
+                writable: self.writable.unwrap_or(false),
+            });
+        }
+        if let Some(ref text) = self.write_text {
+            obj.set_property_string("write_text", text);
+        }
     }
 }
 
@@ -166,6 +186,18 @@ mod tests {
         assert!(obj.is_container());
         assert_eq!(obj.container_capacity(), 8);
         assert_eq!(obj.container_max_weight(), Some(40));
+    }
+
+    #[test]
+    fn mudl_role_props_apply_readable() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("readable", "true"),
+            ("read_text", "Mind the dark."),
+        ]);
+        let mut obj = bare("item:note-001");
+        props.apply_to(&mut obj);
+        assert!(obj.is_readable());
+        assert_eq!(obj.read_text().as_deref(), Some("Mind the dark."));
     }
 
     #[test]

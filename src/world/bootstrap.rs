@@ -360,5 +360,22 @@ mod tests {
         assert!(contents.contains(&"Trail Rations"));
         assert!(contents.contains(&"Tinderbox"));
         assert!(contents.contains(&"Folded Note"));
+
+        let mailbox = ground
+            .iter()
+            .find(|o| o.name == "Worn Mailbox")
+            .unwrap();
+        assert!(mailbox.is_readable());
+        assert!(mailbox.read_text().is_some());
+
+        let note = objects
+            .iter()
+            .find(|o| o.name == "Folded Note")
+            .unwrap();
+        assert!(note.is_readable());
+        assert_eq!(
+            note.read_text().as_deref(),
+            Some("Supplies within — mind the dark.")
+        );
     }
 }

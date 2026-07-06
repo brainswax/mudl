@@ -20,7 +20,7 @@ use mudl::display::{
 };
 use mudl::inventory::{
     close_container, describe_inventory, drop_item, open_container, parse_put_args, put_item,
-    remove_item, take_item, wear_item, wield_item,
+    read_item, remove_item, take_item, wear_item, wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
@@ -343,6 +343,7 @@ async fn main() -> Result<()> {
                             "  remove <item> from <container> - take an item out of a container"
                         );
                         println!("  wield <item>                - hold/wield an item in your hand");
+                        println!("  read <object>               - read text on a note, sign, or mailbox");
                         println!("  wear <item>                 - wear a container or garment");
                         println!("  go <dir>                    - move to another location (e.g. go north)");
                         println!(
@@ -670,6 +671,18 @@ async fn main() -> Result<()> {
                                     error!(error = %e, "persist after close failed");
                                 }
                             }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "read" => {
+                        if parts.len() < 2 {
+                            println!("Usage: read <object>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let ctx = session.inventory_context();
+                        match read_item(&ctx, &item_name) {
+                            Ok(msg) => println!("{msg}"),
                             Err(e) => println!("{e}"),
                         }
                     }

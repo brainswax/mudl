@@ -41,6 +41,8 @@ pub enum InventoryError {
     NoBodyPlan,
     TooHeavy(String),
     InvalidTarget(String),
+    /// Object has no readable text.
+    NotReadable(String),
 }
 
 impl fmt::Display for InventoryError {
@@ -73,6 +75,9 @@ impl fmt::Display for InventoryError {
             Self::NoBodyPlan => write!(f, "You have no body plan."),
             Self::TooHeavy(name) => write!(f, "The {name} is too heavy for you to carry."),
             Self::InvalidTarget(msg) => write!(f, "{msg}"),
+            Self::NotReadable(name) => {
+                write!(f, "There's nothing to read on the {name}.")
+            }
         }
     }
 }
@@ -809,6 +814,44 @@ pub fn close_container(
     ctx.objects.insert(container_id, container);
 
     Ok(format!("You close the {display}."))
+}
+
+/// Read text from an object in the room or in your possession.
+pub fn read_item(ctx: &InventoryContext<'_>, item_name: &str) -> Result<String, InventoryError> {
+    let room_id = ctx.room_id.cloned();
+    let item_id = resolve_inventory_target(
+        item_name,
+        room_id.as_ref(),
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::CarriedOrGround,
+    )?;
+
+    let item = ctx
+        .objects
+        .get(&item_id)
+        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?
+        .clone();
+
+    if let Some(room) = ctx.room_id {
+        if !is_carried_by(ctx.player_id, &item_id, ctx.objects)
+            && !crate::display::resolve::is_accessible_in_room(
+                &item_id,
+                room,
+                ctx.player_id,
+                ctx.objects,
+            )
+        {
+            return Err(InventoryError::NotFound(item_name.to_string()));
+        }
+    }
+
+    if !item.is_readable() {
+        return Err(InventoryError::NotReadable(item.name.to_lowercase()));
+    }
+
+    crate::display::format_read_message(&item)
+        .ok_or_else(|| InventoryError::NotReadable(item.name.to_lowercase()))
 }
 
 pub fn wield_item(
@@ -2972,5 +3015,150 @@ mod tests {
         let msg = close_container(&mut ctx, "chest").unwrap();
         assert_eq!(msg, "You close the chest.");
         assert!(!ctx.objects.values().find(|o| o.name == "chest").unwrap().container_is_open());
+    }
+
+    #[tokio::test]
+    async fn read_mailbox_on_ground() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut mailbox = factory
+            .create_item("Worn Mailbox", player_id.clone())
+            .await
+            .unwrap();
+        mailbox.apply_readable_role(&crate::object::ReadableSpec {
+            text: "WEST CLEARING — Edge of Nowhere.".to_string(),
+            writable: false,
+        });
+        mailbox.location = Some(room_id.clone());
+        objects.insert(mailbox.id.clone(), mailbox);
+
+        let ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = read_item(&ctx, "mailbox").unwrap();
+        assert!(msg.contains("WEST CLEARING"));
+    }
+
+    #[tokio::test]
+    async fn read_note_in_open_chest() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let mut note = factory
+            .create_item("Folded Note", player_id.clone())
+            .await
+            .unwrap();
+        note.apply_readable_role(&crate::object::ReadableSpec {
+            text: "Supplies within — mind the dark.".to_string(),
+            writable: false,
+        });
+        note.location = Some(chest.id.clone());
+        chest.add_to_list_property("contents", note.id.clone());
+
+        let chest_id = chest.id.clone();
+        objects.insert(chest_id, chest);
+        objects.insert(note.id.clone(), note);
+
+        let ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = read_item(&ctx, "note").unwrap();
+        assert_eq!(
+            msg,
+            "You read the folded note:\n\nSupplies within — mind the dark."
+        );
+    }
+
+    #[tokio::test]
+    async fn read_note_in_closed_chest_not_found() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let mut note = factory
+            .create_item("Folded Note", player_id.clone())
+            .await
+            .unwrap();
+        note.apply_readable_role(&crate::object::ReadableSpec {
+            text: "Supplies within — mind the dark.".to_string(),
+            writable: false,
+        });
+        note.location = Some(chest.id.clone());
+        chest.add_to_list_property("contents", note.id.clone());
+
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(note.id.clone(), note);
+
+        let ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = read_item(&ctx, "note").unwrap_err();
+        assert_eq!(err, InventoryError::NotFound("note".to_string()));
+    }
+
+    #[tokio::test]
+    async fn read_non_readable_item_fails() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut sword = factory
+            .create_item("Chipped Blade", player_id.clone())
+            .await
+            .unwrap();
+        sword.location = Some(room_id.clone());
+        objects.insert(sword.id.clone(), sword);
+
+        let ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let err = read_item(&ctx, "blade").unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::NotReadable("chipped blade".to_string())
+        );
     }
 }

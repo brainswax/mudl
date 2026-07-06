@@ -26,6 +26,9 @@ pub fn format_examine_item_player(obj: &Object) -> String {
     if let Some(weight) = format_examine_stack_weight(obj) {
         lines.push(weight);
     }
+    if obj.is_readable() {
+        lines.push("You could read it.".to_string());
+    }
     if lines.is_empty() {
         lines.push(format_examine_stackable_fallback(obj));
     }

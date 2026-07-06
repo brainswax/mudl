@@ -25,6 +25,10 @@ pub const PROTOTYPE_PROPERTY_KEYS: &[&str] = &[
     "stackable",
     "max_stack",
     "description",
+    "is_readable",
+    "read_text",
+    "is_writable",
+    "write_text",
 ];
 
 /// Preferred ordering for common config properties in `@examine`.
@@ -44,6 +48,10 @@ const CONFIG_PROPERTY_ORDER: &[&str] = &[
     "creature",
     "gender",
     "description",
+    "is_readable",
+    "read_text",
+    "is_writable",
+    "write_text",
     "exits",
 ];
 
