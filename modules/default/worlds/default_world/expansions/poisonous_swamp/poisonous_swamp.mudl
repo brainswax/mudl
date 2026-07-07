@@ -134,6 +134,7 @@
   break_text=You split the spore pod. Dry curls of fungus spill into your palm.
   @trigger on_break emote bursts in a choking green cloud, then stills.
   @trigger on_break grant-effect actor bog_miasma
+  @trigger on_break when chance 35 then spawn gas-wisp
   weight=1.5
   volume=1.5
   pocketable=false
@@ -480,6 +481,8 @@
   creature=human
   @use-behavior aggressive
   @trigger on_enter say The peat gave you back. It will not do so twice.
+  @trigger on_enter when condition poison then say I taste venom on you. The bog shares everything.
+  @trigger on_enter when effect reed_breathing then say Mask or no mask — the deep still wants its due.
   @trigger on_kill grant-effect actor bog_resilience
   @trigger on_kill narrate The warden sinks beneath the black water, and the bog exhales in relief.
 @end
@@ -506,6 +509,7 @@ base_name: swamp-bitter
 name: Bitter Fen
 description: Black water sheets across the peat. Bitter root knots the shallows, and mosquitoes write anxious circles on your skin.
 @trigger on_enter narrate The fen stings your eyes — bitter, honest, impossible to ignore.
+@trigger on_enter when skill survival below 2 then mod-skill actor survival 1
 @trigger on_respawn narrate Fresh tubers breach the mud with a soft pop.
 @trigger on_respawn spawn gas-wisp
 exits:
@@ -518,6 +522,9 @@ base_name: swamp-sweet
 name: Sweet Reed Stand
 description: Honey-colored reeds crowd a shelf of firmer ground. The air here tastes almost kind, which in a bog is its own warning.
 @trigger on_enter when health below 50 then heal actor 5
+@trigger on_enter when condition poison then cure-tag actor poison
+@trigger on_enter when condition poison then narrate Sweet reed scent cuts through the venom — the bog grants one courtesy.
+@trigger on_enter narrate Bitter lies west. Dry ground waits south if you trust it.
 exits:
   west: swamp-bitter
   south: swamp-dry
@@ -528,6 +535,8 @@ base_name: swamp-dry
 name: Dry Mound
 description: A rare rise of cracked peat where fungus swells in pale bladders. The ground feels almost trustworthy.
 @trigger on_enter narrate Something swollen nearby smells ready to burst.
+@trigger on_enter when chance 30 then spawn mire-crawler
+@trigger on_enter when not effect reed_breathing then grant-effect actor bog_miasma
 exits:
   north: swamp-sweet
   west: swamp-heart
@@ -575,6 +584,9 @@ type: area
 base_name: swamp-wisps
 name: Wisp Hollow
 description: Cold lights bob between dead trunks. Each one promises a path; none of them keep the promise.
+@trigger on_enter narrate Cold lights promise shortcuts. The swamp has heard this joke before.
+@trigger on_enter when chance 45 then spawn gas-wisp
+@trigger on_enter when condition poison then damage actor 3
 exits:
   out: swamp-entry
 loop_to: swamp-entry
@@ -593,6 +605,9 @@ type: area
 base_name: swamp-drown
 name: Drowned Glare
 description: The water shows a route that is not there. Your reflection walks faster than you do.
+@trigger on_enter narrate Your reflection beckons toward a path that is not yours.
+@trigger on_enter when skill survival below 2 then grant-effect actor swamp_venom
+@trigger on_enter when skill survival at_least 4 then narrate You refuse the false path. The bog respects stubbornness.
 exits:
   out: swamp-entry
 loop_to: swamp-entry
@@ -602,6 +617,9 @@ base_name: swamp-shrine
 name: Sunken Shrine
 description: A stone bowl holds rainwater the color of old copper. Offerings rot gently at its lip.
 @trigger on_enter narrate Something was left here for travelers who listened.
+@trigger on_enter when health below 40 then heal actor 10
+@trigger on_enter when condition poison then spawn item antidote-salve
+@trigger on_enter when skill survival at_least 3 then mod-skill actor survival 1
 exits:
   out: swamp-entry
 loop_to: swamp-entry

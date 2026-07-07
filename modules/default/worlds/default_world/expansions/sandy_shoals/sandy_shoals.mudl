@@ -708,6 +708,9 @@
   @use-behavior beach_idle
   @trigger on_enter say The fish told me a secret, but they made me promise not to tell anyone who isn't barefoot.
   @trigger on_enter when stat dexterity below 7 then narrate The hermit steadies you with a sun-brown hand and laughs without malice.
+  @trigger on_enter when condition drunk then say The sea forgives. The fish gossip, though.
+  @trigger on_enter when condition regeneration then narrate The hermit squints at your complexion and nods approval.
+  @trigger on_enter when skill survival below 2 then mod-skill actor survival 1
 @end
 
 # --- Resort areas ---
@@ -743,6 +746,9 @@ description: Pale sand shelves into turquoise water. Waves arrive like polite ap
 @trigger on_enter narrate Salt lace dries on your lips — the honest first taste of the resort.
 @trigger on_weather narrate A warm gust scatters sand across your ankles like friendly confetti.
 @trigger on_enter when health below 80 then heal actor 4
+@trigger on_enter when condition drunk then narrate The surf applauds your life choices with gentle skepticism.
+@trigger on_enter when chance 25 then spawn item cocktail-glass
+@trigger on_enter when skill survival below 1 then mod-skill actor survival 1
 exits:
   west: beach-gate
   east: beach-sunbeds
@@ -797,6 +803,9 @@ description: The resort kneels here around a still inlet where the water forgets
 @trigger on_enter narrate The surf hushes. Your pulse follows suit.
 @trigger on_enter when health below 100 then heal actor 12
 @trigger on_enter grant-effect actor resort_serenity
+@trigger on_enter when condition drunk then cure-tag actor drunk
+@trigger on_enter when condition drunk then narrate The inlet forgives excess. Your reflection looks employable again.
+@trigger on_enter when stat wisdom below 8 then narrate The water is patient. You should be too.
 exits:
   south: beach-tidepool
   out: beach-gate
@@ -810,6 +819,8 @@ base_name: beach-dunes
 name: Dune Maze
 description: Soft dunes roll in identical smiles. Every ridge suggests progress and delivers more sand.
 @trigger on_enter when stat dexterity below 7 then narrate You sit down briefly to admire three identical horizons. The dunes take this as encouragement.
+@trigger on_enter when condition drunk then narrate The dunes rearrange themselves into a smile you choose to interpret as supportive.
+@trigger on_enter when chance 20 then spawn item sunscreen-salve
 exits:
   out: beach-gate
 loop_to: beach-gate
@@ -819,6 +830,8 @@ base_name: beach-pier
 name: Fishing Pier
 description: A long pier points at the horizon. Lines dangle with the patience of vacation theology.
 @trigger on_enter narrate The planks creak a lazy rhythm.
+@trigger on_enter when condition drunk then narrate The horizon sways in a way that has nothing to do with the tide.
+@trigger on_enter when health below 65 then heal actor 5
 exits:
   east: beach-gate
   out: beach-gate
@@ -828,6 +841,9 @@ type: area
 base_name: beach-jetty
 name: Windy Jetty
 description: Wind fusses with your hair and the railing. The view is excellent and leads nowhere useful.
+@trigger on_enter grant-effect actor sun_kissed
+@trigger on_enter when chance 40 then narrate A gust rearranges your hair into a verdict you choose to ignore.
+@trigger on_enter when stat charisma at_least 11 then narrate Someone on a distant boat waves. You wave back with royal confidence.
 exits:
   out: beach-gate
 loop_to: beach-gate
@@ -845,6 +861,9 @@ type: area
 base_name: beach-cabanas
 name: Cabana Row
 description: Striped cabanas snap in the breeze. One flap reads OUT OF ORDER in cheerful paint.
+@trigger on_enter narrate A cabana flap snaps OUT OF ORDER with theatrical malice.
+@trigger on_enter when condition drunk then teleport beach-sunbeds
+@trigger on_enter when condition drunk then narrate You wake on a hammock with no memory of consenting to excellent upholstery.
 exits:
   out: beach-gate
 loop_to: beach-gate
@@ -854,6 +873,10 @@ base_name: beach-shrine
 name: Shell Shrine
 description: A ring of shells surrounds a wooden bowl of fresh water. Someone left fruit and a sense of permission.
 @trigger on_enter narrate A traveler left something for whoever arrived tired.
+@trigger on_enter when health below 60 then heal actor 8
+@trigger on_enter when chance 50 then spawn item coconut-remedy
+@trigger on_enter when condition drunk then cure-tag actor drunk
+@trigger on_enter when condition drunk then grant-effect actor shore_regeneration
 exits:
   out: beach-gate
 loop_to: beach-gate

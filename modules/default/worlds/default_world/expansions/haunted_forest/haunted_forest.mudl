@@ -231,6 +231,8 @@
   location=haunted-moss
   @trigger on_discovered narrate You kneel to inspect the bundle more closely.
   @trigger on_discovered spawn item trail-rations
+  @trigger on_discovered when condition curse then cure-tag actor curse
+  @trigger on_discovered when health below 70 then heal actor 8
 @end
 
 # --- Timed schedules (weather, ambient respawn) ---
@@ -389,6 +391,8 @@ base_name: haunted-entry
 name: Tangled Threshold
 description: The trees close like a held breath. Mist beads on your sleeves. Pale motes drift without wind. Every path looks equally inviting and equally wrong.
 @trigger on_enter when skill survival at_least 2 then narrate The threshold feels almost familiar.
+@trigger on_enter when effect iron_lantern_aura then narrate Iron light rides your sleeve — the wood hesitates.
+@trigger on_enter when chance 25 then spawn mist-wisp
 exits:
   north: haunted-moon
   east: haunted-wither
@@ -411,6 +415,9 @@ type: area
 base_name: haunted-ember
 name: Ember Copse
 description: Charred stumps ring a hollow where coals once slept. The air tastes of old smoke and turned earth.
+@trigger on_enter when condition curse then narrate The coals' memory is older than your fear.
+@trigger on_enter grant-effect actor iron_blessing
+@trigger on_enter when health below 50 then heal actor 6
 exits:
   west: haunted-moon
   south: haunted-mirror
@@ -420,6 +427,9 @@ type: area
 base_name: haunted-mirror
 name: Mirror Mire
 description: Black water repeats the trees upside down. Every step sounds like two people walking, but only your boots leave ripples.
+@trigger on_enter narrate The reflection mouths a word you almost understand.
+@trigger on_enter when skill survival at_least 3 then teleport haunted-ash
+@trigger on_enter when condition curse then damage actor 4
 exits:
   north: haunted-ember
   west: haunted-ash
@@ -472,6 +482,8 @@ type: area
 base_name: haunted-moss
 name: Moss Choke
 description: Soft moss climbs every trunk and blurs every landmark.
+@trigger on_enter narrate Moss muffles sound until your own breathing sounds borrowed.
+@trigger on_enter when skill stealth below 3 then grant-effect actor forest_dread
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -480,6 +492,9 @@ type: area
 base_name: haunted-thicket
 name: Bramble Thicket
 description: Thorns catch cloth and skin alike.
+@trigger on_enter grant-effect actor forest_dread
+@trigger on_enter when effect iron_lantern_aura then narrate Thorns shy away from the lantern's edge.
+@trigger on_enter damage actor 3
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -488,6 +503,9 @@ type: area
 base_name: haunted-pool
 name: Drowned Glare
 description: The pool's reflection shows a path that is not there.
+@trigger on_enter narrate The water shows you leaving. You are not sure when that happened.
+@trigger on_enter when skill survival at_least 4 then teleport haunted-heart
+@trigger on_enter when skill survival at_least 4 then narrate The reflection offers a shortcut. You accept before it changes its mind.
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -496,6 +514,9 @@ type: area
 base_name: haunted-bones
 name: Bone Snarl
 description: Bleached roots tangle like old teeth.
+@trigger on_enter damage actor 4
+@trigger on_enter when chance 35 then spawn pale-lurker
+@trigger on_enter when condition curse then damage actor 3
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -504,6 +525,10 @@ type: area
 base_name: haunted-shrine
 name: Forgotten Shrine
 description: A stone bowl holds rainwater and fallen needles.
+@trigger on_enter when condition curse then cure-tag actor curse
+@trigger on_enter when health below 70 then heal actor 8
+@trigger on_enter spawn item trail-rations
+@trigger on_enter narrate Needles circle the bowl like a patient clock.
 exits:
   out: haunted-entry
 loop_to: haunted-entry

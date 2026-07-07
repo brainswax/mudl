@@ -740,6 +740,8 @@
   @trigger on_enter say You need not hurry in Glimmerfen. The starlight has already decided you are welcome.
   @trigger on_enter when health below 60 then heal actor 10
   @trigger on_enter when health below 60 then narrate The elder touches your brow — weariness loosens like a knot untied.
+  @trigger on_enter when condition enchantment then grant-effect actor fey_glamour
+  @trigger on_enter when condition enchantment then narrate The elder smiles as if you arrived wearing starlight on purpose.
 @end
 
 @npc gnome-gardener
@@ -768,6 +770,8 @@ name: Threshold of Glimmerfen
 description: Silver grass bends without wind. The air tastes of rain that chose not to fall. Every path looks patient.
 @trigger on_enter narrate Your footsteps sound borrowed, as if the vale is lending you quiet.
 @trigger on_enter when health below 50 then heal actor 6
+@trigger on_enter grant-effect actor wonderstruck
+@trigger on_enter when skill survival at_least 3 then mod-skill actor survival 1
 exits:
   north: fey-dewglade
   east: fey-mist
@@ -812,6 +816,8 @@ description: Mushrooms hold council in blue-green light. A fairy ring of white s
 @trigger on_enter narrate Spores rise like lazy fireflies, unconcerned with ceilings.
 @trigger on_enter grant-effect actor glowcap_luminance
 @trigger on_enter when skill crafting at_least 1 then narrate You recognize the caps as kin to every good idea you almost wrote down.
+@trigger on_enter when chance 35 then spawn pixie-wisp
+@trigger on_enter when condition enchantment then heal actor 4
 exits:
   north: fey-songbower
   west: fey-rootbridge
@@ -861,6 +867,8 @@ base_name: fey-bramble
 name: Soft Bramble
 description: Brambles part for you without being asked. The trail circles back with the politeness of a good host.
 @trigger on_enter narrate Thorns turn aside as if you are expected elsewhere.
+@trigger on_enter grant-effect actor dewdrop_vigor
+@trigger on_enter when health below 80 then heal actor 5
 exits:
   out: fey-threshold
 loop_to: fey-threshold
@@ -870,6 +878,9 @@ base_name: fey-mirror
 name: Mirror Glade
 description: A still pool shows trees that are not behind you. Your reflection smiles first.
 @trigger on_enter narrate Your reflection bows — you are not sure which of you initiated it.
+@trigger on_enter grant-effect actor wonderstruck
+@trigger on_enter when skill wisdom at_least 10 then teleport fey-grace
+@trigger on_enter when skill wisdom at_least 10 then narrate The pool offers a shortcut. You accept before manners can object.
 exits:
   out: fey-threshold
 loop_to: fey-threshold
@@ -886,6 +897,9 @@ type: area
 base_name: fey-wisp
 name: Wisp Hollow
 description: Cold lights drift between ferns. Each promises a shortcut; each delivers a gentle lesson in circles.
+@trigger on_enter when chance 40 then spawn glimmer-moth
+@trigger on_enter grant-effect actor fey_glamour
+@trigger on_enter narrate The lights bow — you are not sure which of you initiated it.
 exits:
   out: fey-threshold
 loop_to: fey-threshold
@@ -904,6 +918,8 @@ base_name: fey-fern
 name: Fern Cathedral
 description: Ferns arch into a green nave. Somewhere a gnome has been gardening with devotional attention.
 @trigger on_enter narrate A tiny wheelbarrow track crosses the moss — someone industrious and kind lives nearby.
+@trigger on_enter when skill crafting below 1 then mod-skill actor crafting 1
+@trigger on_enter when chance 25 then spawn pixie-wisp
 exits:
   out: fey-threshold
 loop_to: fey-threshold
@@ -913,6 +929,10 @@ base_name: fey-shrine
 name: Petal Shrine
 description: A bowl of dew holds fallen petals arranged like a constellation. Offerings here are memories of kindness.
 @trigger on_enter narrate You feel briefly catalogued among good intentions.
+@trigger on_enter spawn item moonpetal-tea
+@trigger on_enter when health below 50 then heal actor 10
+@trigger on_enter when condition enchantment then narrate The petals sort your thoughts into gentler piles.
+@trigger on_enter when skill crafting below 1 then mod-skill actor crafting 1
 exits:
   out: fey-threshold
 loop_to: fey-threshold

@@ -141,6 +141,8 @@
   breakable=true
   break_text=You tear the sac open. Ichor runs cold over your knuckles.
   @trigger on_break emote ruptures, spilling pale fluid across the stone.
+  @trigger on_break when chance 55 then grant-effect actor brood_venom
+  @trigger on_break when chance 25 then spawn brood-hatchling
   weight=6.0
   volume=5.0
   pocketable=false
@@ -171,6 +173,10 @@
   pocketable=true
   alias=phial
   alias=starlight
+  @trigger on_use narrate Starlight uncorks in your veins — poison and silk loosen their grip.
+  @trigger on_use cure-tag actor poison
+  @trigger on_use remove-effect actor web_snare
+  @trigger on_use grant-effect actor starlight_ward
 @end
 
 @prototype fang-dagger
@@ -314,6 +320,9 @@
   location=spider-silk
   @trigger on_discovered narrate You find a silk-wrapped bundle wedged above the tunnel — someone tried to hide here.
   @trigger on_discovered spawn item fang-dagger
+  @trigger on_discovered when condition poison then cure-tag actor poison
+  @trigger on_discovered when condition slow then remove-effect actor web_snare
+  @trigger on_discovered grant-effect actor spider_sense
 @end
 
 @item spider-brood-gate
@@ -512,6 +521,8 @@
   name=Brood Queen
   @use-behavior aggressive
   @trigger on_enter say Something old stirs in the silk. You were expected.
+  @trigger on_enter when condition poison then say The venom in your veins pleases her. Unfortunate for you.
+  @trigger on_enter when condition slow then narrate She tastes the silk on you and smiles without lips.
   @trigger on_kill grant-effect actor spider_sense
   @trigger on_kill narrate The great web slackens. For a moment the den is only stone and your own breathing.
   @trigger on_death emote collapses, legs folding like snapped spokes.
@@ -563,6 +574,10 @@ base_name: spider-fang
 name: Fang Antechamber
 description: Iron bars webbed into a gate block the western dark. Beyond them, silk moves without wind.
 @trigger on_enter narrate You hear mandibles testing metal — patient, rhythmic, certain.
+@trigger on_enter heal actor 10
+@trigger on_enter grant-effect actor starlight_ward
+@trigger on_enter when condition poison then remove-effect actor brood_venom
+@trigger on_enter when condition slow then remove-effect actor web_snare
 exits:
   north: spider-pit
   east: spider-egg
@@ -597,6 +612,8 @@ base_name: spider-pit
 name: Pit of Strands
 description: The floor gives way into a bowl of sticky silk. Getting out costs skin.
 @trigger on_enter damage actor 9
+@trigger on_enter grant-effect actor web_snare
+@trigger on_enter when skill stealth at_least 3 then narrate You cross the strands where the web expected nobody.
 exits:
   out: spider-entry
 loop_to: spider-entry
@@ -605,6 +622,9 @@ type: area
 base_name: spider-hatch
 name: Hatchery Dead End
 description: Empty shells crack underfoot. The living left this place for somewhere hungrier.
+@trigger on_enter narrate Shells crack underfoot with the honesty of bad omens.
+@trigger on_enter when chance 45 then spawn brood-hatchling
+@trigger on_enter when chance 20 then spawn ceiling-lurker
 exits:
   out: spider-entry
 loop_to: spider-entry
@@ -614,6 +634,8 @@ base_name: spider-nest
 name: Nest Warren
 description: Tunnels branch and branch again until direction is only a memory.
 @trigger on_enter damage actor 6
+@trigger on_enter grant-effect actor web_snare
+@trigger on_enter when skill stealth at_least 3 then narrate The warren forgets you for a merciful heartbeat.
 exits:
   out: spider-entry
 loop_to: spider-entry
@@ -622,6 +644,9 @@ type: area
 base_name: spider-drown
 name: Drowned Silk
 description: Water pools beneath the webs. Your reflection wears too many legs.
+@trigger on_enter damage actor 5
+@trigger on_enter when chance 40 then grant-effect actor brood_venom
+@trigger on_enter when skill survival at_least 3 then cure-tag actor poison
 exits:
   out: spider-entry
 loop_to: spider-entry
@@ -631,6 +656,10 @@ base_name: spider-shrine
 name: Abandoned Shrine
 description: A stone bowl holds melted wax and a single unbroken phial of light.
 @trigger on_enter narrate Someone came this far and left a mercy for the next fool.
+@trigger on_enter spawn item starlight-phial
+@trigger on_enter when condition poison then cure-tag actor poison
+@trigger on_enter when condition slow then remove-effect actor web_snare
+@trigger on_enter when health below 50 then heal actor 10
 exits:
   out: spider-entry
 loop_to: spider-entry
