@@ -81,30 +81,52 @@ pub fn creature_is_defeated(creature: &Object) -> bool {
 
 /// Compact player-facing summary of core stats and skills.
 pub fn format_creature_stats_summary(creature: &Object) -> String {
+    format_creature_stats_summary_with_equipment(creature, None, None)
+}
+
+/// Stats summary including equipment bonuses when `objects` and `anatomy` are provided.
+pub fn format_creature_stats_summary_with_equipment(
+    creature: &Object,
+    objects: Option<&std::collections::HashMap<crate::object::ObjectId, Object>>,
+    anatomy: Option<&AnatomyRegistry>,
+) -> String {
     let stats = creature.get_int_map("stats");
     let skills = creature.get_int_map("skills");
     if stats.is_empty() && skills.is_empty() {
         return String::new();
     }
 
+    let use_equipment = objects.is_some() && anatomy.is_some();
     let mut parts = Vec::new();
     let mut stat_names: Vec<_> = stats.keys().collect();
     stat_names.sort();
     for name in stat_names {
-        parts.push(format!(
-            "{} {}",
-            capitalize_stat_name(name),
+        let value = if use_equipment {
+            crate::creature::creature_effective_stat(
+                creature,
+                name,
+                objects.unwrap(),
+                anatomy.unwrap(),
+            )
+        } else {
             creature_stat(creature, name)
-        ));
+        };
+        parts.push(format!("{} {}", capitalize_stat_name(name), value));
     }
     let mut skill_names: Vec<_> = skills.keys().collect();
     skill_names.sort();
     for name in skill_names {
-        parts.push(format!(
-            "{} {}",
-            capitalize_stat_name(name),
+        let value = if use_equipment {
+            crate::creature::creature_effective_skill(
+                creature,
+                name,
+                objects.unwrap(),
+                anatomy.unwrap(),
+            )
+        } else {
             creature_skill(creature, name)
-        ));
+        };
+        parts.push(format!("{} {}", capitalize_stat_name(name), value));
     }
     parts.join(", ")
 }

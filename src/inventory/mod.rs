@@ -2799,12 +2799,11 @@ mod tests {
             .create_wearable(
                 "Boots of Carrying",
                 player_id.clone(),
-                WearableSpec {
-                    wear_slot: "left_foot".to_string(),
-                    weight: 2.0,
-                    volume: 2.0,
-                    mod_max_weight: Some(25),
-                    mod_encumbrance: Some(0.85),
+                {
+                    let mut spec = WearableSpec::new("left_foot", 2.0, 2.0);
+                    spec.mod_max_weight = Some(25);
+                    spec.mod_encumbrance = Some(0.85);
+                    spec
                 },
                 None,
             )

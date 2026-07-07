@@ -222,6 +222,48 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
 - `@effect` defines reusable conditions; creatures track `active_effects` at runtime.
 - `@slot` may set `effect=` for slot-tagged body-plan conditions (future wound hooks).
 
+**Equipment modifiers** (wearable and wielded gear stack):
+
+```mudl
+@prototype chipped-blade
+  hand_slot=right
+  @mod-stat strength 2
+@end
+
+@prototype leather-vest
+  is_wearable=true
+  wear_slot=torso
+  mod_max_health=5
+  @mod-stat constitution 2
+  @mod-skill survival 1
+@end
+
+@prototype boots-of-carrying
+  is_wearable=true
+  wear_slot=left_foot
+  mod_max_weight=25
+  mod_encumbrance=0.85
+@end
+
+@prototype iron-lantern
+  hand_slot=right
+  @grant-effect iron_lantern_aura
+@end
+
+@effect iron_lantern_aura
+  mod_encumbrance=0.95
+@end
+
+@effect regeneration
+  regen_on_enter=2
+@end
+```
+
+- `@mod-stat` / `@mod-skill` — additive bonuses while equipped (worn or wielded in grasp slots).
+- `mod_max_weight`, `mod_encumbrance`, `mod_max_health` — carry capacity, encumbrance feel, and health ceiling.
+- `@grant-effect` — apply a defined `@effect` while the item is equipped (regeneration, auras, etc.).
+- Modifiers from multiple worn items **stack**; granted effects compose with direct item bonuses.
+
 **Behavior templates** (reusable, composable personalities):
 
 ```mudl

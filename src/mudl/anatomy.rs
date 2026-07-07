@@ -77,6 +77,9 @@ pub struct EffectDef {
     pub mod_max_weight: i64,
     pub mod_encumbrance: f64,
     pub stat_mods: HashMap<String, i64>,
+    pub skill_mods: HashMap<String, i64>,
+    /// Health restored when the creature enters a new room (equipment-granted effects).
+    pub regen_on_enter: i64,
 }
 
 /// Backward-compatible alias for creature anatomy definitions.
@@ -179,6 +182,8 @@ fn default_effect(name: String) -> EffectDef {
         mod_max_weight: 0,
         mod_encumbrance: 1.0,
         stat_mods: HashMap::new(),
+        skill_mods: HashMap::new(),
+        regen_on_enter: 0,
     }
 }
 
@@ -311,13 +316,24 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
             }
             if let Some(effect) = &mut current_effect {
                 match key.as_str() {
-                    "mod_max_health" => effect.mod_max_health = value.parse().unwrap_or(0),
+                    "mod_max_health" | "mod_health" => {
+                        effect.mod_max_health = value.parse().unwrap_or(0)
+                    }
                     "mod_max_weight" => effect.mod_max_weight = value.parse().unwrap_or(0),
                     "mod_encumbrance" => effect.mod_encumbrance = value.parse().unwrap_or(1.0),
+                    "regen_on_enter" | "regen" => {
+                        effect.regen_on_enter = value.parse().unwrap_or(0)
+                    }
                     key if key.starts_with("mod_stat_") => {
                         let stat = key.trim_start_matches("mod_stat_");
                         if let Ok(v) = value.parse::<i64>() {
                             effect.stat_mods.insert(stat.to_string(), v);
+                        }
+                    }
+                    key if key.starts_with("mod_skill_") => {
+                        let skill = key.trim_start_matches("mod_skill_");
+                        if let Ok(v) = value.parse::<i64>() {
+                            effect.skill_mods.insert(skill.to_string(), v);
                         }
                     }
                     _ => {}

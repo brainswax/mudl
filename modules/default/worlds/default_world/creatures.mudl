@@ -28,3 +28,7 @@
 @effect iron_lantern_aura
   mod_encumbrance=0.95
 @end
+
+@effect regeneration
+  regen_on_enter=2
+@end

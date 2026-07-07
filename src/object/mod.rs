@@ -23,7 +23,9 @@ pub use roles::{
 pub use weight::{
     collect_worn_carry_modifiers, format_weight_amount, is_unlimited_weight,
     owner_player_of_container, player_base_max_weight, player_carried_weight, player_carry_fraction,
-    player_effective_max_weight, player_encumbrance_fraction, player_encumbrance_level,
+    player_effective_max_weight, player_effective_max_weight_with_anatomy,
+    player_encumbrance_fraction, player_encumbrance_fraction_with_anatomy,
+    player_encumbrance_level, player_encumbrance_level_with_anatomy,
     player_weight_bearer, transfer_weight, weight_limit_applies, would_exceed_player_max_weight,
     CarryModifiers, EncumbranceLevel, DEFAULT_PLAYER_MAX_WEIGHT, ENCUMBRANCE_BLOCK_THRESHOLD,
     ENCUMBRANCE_SLOW_THRESHOLD, UNLIMITED_WEIGHT,

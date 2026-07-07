@@ -343,6 +343,10 @@ pub async fn create_at_location_with_options<P: Persistence>(
                             .unwrap_or(1.0),
                         mod_max_weight: None,
                         mod_encumbrance: None,
+                        mod_max_health: None,
+                        stat_mods: HashMap::new(),
+                        skill_mods: HashMap::new(),
+                        grant_effects: Vec::new(),
                     },
                     options.prototype.clone(),
                 )

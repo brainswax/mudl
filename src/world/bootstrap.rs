@@ -538,7 +538,7 @@ mod tests {
     use crate::repl::session::Session;
     use crate::world::exits::validate_world_places;
     use crate::inventory::{
-        break_item, close_container, open_container, read_item, take_item,
+        break_item, close_container, open_container, read_item, take_item, wield_item,
         InventoryContext,
     };
     use crate::mudl::load_module;
@@ -1266,6 +1266,69 @@ mod tests {
             session.object(session.current_location().unwrap()).unwrap().name,
             "Tangled Threshold",
             "haunted forest is replayable"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_equipment_modifiers_on_starting_gear() {
+        use crate::creature::creature_effective_stat;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let anatomy = world.anatomy.clone();
+
+        bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let blade = objects
+            .values()
+            .find(|o| o.name == "Chipped Blade")
+            .expect("chipped blade in travel chest");
+        assert_eq!(blade.equipment_stat_mods().get("strength").copied(), Some(2));
+
+        let vest = objects
+            .values()
+            .find(|o| o.name == "Leather Vest")
+            .expect("leather vest in cottage bedroom");
+        assert_eq!(vest.equipment_max_health_bonus(), 5);
+        assert_eq!(vest.equipment_skill_mods().get("survival").copied(), Some(1));
+
+        let lantern = objects
+            .values()
+            .find(|o| o.name == "Iron Lantern")
+            .expect("iron lantern in travel chest");
+        assert_eq!(
+            lantern.equipment_grant_effects(),
+            vec!["iron_lantern_aura".to_string()]
+        );
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            objects,
+            Some(ObjectId::new("area:the-void-001")),
+        );
+        open_container(&mut session.inventory_context(), "mailbox").unwrap();
+        take_item(&mut session.inventory_context(), "brass key").unwrap();
+        open_container(&mut session.inventory_context(), "chest").unwrap();
+        take_item(&mut session.inventory_context(), "chipped blade").unwrap();
+        wield_item(&mut session.inventory_context(), "blade").unwrap();
+
+        let player = session.object(&player_id).unwrap();
+        assert_eq!(
+            creature_effective_stat(player, "strength", session.objects(), &anatomy),
+            12
         );
     }
 

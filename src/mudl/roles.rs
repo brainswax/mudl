@@ -1,5 +1,7 @@
 //! Apply composable object roles from MUDL property definitions.
 
+use std::collections::HashMap;
+
 use crate::object::{
     BreakableSpec, ContainerSpec, ItemPhysSpec, KeySpec, Object, PortalKind, PortalSpec,
     ReadableSpec, StackableSpec, WearableSpec,
@@ -41,6 +43,10 @@ pub struct MudlRoleProps {
     pub portal_transparent: Option<bool>,
     pub mod_max_weight: Option<i64>,
     pub mod_encumbrance: Option<f64>,
+    pub mod_max_health: Option<i64>,
+    pub stat_mods: HashMap<String, i64>,
+    pub skill_mods: HashMap<String, i64>,
+    pub grant_effects: Vec<String>,
     pub breakable: Option<bool>,
     pub break_text: Option<String>,
 }
@@ -100,6 +106,27 @@ impl MudlRoleProps {
                 "mod_encumbrance" | "encumbrance_factor" | "encumbrance_reduction" => {
                     props.mod_encumbrance = value.parse::<f64>().ok().filter(|n| n.is_finite())
                 }
+                "mod_max_health" | "mod_health" | "health_bonus" => {
+                    props.mod_max_health = value.parse().ok()
+                }
+                "grant_effect" | "effect" => {
+                    let name = value.trim().to_string();
+                    if !name.is_empty() && !props.grant_effects.contains(&name) {
+                        props.grant_effects.push(name);
+                    }
+                }
+                key if key.starts_with("mod_stat_") => {
+                    let stat = key.trim_start_matches("mod_stat_");
+                    if let Ok(v) = value.parse::<i64>() {
+                        props.stat_mods.insert(stat.to_string(), v);
+                    }
+                }
+                key if key.starts_with("mod_skill_") => {
+                    let skill = key.trim_start_matches("mod_skill_");
+                    if let Ok(v) = value.parse::<i64>() {
+                        props.skill_mods.insert(skill.to_string(), v);
+                    }
+                }
                 "breakable" | "is_breakable" => props.breakable = Some(*value == "true"),
                 "break_text" | "on_break" => props.break_text = Some(value.to_string()),
                 _ => {}
@@ -116,6 +143,10 @@ impl MudlRoleProps {
             || self.hand_slot.is_some()
             || self.mod_max_weight.is_some()
             || self.mod_encumbrance.is_some()
+            || self.mod_max_health.is_some()
+            || !self.stat_mods.is_empty()
+            || !self.skill_mods.is_empty()
+            || !self.grant_effects.is_empty()
     }
 
     /// Apply scalar overrides without re-applying role composition.
@@ -134,6 +165,18 @@ impl MudlRoleProps {
         }
         if self.mod_max_weight.is_some() || self.mod_encumbrance.is_some() {
             obj.apply_carry_modifiers(self.mod_max_weight, self.mod_encumbrance);
+        }
+        if self.mod_max_health.is_some()
+            || !self.stat_mods.is_empty()
+            || !self.skill_mods.is_empty()
+            || !self.grant_effects.is_empty()
+        {
+            obj.apply_equipment_mods(
+                self.mod_max_health,
+                self.stat_mods.clone(),
+                self.skill_mods.clone(),
+                self.grant_effects.clone(),
+            );
         }
     }
 
@@ -227,18 +270,45 @@ impl MudlRoleProps {
         }
 
         if self.is_wearable == Some(true) && self.is_container != Some(true) {
-            obj.apply_wearable_role(&WearableSpec {
-                wear_slot: self
-                    .wear_slot
+            let mut spec = WearableSpec::new(
+                self.wear_slot
                     .clone()
                     .unwrap_or_else(|| "torso".to_string()),
-                weight: self.weight.unwrap_or(1.0),
-                volume: self.volume.unwrap_or(1.0),
-                mod_max_weight: self.mod_max_weight,
-                mod_encumbrance: self.mod_encumbrance,
-            });
+                self.weight.unwrap_or(1.0),
+                self.volume.unwrap_or(1.0),
+            );
+            spec.mod_max_weight = self.mod_max_weight;
+            spec.mod_encumbrance = self.mod_encumbrance;
+            spec.mod_max_health = self.mod_max_health;
+            spec.stat_mods = self.stat_mods.clone();
+            spec.skill_mods = self.skill_mods.clone();
+            spec.grant_effects = self.grant_effects.clone();
+            obj.apply_wearable_role(&spec);
         } else if self.mod_max_weight.is_some() || self.mod_encumbrance.is_some() {
             obj.apply_carry_modifiers(self.mod_max_weight, self.mod_encumbrance);
+            if self.mod_max_health.is_some()
+                || !self.stat_mods.is_empty()
+                || !self.skill_mods.is_empty()
+                || !self.grant_effects.is_empty()
+            {
+                obj.apply_equipment_mods(
+                    self.mod_max_health,
+                    self.stat_mods.clone(),
+                    self.skill_mods.clone(),
+                    self.grant_effects.clone(),
+                );
+            }
+        } else if self.mod_max_health.is_some()
+            || !self.stat_mods.is_empty()
+            || !self.skill_mods.is_empty()
+            || !self.grant_effects.is_empty()
+        {
+            obj.apply_equipment_mods(
+                self.mod_max_health,
+                self.stat_mods.clone(),
+                self.skill_mods.clone(),
+                self.grant_effects.clone(),
+            );
         }
 
         if self.stackable == Some(true) {

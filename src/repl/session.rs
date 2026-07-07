@@ -10,7 +10,9 @@ use crate::display::{
     narrate_no_location, narrate_overloaded, resolve_object, DisplayContext, DisplayFlags,
     DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::object::{player_encumbrance_level, ObjectFactory, EncumbranceLevel};
+use crate::object::{
+    player_encumbrance_level_with_anatomy, ObjectFactory, EncumbranceLevel,
+};
 use crate::inventory::{prepare_gate_for_passage, InventoryError};
 use crate::world::portal::{
     passable_portal_for_direction, portal_passage_block, portal_permits_exit,
@@ -280,7 +282,13 @@ impl Session {
         let encumbrance = self
             .objects
             .get(&self.player_id)
-            .map(|player| player_encumbrance_level(player, &self.objects))
+            .map(|player| {
+                player_encumbrance_level_with_anatomy(
+                    player,
+                    &self.objects,
+                    Some(&self.anatomy),
+                )
+            })
             .ok_or(SessionError::PlayerMissing)?;
         if encumbrance == EncumbranceLevel::Overloaded {
             return Err(SessionError::Overloaded);
@@ -380,6 +388,17 @@ impl Session {
         }
         for behavior_line in behavior_outcome.lines {
             lines.push(behavior_line);
+        }
+        if let Some(mut player) = self.objects.get(&self.player_id).cloned() {
+            if let Some(regen) = crate::creature::apply_equipment_regen_on_enter(
+                &mut player,
+                &self.objects,
+                &self.anatomy,
+            ) {
+                self.objects.insert(self.player_id.clone(), player);
+                self.dirty.mark(&self.player_id);
+                lines.push(regen);
+            }
         }
         Ok(lines.join("\n"))
     }
@@ -690,13 +709,10 @@ mod tests {
         heavy.location = Some(player_id.clone());
 
         let mut boots = bare("item:boots-001", "Boots of Carrying");
-        boots.apply_wearable_role(&WearableSpec {
-            wear_slot: "left_foot".to_string(),
-            weight: 2.0,
-            volume: 2.0,
-            mod_max_weight: Some(25),
-            mod_encumbrance: Some(0.85),
-        });
+        let mut boot_spec = WearableSpec::new("left_foot", 2.0, 2.0);
+        boot_spec.mod_max_weight = Some(25);
+        boot_spec.mod_encumbrance = Some(0.85);
+        boots.apply_wearable_role(&boot_spec);
         boots.location = Some(player_id.clone());
 
         let player = session.object_mut(&player_id).unwrap();

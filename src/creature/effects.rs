@@ -12,6 +12,7 @@ pub struct EffectModifiers {
     pub max_weight_bonus: i64,
     pub encumbrance_factor: f64,
     pub stat_mods: HashMap<String, i64>,
+    pub skill_mods: HashMap<String, i64>,
 }
 
 impl Default for EffectModifiers {
@@ -21,6 +22,7 @@ impl Default for EffectModifiers {
             max_weight_bonus: 0,
             encumbrance_factor: 1.0,
             stat_mods: HashMap::new(),
+            skill_mods: HashMap::new(),
         }
     }
 }
@@ -32,6 +34,9 @@ impl EffectModifiers {
         self.encumbrance_factor *= other.encumbrance_factor;
         for (stat, bonus) in &other.stat_mods {
             *self.stat_mods.entry(stat.clone()).or_insert(0) += bonus;
+        }
+        for (skill, bonus) in &other.skill_mods {
+            *self.skill_mods.entry(skill.clone()).or_insert(0) += bonus;
         }
         self.encumbrance_factor = self.encumbrance_factor.clamp(0.5, 2.0);
     }
@@ -66,6 +71,7 @@ fn modifiers_from_def(def: &EffectDef) -> EffectModifiers {
         max_weight_bonus: def.mod_max_weight,
         encumbrance_factor: def.mod_encumbrance,
         stat_mods: def.stat_mods.clone(),
+        skill_mods: def.skill_mods.clone(),
     }
 }
 
@@ -136,6 +142,8 @@ mod tests {
             mod_max_weight: -5,
             mod_encumbrance: 1.1,
             stat_mods: HashMap::from([("dexterity".to_string(), -2)]),
+            skill_mods: HashMap::new(),
+            regen_on_enter: 0,
         }
     }
 

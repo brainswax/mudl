@@ -245,6 +245,27 @@ pub struct WearableSpec {
     pub mod_max_weight: Option<i64>,
     /// Encumbrance multiplier while equipped (`0.85` = 15% lighter feel for movement).
     pub mod_encumbrance: Option<f64>,
+    /// Additive bonus to effective max health while equipped.
+    pub mod_max_health: Option<i64>,
+    pub stat_mods: HashMap<String, i64>,
+    pub skill_mods: HashMap<String, i64>,
+    pub grant_effects: Vec<String>,
+}
+
+impl WearableSpec {
+    pub fn new(wear_slot: impl Into<String>, weight: f64, volume: f64) -> Self {
+        Self {
+            wear_slot: wear_slot.into(),
+            weight,
+            volume,
+            mod_max_weight: None,
+            mod_encumbrance: None,
+            mod_max_health: None,
+            stat_mods: HashMap::new(),
+            skill_mods: HashMap::new(),
+            grant_effects: Vec::new(),
+        }
+    }
 }
 
 /// Physical attributes for a generic item.
@@ -726,6 +747,50 @@ impl Object {
         self.set_property_numeric("weight", spec.weight);
         self.set_property_numeric("volume", spec.volume);
         self.apply_carry_modifiers(spec.mod_max_weight, spec.mod_encumbrance);
+        self.apply_equipment_mods(
+            spec.mod_max_health,
+            spec.stat_mods.clone(),
+            spec.skill_mods.clone(),
+            spec.grant_effects.clone(),
+        );
+    }
+
+    /// Apply stat/skill/health modifiers and granted effects (wearable or wielded gear).
+    pub fn apply_equipment_mods(
+        &mut self,
+        mod_max_health: Option<i64>,
+        stat_mods: HashMap<String, i64>,
+        skill_mods: HashMap<String, i64>,
+        grant_effects: Vec<String>,
+    ) {
+        if let Some(bonus) = mod_max_health.filter(|b| *b != 0) {
+            self.set_property_int("mod_max_health", bonus);
+        }
+        if !stat_mods.is_empty() {
+            self.set_int_map("mod_stats", stat_mods);
+        }
+        if !skill_mods.is_empty() {
+            self.set_int_map("mod_skills", skill_mods);
+        }
+        if !grant_effects.is_empty() {
+            self.set_string_list("grant_effects", grant_effects);
+        }
+    }
+
+    pub fn equipment_max_health_bonus(&self) -> i64 {
+        self.get_int_property("mod_max_health").unwrap_or(0)
+    }
+
+    pub fn equipment_stat_mods(&self) -> HashMap<String, i64> {
+        self.get_int_map("mod_stats")
+    }
+
+    pub fn equipment_skill_mods(&self) -> HashMap<String, i64> {
+        self.get_int_map("mod_skills")
+    }
+
+    pub fn equipment_grant_effects(&self) -> Vec<String> {
+        self.get_string_list("grant_effects")
     }
 
     /// Apply carry-capacity / encumbrance modifiers (wearable equipment).
@@ -1298,13 +1363,7 @@ mod tests {
     #[test]
     fn init_item_defaults_if_unset_preserves_role_phys() {
         let mut obj = bare_object("item:cloak-001");
-        obj.apply_wearable_role(&WearableSpec {
-            wear_slot: "back".to_string(),
-            weight: 2.5,
-            volume: 3.0,
-            mod_max_weight: None,
-            mod_encumbrance: None,
-        });
+        obj.apply_wearable_role(&WearableSpec::new("back", 2.5, 3.0));
         obj.init_item_defaults_if_unset(false);
 
         assert!((obj.weight() - 2.5).abs() < f64::EPSILON);

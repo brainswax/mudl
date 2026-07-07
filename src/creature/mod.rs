@@ -4,6 +4,7 @@ pub mod ai;
 pub mod behavior;
 pub mod combat;
 pub mod effects;
+pub mod equipment;
 pub mod spawner;
 pub mod vitality;
 
@@ -17,6 +18,11 @@ pub use behavior::{
 pub use effects::{
     active_effects, apply_effect, collect_active_effect_modifiers, effect_encumbrance_factor,
     effect_max_weight_bonus, refresh_effect_derived_properties, remove_effect, EffectModifiers,
+};
+pub use equipment::{
+    apply_equipment_regen_on_enter, collect_equipment_modifiers, creature_effective_max_health,
+    creature_effective_skill, creature_effective_stat, equipment_granted_encumbrance_factor,
+    item_has_equipment_modifiers, EquipmentModifiers,
 };
 pub use spawner::{
     apply_spawner_def, count_active_spawns, despawn_creatures_from_spawner,

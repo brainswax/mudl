@@ -276,6 +276,10 @@ impl<P: Persistence> ObjectFactory<P> {
             "portal_transparent",
             "mod_max_weight",
             "mod_encumbrance",
+            "mod_max_health",
+            "mod_stats",
+            "mod_skills",
+            "grant_effects",
             "door_direction",
             "door_destination_base",
             "allowed_types",
@@ -569,13 +573,7 @@ mod tests {
             .create_wearable(
                 "Cloak",
                 owner,
-                WearableSpec {
-                    wear_slot: "back".to_string(),
-                    weight: 2.5,
-                    volume: 3.0,
-                    mod_max_weight: None,
-                    mod_encumbrance: None,
-                },
+                WearableSpec::new("back", 2.5, 3.0),
                 None,
             )
             .await
@@ -601,13 +599,7 @@ mod tests {
             .create_wearable(
                 "Silk Robe",
                 owner,
-                WearableSpec {
-                    wear_slot: "torso".to_string(),
-                    weight: 1.2,
-                    volume: 2.0,
-                    mod_max_weight: None,
-                    mod_encumbrance: None,
-                },
+                WearableSpec::new("torso", 1.2, 2.0),
                 Some(proto.id.clone()),
             )
             .await
