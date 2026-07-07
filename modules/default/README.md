@@ -27,3 +27,9 @@ MUDL_WORLD=default_world cargo run --bin repl
 ```
 
 To add a new creature, define `@creature cat` in `creatures.mudl` and set `creature=cat` in a player template. Nested subfolders can be reintroduced later when content grows.
+
+## Expansion packs
+
+Self-contained adventures live in `worlds/default_world/expansions/*.mudl` and load via `@import` in `world.mudl`. The default world ships with Haunted Forest, Poisonous Swamp, Giant Spider Den, Sandy Shoals Resort, and Glimmerfen.
+
+**Player and builder guide (themes, install, extensions — spoiler-free):** [MODULES.md](../../MODULES.md)
