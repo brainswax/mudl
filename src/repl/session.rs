@@ -199,8 +199,7 @@ impl Session {
         persistence: &P,
         id: &ObjectId,
     ) -> anyhow::Result<bool> {
-        let mut world = self.world.lock_blocking();
-        world.ensure_object(persistence, id).await
+        self.world.ensure_object(persistence, id).await
     }
 
     pub fn sync_location_from_player(&mut self) {
@@ -257,6 +256,7 @@ impl Session {
         self.mutate_player(|world, player| go_impl(direction, world, player))
     }
 
+    /// Builder `@dig` — holds the world lock for the whole factory + graph mutation (rare).
     pub async fn dig_place<P: Persistence>(
         &mut self,
         factory: &ObjectFactory<P>,
@@ -291,18 +291,15 @@ impl Session {
         &mut self,
         persistence: &P,
     ) -> anyhow::Result<usize> {
-        let mut world = self.world.lock_blocking();
-        world.persist_changes(persistence).await
+        self.world.persist_changes(persistence).await
     }
 
     pub async fn persist<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
-        let mut world = self.world.lock_blocking();
-        world.persist(persistence).await
+        self.world.persist(persistence).await
     }
 
     pub async fn persist_all<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
-        let mut world = self.world.lock_blocking();
-        world.persist_all(persistence).await
+        self.world.persist_all(persistence).await
     }
 
     pub fn len(&self) -> usize {
