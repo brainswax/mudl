@@ -1,6 +1,7 @@
 pub mod bootstrap;
 pub mod container_fit;
 pub mod dirty;
+pub mod discovery;
 pub mod door;
 pub mod exit_index;
 pub mod exits;
@@ -13,11 +14,16 @@ pub mod navigation;
 pub mod place_builder;
 pub mod portal;
 pub mod possession;
+pub mod scheduler;
 pub mod session;
 pub mod stack_transfer;
 
 pub use bootstrap::bootstrap_world;
 pub use dirty::{persist_dirty, DirtyTracker};
+pub use discovery::{
+    entity_visible_to_player, is_object_hidden_from_player, object_visible_to_player,
+    run_discovery_on_look, run_object_discovery_on_look,
+};
 pub use door::{door_for_direction, door_passage_block, door_permits_exit, DoorBlock};
 pub use exit_index::{normalize_exit_input, ExitIndex};
 pub use exits::{
@@ -48,6 +54,7 @@ pub use portal::{
     passable_portal_blocks_passage, passable_portal_for_direction, portal_for_direction,
     portal_kind_label, portal_passage_block, portal_permits_exit, portals_in_room, PortalBlock,
 };
+pub use scheduler::{advance_tick, current_tick, periodic_fires};
 pub use possession::{
     body_slot_item, body_slot_item_valid, body_slots, carried_body_items,
     clear_creature_slots_for_item, clear_item_from_body_slots, grasp_action_phrase,

@@ -355,6 +355,15 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.break_text.is_some() {
         target.break_text = extra.break_text.clone();
     }
+    if extra.harvestable.is_some() {
+        target.harvestable = extra.harvestable;
+    }
+    if extra.hidden_until_discovered.is_some() {
+        target.hidden_until_discovered = extra.hidden_until_discovered;
+    }
+    if extra.discovery_stealth.is_some() {
+        target.discovery_stealth = extra.discovery_stealth;
+    }
 }
 
 #[cfg(test)]

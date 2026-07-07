@@ -9,6 +9,7 @@ use crate::mudl::{
     AnatomyRegistry, NpcBehaviorDef, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef, SpawnerTrigger,
 };
 use crate::object::{generate_object_id, Object, ObjectId, PermissionFlags, Property, Value};
+use crate::world::scheduler::periodic_fires;
 
 
 /// Result of a spawner tick — optional narrative feedback for the player.
@@ -137,20 +138,10 @@ fn spawner_periodic_interval(obj: &Object) -> u32 {
         .max(1) as u32
 }
 
-fn spawner_enter_count(obj: &Object) -> u64 {
-    obj.get_int_property("spawner_enter_count")
-        .unwrap_or(0)
-        .max(0) as u64
-}
-
 fn spawner_spawn_count(obj: &Object) -> u32 {
     obj.get_int_property("spawner_spawn_count")
         .unwrap_or(0)
         .max(0) as u32
-}
-
-fn set_spawner_enter_count(spawner: &mut Object, count: u64) {
-    spawner.set_property_int("spawner_enter_count", count as i64);
 }
 
 fn set_spawner_spawn_count(spawner: &mut Object, count: u32) {
@@ -236,12 +227,11 @@ fn chance_rolls(seed: u64, chance: f64) -> bool {
     seed % 10_000 < threshold
 }
 
-fn trigger_fires(spawner: &Object, enter_count: u64) -> bool {
+fn trigger_fires(spawner: &Object, scheduler_tick: u64) -> bool {
     match spawner_trigger(spawner) {
         SpawnerTrigger::OnEnter => true,
         SpawnerTrigger::Periodic => {
-            let interval = u64::from(spawner_periodic_interval(spawner));
-            enter_count.is_multiple_of(interval)
+            periodic_fires(scheduler_tick, spawner_periodic_interval(spawner))
         }
     }
 }
@@ -261,7 +251,6 @@ pub fn apply_spawner_def(
     );
     spawner.set_property_numeric("spawner_chance", def.chance);
     spawner.set_property_int("spawner_max_active", i64::from(def.max_active));
-    spawner.set_property_int("spawner_enter_count", 0);
     spawner.set_property_int("spawner_spawn_count", 0);
 
     let entry_values: Vec<Value> = def
@@ -670,6 +659,7 @@ pub fn dispatch_creature_spawners_for_event(
     owner: &ObjectId,
     anatomy: &AnatomyRegistry,
     objects: &mut HashMap<ObjectId, Object>,
+    scheduler_tick: Option<u64>,
 ) -> crate::world::EventOutcome {
     use crate::world::EventOutcome;
 
@@ -678,7 +668,14 @@ pub fn dispatch_creature_spawners_for_event(
     }
 
     let mut outcome = EventOutcome::default();
-    for spawn in run_on_enter_spawners(host_id, player_id, owner, anatomy, objects) {
+    for spawn in run_on_enter_spawners(
+        host_id,
+        player_id,
+        owner,
+        anatomy,
+        objects,
+        scheduler_tick,
+    ) {
         outcome.mark_dirty(&spawn.npc_id);
         if let Some(message) = spawn.message {
             outcome.push_line(message);
@@ -694,7 +691,9 @@ pub fn run_on_enter_spawners(
     owner: &ObjectId,
     anatomy: &AnatomyRegistry,
     objects: &mut HashMap<ObjectId, Object>,
+    scheduler_tick: Option<u64>,
 ) -> Vec<SpawnResult> {
+    let tick = scheduler_tick.unwrap_or(1);
     let spawner_ids: Vec<ObjectId> = spawners_in_room(room_id, objects)
         .into_iter()
         .map(|s| s.id.clone())
@@ -708,12 +707,8 @@ pub fn run_on_enter_spawners(
         let Some(spawn_room_id) = spawner_room_id(&spawner_snapshot, objects) else {
             continue;
         };
-        let enter_count = spawner_enter_count(&spawner_snapshot) + 1;
-        if let Some(spawner) = objects.get_mut(&spawner_id) {
-            set_spawner_enter_count(spawner, enter_count);
-        }
 
-        if !trigger_fires(&spawner_snapshot, enter_count) {
+        if !trigger_fires(&spawner_snapshot, tick) {
             continue;
         }
 
@@ -721,7 +716,7 @@ pub fn run_on_enter_spawners(
         let chance_seed = mix_seed(&[
             spawner_id.as_str(),
             player_id.as_str(),
-            &enter_count.to_string(),
+            &tick.to_string(),
             "chance",
         ]);
         if !chance_rolls(chance_seed, chance) {
@@ -737,7 +732,7 @@ pub fn run_on_enter_spawners(
         let pick_seed = mix_seed(&[
             spawner_id.as_str(),
             player_id.as_str(),
-            &enter_count.to_string(),
+            &tick.to_string(),
             "pick",
         ]);
         let Some(entry) = pick_weighted_entry(&entries, pick_seed) else {
@@ -875,12 +870,12 @@ mod tests {
             },
         )]);
 
-        let empty = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects);
+        let empty = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects, Some(1));
         assert!(empty.is_empty());
 
         let spawner = spawner_object(&room);
         objects.insert(spawner.id.clone(), spawner);
-        let spawned = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects);
+        let spawned = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects, Some(1));
         assert_eq!(spawned.len(), 1);
         assert!(objects
             .values()
@@ -916,9 +911,9 @@ mod tests {
             (spawner.id.clone(), spawner),
         ]);
 
-        let first = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects);
+        let first = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects, Some(1));
         assert_eq!(first.len(), 1);
-        let second = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects);
+        let second = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects, Some(2));
         assert!(second.is_empty());
     }
 }

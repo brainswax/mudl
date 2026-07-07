@@ -353,6 +353,60 @@ pub async fn bootstrap_world_loot_spawners<P: Persistence>(
     Ok(())
 }
 
+/// Spawn MUDL-defined resource spawners into persistence.
+pub async fn bootstrap_world_resource_spawners<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    owner: &ObjectId,
+    world: &LoadedWorld,
+    target_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    use crate::resource::{apply_resource_spawner_def, resource_templates_to_property};
+    use std::collections::HashMap as StdHashMap;
+
+    let template_map: StdHashMap<_, _> = world
+        .resource_template_defs
+        .iter()
+        .map(|t| (t.base_name.clone(), t.clone()))
+        .collect();
+
+    for def in &world.resource_spawner_defs {
+        if def.target.is_empty() {
+            anyhow::bail!("Resource spawner '{}' missing target", def.base_name);
+        }
+        let spawner_id = ObjectId::new(format!("resource-spawner:{}-001", def.base_name));
+        if factory.load_object(&spawner_id).await?.is_some() {
+            continue;
+        }
+        let target_id = target_ids.get(&def.target).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Resource spawner '{}' targets unknown location or object '{}'",
+                def.base_name,
+                def.target
+            )
+        })?;
+
+        let mut spawner = Object {
+            id: spawner_id,
+            name: format!("{} resource spawner", def.base_name),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        apply_resource_spawner_def(&mut spawner, def, &template_map)?;
+        spawner.set_property_object_ref("resource_spawner_target", target_id);
+        spawner.add_property(resource_templates_to_property(&world.resource_template_defs));
+        factory.persistence().save_object(&spawner).await?;
+    }
+    Ok(())
+}
+
 /// Spawn MUDL-defined NPCs into persistence.
 pub async fn bootstrap_world_npcs<P: Persistence>(
     factory: &ObjectFactory<P>,
@@ -514,6 +568,7 @@ pub async fn bootstrap_world<P: Persistence>(
         );
     }
     bootstrap_world_loot_spawners(factory, &owner, world, &loot_targets).await?;
+    bootstrap_world_resource_spawners(factory, &owner, world, &loot_targets).await?;
 
     if factory.load_object(&owner).await?.is_none() {
         let mut player = factory

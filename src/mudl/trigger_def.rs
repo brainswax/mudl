@@ -35,6 +35,7 @@ pub mod events {
     pub const ON_DISCOVERED: &str = "on_discovered";
     pub const ON_UNLOCK: &str = "on_unlock";
     pub const ON_OPEN: &str = "on_open";
+    pub const ON_HARVEST: &str = "on_harvest";
 }
 
 #[cfg(test)]

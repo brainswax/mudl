@@ -49,6 +49,9 @@ pub struct MudlRoleProps {
     pub grant_effects: Vec<String>,
     pub breakable: Option<bool>,
     pub break_text: Option<String>,
+    pub harvestable: Option<bool>,
+    pub hidden_until_discovered: Option<bool>,
+    pub discovery_stealth: Option<i64>,
 }
 
 impl MudlRoleProps {
@@ -127,6 +130,13 @@ impl MudlRoleProps {
                 }
                 "breakable" | "is_breakable" => props.breakable = Some(*value == "true"),
                 "break_text" | "on_break" => props.break_text = Some(value.to_string()),
+                "harvestable" | "is_harvestable" => props.harvestable = Some(*value == "true"),
+                "hidden_until_discovered" | "hidden" => {
+                    props.hidden_until_discovered = Some(*value == "true")
+                }
+                "discovery_stealth" | "stealth" => {
+                    props.discovery_stealth = value.parse().ok()
+                }
                 _ => {}
             }
         }
@@ -145,6 +155,9 @@ impl MudlRoleProps {
             || !self.stat_mods.is_empty()
             || !self.skill_mods.is_empty()
             || !self.grant_effects.is_empty()
+            || self.harvestable.is_some()
+            || self.hidden_until_discovered.is_some()
+            || self.discovery_stealth.is_some()
     }
 
     /// Apply scalar overrides without re-applying role composition.
@@ -160,6 +173,15 @@ impl MudlRoleProps {
         }
         if let Some(ref slot) = self.hand_slot {
             obj.set_property_string("hand_slot", slot);
+        }
+        if let Some(harvestable) = self.harvestable {
+            obj.set_property_bool("harvestable", harvestable);
+        }
+        if let Some(hidden) = self.hidden_until_discovered {
+            obj.set_property_bool("hidden_until_discovered", hidden);
+        }
+        if let Some(stealth) = self.discovery_stealth {
+            obj.set_property_int("discovery_stealth", stealth);
         }
         if self.mod_max_weight.is_some() || self.mod_encumbrance.is_some() {
             obj.apply_carry_modifiers(self.mod_max_weight, self.mod_encumbrance);

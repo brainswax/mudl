@@ -128,14 +128,14 @@ M4 introduces a builder-facing **`@trigger`** system on places, objects, NPCs, a
 | `trigger_def.rs` | Parse `@trigger <event> <action> [text…]` |
 | `events.rs` | `EventContext`, `attach_triggers`, `execute_event` |
 | `event_script.rs` | Script actions: `narrate`, `emote`, `react`, `damage`, `heal`, `mod-stat`, `teleport`, `spawn` |
-| **Wired events** | `on_enter`/`on_leave` (movement), `on_take`/`on_drop`/`on_move` (inventory), `on_break`, `on_death`/`on_kill` (combat), `on_discovered` (perception + triggers), `on_unlock`/`on_open` (gates, narrative-only) |
+| **Wired events** | `on_enter`/`on_leave` (movement), `on_take`/`on_drop`/`on_move` (inventory), `on_break`, `on_harvest` (resource nodes), `on_death`/`on_kill` (combat), `on_discovered` (perception + triggers), `on_unlock`/`on_open` (gates, narrative-only) |
 
 **Room entry order** (`Session::go`):
 
 ```
-portal prep → on_leave (place) → move player → spawners → loot spawners
-  → on_enter (place @trigger) → creature behaviors (on_enter)
-  → room look → equipment regen
+portal prep → on_leave (place) → move player → execute_event(on_enter)
+  → subscribers: scheduler tick, creature/loot/resource spawners, place @trigger
+  → creature behaviors (on_enter) → room look → equipment regen
 ```
 
 ## Hard-coded vs MUDL-driven
@@ -183,8 +183,9 @@ Creatures now use a **single script surface** with split storage:
 | `@trigger` / `event_handlers` | `on_enter`, `on_kill`, … | `execute_host_event` (via `execute_event`) |
 | Creature spawners | `on_enter`, `periodic` | `dispatch_creature_spawners_for_event` (subscriber on room `on_enter`) |
 | Loot spawners | `on_enter`, `on_open`, `on_kill`, `on_break`, `timer` | `dispatch_loot_spawners_for_event` (subscriber on matching host events) |
+| Resource spawners | `on_enter`, `on_harvest`, `timer` | `dispatch_resource_spawners_for_event` (subscriber on matching host events) |
 
-`execute_event()` runs subscribers first (spawners/loot), then host `@trigger` scripts. Session `go`, inventory open/break, and combat kill all emit through this single path.
+`execute_event()` runs subscribers first (scheduler tick + spawners/loot/resources), then host `@trigger` scripts. Session `go`, inventory open/break/harvest, and combat kill all emit through this single path.
 
 ### 3. Two event execution modes — **resolved (M4)**
 
@@ -198,9 +199,9 @@ Creatures now use a **single script surface** with split storage:
 | ~~`@trigger react attack` uses hardcoded damage 10~~ | ~~`event_script.rs`~~ | Done — `creature_attack_damage()` shared helper |
 | Duplicate `parse_behavior_line` | `npc_def.rs`, `spawner_def.rs` | Shared `mudl/behavior_line.rs` |
 | Legacy `npc_behaviors` fallback | `behavior.rs` | Remove after migration |
-| `on_discovered` on generic objects | — | Not wired; LANGUAGE.md marks "coming" |
-| No central scheduler | spawner `periodic`, loot `timer` | Property counters today; future `EventScheduler` |
-| Resource/crafting spawners | `loot_spawner_def.rs` TODO | New `@resource-spawner` or `@trigger on_harvest` |
+| ~~`on_discovered` on generic objects~~ | ~~—~~ | Done — `world/discovery.rs`, `hidden_until_discovered` role |
+| ~~No central scheduler~~ | ~~spawner `periodic`, loot `timer`~~ | Done — `world/scheduler.rs`, room `scheduler_tick_on_enter` |
+| ~~Resource/crafting spawners~~ | ~~`loot_spawner_def.rs` TODO~~ | Done — `@resource-spawner`, `on_harvest` event bus |
 
 ### 5. M1 debt (unchanged)
 
@@ -268,10 +269,10 @@ Creatures now use a **single script surface** with split storage:
 - SQLite for durability (or JSON snapshots).
 - Git-friendly export/import.
 
-### 4. Event & Timer System (M4 partial)
+### 4. Event & Timer System (M4)
 - **`@trigger`** scripts stored in `Object.event_handlers`; executed by `world/event_script.rs`.
-- **Creature spawner `periodic`** and **loot `timer`** use per-object entry counters — not yet a unified scheduler.
-- **Planned:** `EventScheduler` for delayed/recurring actions; spawner/loot triggers subscribe to the same bus.
+- **`EventScheduler`** (`world/scheduler.rs`) — room-scoped `scheduler_tick_on_enter` advances on each `on_enter`; creature `periodic`, loot `timer`, and resource `timer` spawners subscribe via `event_subscribers`.
+- **`@resource-spawner`** — renewable harvest nodes on `on_harvest` / `on_enter` / `timer`; player command `harvest <object>`.
 
 ### 5. API Gateway / RBAC
 - Enforces permissions before any state change.
@@ -477,9 +478,9 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 | ~~**P1**~~ | ~~`gate_events` → `execute_event` (mutating door scripts)~~ | Done — §4.3 |
 | ~~**P1**~~ | ~~Align `@trigger react attack` with `attack_damage`~~ | Done — `creature_attack_damage()` |
 | **P1** | Shared behavior-line parser; drop `npc_behaviors` legacy | §4.4 |
-| **P2** | `on_discovered` on arbitrary objects | Builder traps, hidden items |
-| **P2** | Central `EventScheduler` (replace periodic/timer counters) | §4.4 |
-| **P2** | `@resource-spawner` / harvest triggers | Crafting pipeline |
+| ~~**P2**~~ | ~~`on_discovered` on arbitrary objects~~ | Done — `hidden_until_discovered`, `run_discovery_on_look` |
+| ~~**P2**~~ | ~~Central `EventScheduler` (replace periodic/timer counters)~~ | Done — `world/scheduler.rs` |
+| ~~**P2**~~ | ~~`@resource-spawner` / harvest triggers~~ | Done — `resource/spawner.rs`, `harvest` command |
 
 ### Defer (post-M4)
 

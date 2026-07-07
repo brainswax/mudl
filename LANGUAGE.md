@@ -76,7 +76,8 @@ Named triggers that run scripted lines when something happens in the world. Buil
 | `on_break` | A breakable object is smashed |
 | `on_death` | A creature with handlers dies (NPCs/objects) |
 | `on_kill` | Creature death — `@trigger` scripts and attached loot spawners fire via `execute_event` |
-| `on_discovered` | Creature behaviors today; object triggers coming |
+| `on_discovered` | Hidden creatures and objects revealed on `look` |
+| `on_harvest` | Harvestable objects (`harvest <object>`) — resource spawners subscribe |
 | `on_unlock` / `on_open` | Doors and containers (same as gate handlers) |
 
 **Script actions**:
@@ -91,7 +92,7 @@ Named triggers that run scripted lines when something happens in the world. Buil
 | `teleport` | `teleport haunted-entry` | Move actor to a place `base_name` |
 | `spawn` | `spawn mist-wisp` | Spawn NPC from a `@spawn-template` in the world |
 
-`on_kill` fires on the **victim** (killer as actor) and on the **killer** when the killer has handlers (victim as actor). `on_discovered` runs after perception reveals a hidden creature — via `@trigger` on the creature (template `on_discovered=` lines are converted automatically at bootstrap).
+`on_kill` fires on the **victim** (killer as actor) and on the **killer** when the killer has handlers (victim as actor). `on_discovered` runs after perception reveals a hidden creature or object — via `@trigger` on the host (template `on_discovered=` lines are converted automatically at bootstrap). `on_harvest` fires when a player harvests a `harvestable=true` object; attached `@resource-spawner` blocks may drop renewable materials into the room.
 
 ```mudl
 # Place trigger (legacy map block)
@@ -390,7 +391,9 @@ Player command: `attack <creature>` — turn-based melee in the current room.
 - **Critical hits** — surprise attacks (unaware target) always land as critical blows with bonus damage. Skilled fighters (`combat` 4+) can occasionally score a critical on aware targets.
 - **Awareness** — templates with `awareness_check=true` (default for `react=attack`) run bilateral contests on room entry: player `stealth` vs creature `perception`, and player `survival`/wisdom vs creature ambush stealth. Unaware mobs skip attack/warn reactions; you may see `The pale lurker hasn't noticed you.` or `You spot the pale lurker before it sees you.`
 - **Hidden lurkers** — creatures with `awareness_check=true` stay hidden from `look` until you discover them. `look` and `examine` run a perception check (`survival`, wisdom, dexterity vs ambush stealth). Success: `You notice a pale lurker here.` and any `on_discovered` behaviors fire.
-- **on_discovered** — builder hook when a hidden creature is revealed: `@trigger on_discovered emote ...`, `@trigger on_discovered react flee`, or template `on_discovered=emote ...` / `on_discovered_react=attack`. Supports `attack`, `flee`, `warn`, `greet`, and scripted lines.
+- **Hidden objects** — items with `hidden_until_discovered=true` stay out of room listings until discovered. Optional `discovery_stealth=N` (default 8) sets the perception threshold. `@trigger on_discovered` on the object fires when revealed.
+- **on_discovered** — builder hook when a hidden creature or object is revealed: `@trigger on_discovered emote ...`, `@trigger on_discovered react flee`, or template `on_discovered=emote ...` / `on_discovered_react=attack`. Supports `attack`, `flee`, `warn`, `greet`, and scripted lines.
+- **Harvest** — `harvest <object>` on `harvestable=true` nodes fires `on_harvest`; `@resource-spawner` blocks with `trigger=on_harvest` drop weighted `@resource-template` items into the room (crafting pipeline).
 - **Ambush** — if a lurking creature spots you first but you don't spot it, you may see `A pale lurker ambushes you!` and take surprise damage on its on-enter attack.
 - **Surprise** — attacking an unaware creature adds bonus damage and grants the first strike (`You catch the pale lurker off guard and strike`). If you are unaware, the creature strikes first with bonus damage.
 - **Initiative** — each exchange compares `dexterity`, optional `speed`, and `combat` skill; the faster combatant acts first (`The path watcher is quicker and strikes` when they win initiative).
@@ -437,7 +440,28 @@ Wizard vitals (testing): `@damage <creature> [amount]`, `@heal <creature> [amoun
 @end
 ```
 
-- `trigger=on_enter` — roll on each player entry; `trigger=periodic` with `periodic_interval=N` — every Nth entry.
+**Resource spawners** (renewable harvest nodes for crafting materials):
+
+```mudl
+@resource-template forest-moss
+  prototype=trail-rations
+  count=1
+@end
+
+@resource-spawner moss-harvest
+  target=haunted-moss-patch
+  trigger=on_harvest
+  chance=1.0
+  max_active=2
+  @entry forest-moss weight=1
+@end
+```
+
+- `trigger=on_harvest` — fires when a player runs `harvest <object>` on a `harvestable=true` target.
+- `trigger=on_enter` / `trigger=timer` — room-attached renewal (timer uses the central room enter tick).
+- `@resource-template` references an item prototype; spawned items appear in the room.
+
+- `trigger=on_enter` — roll on each player entry; `trigger=periodic` with `periodic_interval=N` — every Nth room enter tick (shared scheduler).
 - `chance` — spawn attempt probability (0.0–1.0). `max_active` — cap concurrent spawned creatures per spawner.
 - No spawner on a location → no random spawns (only explicit `@npc` or MUDL-placed creatures).
 

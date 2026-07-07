@@ -373,7 +373,7 @@ fn collect_room_matches(
         if !obj.is_active() || !name_matches(needle, obj) {
             continue;
         }
-        if !crate::creature::creature_visible_to_player(obj) {
+        if !crate::world::entity_visible_to_player(obj) {
             continue;
         }
         if !is_on_ground_in_room(obj, obj_id, room_id, player_id, objects) {
@@ -526,7 +526,7 @@ fn id_in_scope(
             is_accessible_in_room(id, room, player_id, objects)
                 && objects
                     .get(id)
-                    .is_none_or(crate::creature::creature_visible_to_player)
+                    .is_none_or(crate::world::entity_visible_to_player)
         }),
         ResolveScope::PossessionOrRoom => {
             is_in_player_possession(player_id, id, objects)

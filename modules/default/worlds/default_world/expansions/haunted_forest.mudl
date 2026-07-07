@@ -98,6 +98,33 @@
   alias=clay pot
 @end
 
+@prototype moss-patch
+  name=Moss Patch
+  description=A damp patch of green moss clinging to a fallen log.
+  harvestable=true
+  weight=5.0
+  volume=4.0
+  pocketable=false
+  alias=moss
+  alias=moss patch
+@end
+
+@prototype hidden-supply-cache
+  name=Supply Cache
+  description=A bundle wrapped in oiled cloth, wedged behind a root.
+  hidden_until_discovered=true
+  discovery_stealth=6
+  is_container=true
+  is_open=true
+  capacity=2
+  max_weight=20
+  weight=3.0
+  volume=2.0
+  pocketable=false
+  alias=cache
+  alias=supply cache
+@end
+
 # --- Integration items (placed in host world locations) ---
 
 @item scene-boulder
@@ -171,6 +198,32 @@
 @item haunted-moon-pot
   prototype=haunted-clay-pot
   location=haunted-moon
+@end
+
+@item haunted-moss-patch
+  prototype=moss-patch
+  location=haunted-moss
+@end
+
+@item haunted-hidden-cache
+  prototype=hidden-supply-cache
+  location=haunted-moss
+  @trigger on_discovered narrate You kneel to inspect the bundle more closely.
+@end
+
+# --- Resource spawners (renewable harvest nodes) ---
+
+@resource-template forest-moss
+  prototype=trail-rations
+  count=1
+@end
+
+@resource-spawner moss-harvest
+  target=haunted-moss-patch
+  trigger=on_harvest
+  chance=1.0
+  max_active=2
+  @entry forest-moss weight=1
 @end
 
 # --- Creature spawners (weighted, on-enter only in haunted rooms) ---

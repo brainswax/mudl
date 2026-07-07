@@ -1,88 +1,93 @@
-//! Location- and object-attached loot spawners with weighted item templates.
+//! Location- and object-attached resource spawners with weighted item templates.
 
 use std::collections::HashMap;
 
 use crate::creature::spawner::pick_weighted_entry;
-use crate::mudl::{LootSpawnerDef, LootSpawnerTrigger, LootTemplateDef, SpawnerEntryDef};
+use crate::mudl::{
+    ResourceSpawnerDef, ResourceSpawnerTrigger, ResourceTemplateDef, SpawnerEntryDef,
+};
 use crate::object::{generate_object_id, Object, ObjectId, PermissionFlags, Property, Value};
 use crate::world::scheduler::periodic_fires;
 
-/// Result of a loot spawner tick — narrative feedback for the player.
+/// Result of a resource spawner tick — narrative feedback for the player.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LootSpawnResult {
+pub struct ResourceSpawnResult {
     pub item_id: ObjectId,
     pub message: Option<String>,
 }
 
-/// Whether `obj` is a loot spawner (hidden from room listings).
-pub fn is_loot_spawner(obj: &Object) -> bool {
-    obj.get_bool_property("is_loot_spawner").unwrap_or(false)
+/// Whether `obj` is a resource spawner (hidden from room listings).
+pub fn is_resource_spawner(obj: &Object) -> bool {
+    obj.get_bool_property("is_resource_spawner")
+        .unwrap_or(false)
 }
 
 /// Whether `obj` should be hidden from player room listings.
-pub fn is_loot_spawner_infrastructure(obj: &Object) -> bool {
-    is_loot_spawner(obj)
+pub fn is_resource_spawner_infrastructure(obj: &Object) -> bool {
+    is_resource_spawner(obj)
 }
 
-fn loot_spawner_target_id(obj: &Object) -> Option<ObjectId> {
-    obj.get_object_ref_property("loot_spawner_target")
+fn resource_spawner_target_id(obj: &Object) -> Option<ObjectId> {
+    obj.get_object_ref_property("resource_spawner_target")
 }
 
-fn loot_spawner_trigger(obj: &Object) -> LootSpawnerTrigger {
-    obj.get_property("loot_spawner_trigger")
+fn resource_spawner_trigger(obj: &Object) -> ResourceSpawnerTrigger {
+    obj.get_property("resource_spawner_trigger")
         .and_then(|p| {
             if let Value::String(s) = &p.value {
-                Some(LootSpawnerTrigger::parse(s))
+                Some(ResourceSpawnerTrigger::parse(s))
             } else {
                 None
             }
         })
-        .unwrap_or(LootSpawnerTrigger::OnOpen)
+        .unwrap_or(ResourceSpawnerTrigger::OnEnter)
 }
 
-fn loot_spawner_chance(obj: &Object) -> f64 {
-    obj.get_float_property("loot_spawner_chance")
+fn resource_spawner_chance(obj: &Object) -> f64 {
+    obj.get_float_property("resource_spawner_chance")
         .unwrap_or(1.0)
         .clamp(0.0, 1.0)
 }
 
-fn loot_spawner_max_active(obj: &Object) -> u32 {
-    obj.get_int_property("loot_spawner_max_active")
+fn resource_spawner_max_active(obj: &Object) -> u32 {
+    obj.get_int_property("resource_spawner_max_active")
         .unwrap_or(4)
         .max(0) as u32
 }
 
-fn loot_spawner_periodic_interval(obj: &Object) -> u32 {
-    obj.get_int_property("loot_spawner_periodic_interval")
+fn resource_spawner_periodic_interval(obj: &Object) -> u32 {
+    obj.get_int_property("resource_spawner_periodic_interval")
         .unwrap_or(5)
         .max(1) as u32
 }
 
-fn loot_spawner_spawn_count(obj: &Object) -> u32 {
-    obj.get_int_property("loot_spawner_spawn_count")
+fn resource_spawner_spawn_count(obj: &Object) -> u32 {
+    obj.get_int_property("resource_spawner_spawn_count")
         .unwrap_or(0)
         .max(0) as u32
 }
 
-fn loot_spawner_once(obj: &Object) -> bool {
-    obj.get_bool_property("loot_spawner_once").unwrap_or(false)
+fn resource_spawner_once(obj: &Object) -> bool {
+    obj.get_bool_property("resource_spawner_once")
+        .unwrap_or(false)
 }
 
-fn loot_spawner_fired(obj: &Object) -> bool {
-    obj.get_bool_property("loot_spawner_fired").unwrap_or(false)
+fn resource_spawner_fired(obj: &Object) -> bool {
+    obj.get_bool_property("resource_spawner_fired")
+        .unwrap_or(false)
 }
 
-fn set_loot_spawner_spawn_count(spawner: &mut Object, count: u32) {
-    spawner.set_property_int("loot_spawner_spawn_count", count as i64);
+fn set_resource_spawner_spawn_count(spawner: &mut Object, count: u32) {
+    spawner.set_property_int("resource_spawner_spawn_count", count as i64);
 }
 
-fn set_loot_spawner_fired(spawner: &mut Object, fired: bool) {
-    spawner.set_property_bool("loot_spawner_fired", fired);
+fn set_resource_spawner_fired(spawner: &mut Object, fired: bool) {
+    spawner.set_property_bool("resource_spawner_fired", fired);
 }
 
-/// Parse weighted entries stored on a loot spawner object.
-pub fn loot_spawner_entries(obj: &Object) -> Vec<SpawnerEntryDef> {
-    obj.get_property("loot_spawner_entries")
+/// Parse weighted entries stored on a resource spawner object.
+pub fn resource_spawner_entries(obj: &Object) -> Vec<SpawnerEntryDef> {
+    obj.get_property("resource_spawner_entries")
         .and_then(|prop| {
             if let Value::List(items) = &prop.value {
                 Some(
@@ -117,8 +122,8 @@ pub fn loot_spawner_entries(obj: &Object) -> Vec<SpawnerEntryDef> {
         .unwrap_or_default()
 }
 
-/// Loot spawners whose `target` resolves to `target_id`.
-pub fn loot_spawners_for_target<'a>(
+/// Resource spawners whose `target` resolves to `target_id`.
+pub fn resource_spawners_for_target<'a>(
     target_id: &ObjectId,
     objects: &'a HashMap<ObjectId, Object>,
 ) -> Vec<&'a Object> {
@@ -126,29 +131,27 @@ pub fn loot_spawners_for_target<'a>(
         .values()
         .filter(|obj| {
             obj.is_active()
-                && is_loot_spawner(obj)
-                && loot_spawner_target_id(obj).as_ref() == Some(target_id)
+                && is_resource_spawner(obj)
+                && resource_spawner_target_id(obj).as_ref() == Some(target_id)
         })
         .collect()
 }
 
-/// Loot spawners attached to a room (target is the room itself).
-pub fn loot_spawners_in_room<'a>(
+/// Resource spawners attached to a room (target is the room itself).
+fn resource_spawners_in_room<'a>(
     room_id: &ObjectId,
     objects: &'a HashMap<ObjectId, Object>,
 ) -> Vec<&'a Object> {
-    loot_spawners_for_target(room_id, objects)
+    resource_spawners_for_target(room_id, objects)
 }
 
-/// Active loot items spawned by `spawner_id` at `target_id`.
-pub fn count_active_loot(
+/// Active resource items spawned by `spawner_id` at `target_id`.
+pub fn count_active_resources(
     spawner_id: &ObjectId,
     target_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
 ) -> usize {
-    let target_is_room = objects
-        .get(target_id)
-        .is_some_and(|t| t.is_location() || t.is_room());
+    let room_id = room_for_target(target_id, objects);
 
     objects
         .values()
@@ -156,20 +159,13 @@ pub fn count_active_loot(
             if !obj.is_active() || obj.object_type() != "item" {
                 return false;
             }
-            let spawned_by = obj.get_object_ref_property("looted_by");
+            let spawned_by = obj.get_object_ref_property("resource_spawned_by");
             if spawned_by.as_ref() != Some(spawner_id) {
                 return false;
             }
-            if target_is_room {
-                obj.location.as_ref() == Some(target_id)
-            } else if let Some(target) = objects.get(target_id) {
-                if target.is_container() {
-                    target.container_contents().contains(&obj.id)
-                } else {
-                    obj.location.as_ref() == target.location.as_ref()
-                }
-            } else {
-                false
+            match room_id.as_ref() {
+                Some(room) => obj.location.as_ref() == Some(room),
+                None => false,
             }
         })
         .count()
@@ -197,40 +193,42 @@ fn chance_rolls(seed: u64, chance: f64) -> bool {
     seed % 10_000 < threshold
 }
 
-fn trigger_fires(spawner: &Object, trigger: LootSpawnerTrigger, tick: u64) -> bool {
-    let actual = loot_spawner_trigger(spawner);
+fn trigger_fires(
+    spawner: &Object,
+    trigger: ResourceSpawnerTrigger,
+    tick: u64,
+) -> bool {
+    let actual = resource_spawner_trigger(spawner);
     if actual != trigger {
         return false;
     }
     match actual {
-        LootSpawnerTrigger::OnEnter
-        | LootSpawnerTrigger::OnOpen
-        | LootSpawnerTrigger::OnKill
-        | LootSpawnerTrigger::OnBreak => true,
-        LootSpawnerTrigger::Timer => {
-            periodic_fires(tick, loot_spawner_periodic_interval(spawner))
+        ResourceSpawnerTrigger::OnEnter | ResourceSpawnerTrigger::OnHarvest => true,
+        ResourceSpawnerTrigger::Timer => {
+            let interval = resource_spawner_periodic_interval(spawner);
+            periodic_fires(tick, interval)
         }
     }
 }
 
-/// Build loot spawner runtime properties from a MUDL definition.
-pub fn apply_loot_spawner_def(
+/// Build resource spawner runtime properties from a MUDL definition.
+pub fn apply_resource_spawner_def(
     spawner: &mut Object,
-    def: &LootSpawnerDef,
-    templates: &HashMap<String, LootTemplateDef>,
+    def: &ResourceSpawnerDef,
+    templates: &HashMap<String, ResourceTemplateDef>,
 ) -> anyhow::Result<()> {
-    spawner.set_property_bool("is_loot_spawner", true);
-    spawner.set_property_string("loot_spawner_base", &def.base_name);
-    spawner.set_property_string("loot_spawner_trigger", def.trigger.as_str());
+    spawner.set_property_bool("is_resource_spawner", true);
+    spawner.set_property_string("resource_spawner_base", &def.base_name);
+    spawner.set_property_string("resource_spawner_trigger", def.trigger.as_str());
     spawner.set_property_int(
-        "loot_spawner_periodic_interval",
+        "resource_spawner_periodic_interval",
         i64::from(def.periodic_interval),
     );
-    spawner.set_property_numeric("loot_spawner_chance", def.chance);
-    spawner.set_property_int("loot_spawner_max_active", i64::from(def.max_active));
-    spawner.set_property_bool("loot_spawner_once", def.once);
-    spawner.set_property_bool("loot_spawner_fired", false);
-    spawner.set_property_int("loot_spawner_spawn_count", 0);
+    spawner.set_property_numeric("resource_spawner_chance", def.chance);
+    spawner.set_property_int("resource_spawner_max_active", i64::from(def.max_active));
+    spawner.set_property_bool("resource_spawner_once", def.once);
+    spawner.set_property_bool("resource_spawner_fired", false);
+    spawner.set_property_int("resource_spawner_spawn_count", 0);
 
     let entry_values: Vec<Value> = def
         .entries
@@ -238,7 +236,7 @@ pub fn apply_loot_spawner_def(
         .map(|entry| {
             if !templates.contains_key(&entry.template) {
                 anyhow::bail!(
-                    "Loot spawner '{}' references unknown loot-template '{}'",
+                    "Resource spawner '{}' references unknown resource-template '{}'",
                     def.base_name,
                     entry.template
                 );
@@ -257,7 +255,7 @@ pub fn apply_loot_spawner_def(
         .collect::<anyhow::Result<_>>()?;
 
     spawner.add_property(Property {
-        name: "loot_spawner_entries".to_string(),
+        name: "resource_spawner_entries".to_string(),
         value: Value::List(entry_values),
         permissions: PermissionFlags::EVERYONE,
         behavior: None,
@@ -265,8 +263,8 @@ pub fn apply_loot_spawner_def(
     Ok(())
 }
 
-/// Serialize loot templates for lookup at runtime (stored on each loot spawner).
-pub fn loot_templates_to_property(templates: &[LootTemplateDef]) -> Property {
+/// Serialize resource templates for lookup at runtime (stored on each resource spawner).
+pub fn resource_templates_to_property(templates: &[ResourceTemplateDef]) -> Property {
     let items: Vec<Value> = templates
         .iter()
         .map(|template| {
@@ -287,15 +285,15 @@ pub fn loot_templates_to_property(templates: &[LootTemplateDef]) -> Property {
         })
         .collect();
     Property {
-        name: "loot_templates".to_string(),
+        name: "resource_templates".to_string(),
         value: Value::List(items),
         permissions: PermissionFlags::EVERYONE,
         behavior: None,
     }
 }
 
-fn resolve_loot_template(template_name: &str, spawner: &Object) -> Option<LootTemplateDef> {
-    spawner.get_property("loot_templates").and_then(|prop| {
+fn resolve_resource_template(template_name: &str, spawner: &Object) -> Option<ResourceTemplateDef> {
+    spawner.get_property("resource_templates").and_then(|prop| {
         if let Value::List(items) = &prop.value {
             items.iter().find_map(|entry| {
                 let Value::Map(map) = entry else {
@@ -325,7 +323,7 @@ fn resolve_loot_template(template_name: &str, spawner: &Object) -> Option<LootTe
                         _ => None,
                     })
                     .unwrap_or(1);
-                Some(LootTemplateDef {
+                Some(ResourceTemplateDef {
                     base_name: base.to_string(),
                     prototype,
                     count: count.max(1),
@@ -360,7 +358,7 @@ fn clone_item_from_prototype(
     proto: &Object,
     new_id: ObjectId,
     owner: &ObjectId,
-    template: &LootTemplateDef,
+    template: &ResourceTemplateDef,
 ) -> Object {
     let mut item = Object {
         id: new_id,
@@ -382,54 +380,28 @@ fn clone_item_from_prototype(
     item
 }
 
-enum LootPlacement {
-    Container(ObjectId),
-    Room(ObjectId),
-}
-
-fn placement_for_target(
+fn room_for_target(
     target_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
-) -> Option<LootPlacement> {
+) -> Option<ObjectId> {
     let target = objects.get(target_id)?;
-    if target.is_container() {
-        return Some(LootPlacement::Container(target_id.clone()));
-    }
     if target.is_location() || target.is_room() {
-        return Some(LootPlacement::Room(target_id.clone()));
+        return Some(target_id.clone());
     }
-    if let Some(room_id) = target.location.clone() {
-        return Some(LootPlacement::Room(room_id));
-    }
-    None
+    target.location.clone()
 }
 
-fn place_loot_item(
-    item: &Object,
-    placement: &LootPlacement,
-    objects: &mut HashMap<ObjectId, Object>,
-) {
-    match placement {
-        LootPlacement::Container(container_id) => {
-            let mut container = objects.get(container_id).unwrap().clone();
-            container.add_to_list_property("contents", item.id.clone());
-            objects.insert(container_id.clone(), container);
-        }
-        LootPlacement::Room(_) => {}
-    }
-}
-
-fn spawn_loot_item(
+fn spawn_resource_item(
     spawner: &Object,
-    template: &LootTemplateDef,
-    placement: &LootPlacement,
+    template: &ResourceTemplateDef,
+    room_id: &ObjectId,
     owner: &ObjectId,
     spawn_index: u32,
     objects: &HashMap<ObjectId, Object>,
 ) -> Option<Object> {
     let proto = find_item_prototype(&template.prototype, objects)?;
     let base = spawner
-        .get_property("loot_spawner_base")
+        .get_property("resource_spawner_base")
         .and_then(|p| {
             if let Value::String(s) = &p.value {
                 Some(s.clone())
@@ -437,57 +409,43 @@ fn spawn_loot_item(
                 None
             }
         })
-        .unwrap_or_else(|| "loot".to_string());
-    let id = generate_object_id("item", &format!("{base}-drop"), spawn_index.max(1));
+        .unwrap_or_else(|| "resource".to_string());
+    let id = generate_object_id("item", &format!("{base}-resource"), spawn_index.max(1));
     let mut item = clone_item_from_prototype(proto, id, owner, template);
     item.add_property(Property {
-        name: "looted_by".to_string(),
+        name: "resource_spawned_by".to_string(),
         value: Value::ObjectRef(spawner.id.clone()),
         permissions: PermissionFlags::EVERYONE,
         behavior: None,
     });
-    item.set_property_string("loot_template", &template.base_name);
-
-    match placement {
-        LootPlacement::Container(container_id) => {
-            item.location = Some(container_id.clone());
-        }
-        LootPlacement::Room(room_id) => {
-            item.location = Some(room_id.clone());
-        }
-    }
+    item.set_property_string("resource_template", &template.base_name);
+    item.location = Some(room_id.clone());
     Some(item)
 }
 
-fn spawn_message(template: &LootTemplateDef, placement: &LootPlacement) -> String {
+fn spawn_message(template: &ResourceTemplateDef) -> String {
     let label = template.base_name.replace('-', " ").to_lowercase();
-    match placement {
-        LootPlacement::Container(_) => format!("You find {label} inside."),
-        LootPlacement::Room(_) => format!("You notice {label} here."),
-    }
+    format!("You notice {label} here.")
 }
 
-fn tick_for_trigger(trigger: LootSpawnerTrigger, scheduler_tick: Option<u64>) -> u64 {
+fn tick_for_trigger(trigger: ResourceSpawnerTrigger, scheduler_tick: Option<u64>) -> u64 {
     match trigger {
-        LootSpawnerTrigger::Timer => scheduler_tick.unwrap_or(1),
-        LootSpawnerTrigger::OnEnter
-        | LootSpawnerTrigger::OnOpen
-        | LootSpawnerTrigger::OnKill
-        | LootSpawnerTrigger::OnBreak => scheduler_tick.unwrap_or(1),
+        ResourceSpawnerTrigger::Timer => scheduler_tick.unwrap_or(1),
+        ResourceSpawnerTrigger::OnEnter | ResourceSpawnerTrigger::OnHarvest => 1,
     }
 }
 
-fn run_loot_spawners(
+fn run_resource_spawners(
     spawner_ids: Vec<ObjectId>,
     target_id: &ObjectId,
-    trigger: LootSpawnerTrigger,
+    trigger: ResourceSpawnerTrigger,
     actor_id: &ObjectId,
     owner: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
     scheduler_tick: Option<u64>,
-) -> Vec<LootSpawnResult> {
-    let placement = match placement_for_target(target_id, objects) {
-        Some(p) => p,
+) -> Vec<ResourceSpawnResult> {
+    let room_id = match room_for_target(target_id, objects) {
+        Some(room) => room,
         None => return Vec::new(),
     };
 
@@ -498,7 +456,7 @@ fn run_loot_spawners(
             continue;
         };
 
-        if loot_spawner_once(&spawner_snapshot) && loot_spawner_fired(&spawner_snapshot) {
+        if resource_spawner_once(&spawner_snapshot) && resource_spawner_fired(&spawner_snapshot) {
             continue;
         }
 
@@ -506,43 +464,43 @@ fn run_loot_spawners(
             continue;
         }
 
-        let chance = loot_spawner_chance(&spawner_snapshot);
+        let chance = resource_spawner_chance(&spawner_snapshot);
         let chance_seed = mix_seed(&[
             spawner_id.as_str(),
             actor_id.as_str(),
             target_id.as_str(),
             &tick.to_string(),
-            "loot-chance",
+            "resource-chance",
         ]);
         if !chance_rolls(chance_seed, chance) {
             continue;
         }
 
-        let max_active = loot_spawner_max_active(&spawner_snapshot);
-        if count_active_loot(&spawner_id, target_id, objects) >= max_active as usize {
+        let max_active = resource_spawner_max_active(&spawner_snapshot);
+        if count_active_resources(&spawner_id, target_id, objects) >= max_active as usize {
             continue;
         }
 
-        let entries = loot_spawner_entries(&spawner_snapshot);
+        let entries = resource_spawner_entries(&spawner_snapshot);
         let pick_seed = mix_seed(&[
             spawner_id.as_str(),
             actor_id.as_str(),
             target_id.as_str(),
             &tick.to_string(),
-            "loot-pick",
+            "resource-pick",
         ]);
         let Some(entry) = pick_weighted_entry(&entries, pick_seed) else {
             continue;
         };
-        let Some(template) = resolve_loot_template(&entry.template, &spawner_snapshot) else {
+        let Some(template) = resolve_resource_template(&entry.template, &spawner_snapshot) else {
             continue;
         };
 
-        let spawn_index = loot_spawner_spawn_count(&spawner_snapshot) + 1;
-        let Some(item) = spawn_loot_item(
+        let spawn_index = resource_spawner_spawn_count(&spawner_snapshot) + 1;
+        let Some(item) = spawn_resource_item(
             &spawner_snapshot,
             &template,
-            &placement,
+            &room_id,
             owner,
             spawn_index,
             objects,
@@ -550,19 +508,18 @@ fn run_loot_spawners(
             continue;
         };
 
-        let message = spawn_message(&template, &placement);
+        let message = spawn_message(&template);
         let item_id = item.id.clone();
-        place_loot_item(&item, &placement, objects);
         objects.insert(item_id.clone(), item);
 
         if let Some(spawner) = objects.get_mut(&spawner_id) {
-            set_loot_spawner_spawn_count(spawner, spawn_index);
-            if loot_spawner_once(spawner) {
-                set_loot_spawner_fired(spawner, true);
+            set_resource_spawner_spawn_count(spawner, spawn_index);
+            if resource_spawner_once(spawner) {
+                set_resource_spawner_fired(spawner, true);
             }
         }
 
-        results.push(LootSpawnResult {
+        results.push(ResourceSpawnResult {
             item_id,
             message: Some(message),
         });
@@ -570,8 +527,8 @@ fn run_loot_spawners(
     results
 }
 
-/// Dispatch loot spawners subscribed to `event_name` on `host_id`.
-pub fn dispatch_loot_spawners_for_event(
+/// Dispatch resource spawners subscribed to `event_name` on `host_id`.
+pub fn dispatch_resource_spawners_for_event(
     event_name: &str,
     host_id: &ObjectId,
     actor_id: &ObjectId,
@@ -584,9 +541,14 @@ pub fn dispatch_loot_spawners_for_event(
     let mut outcome = EventOutcome::default();
     let results = match event_name {
         "on_enter" => {
-            let mut results =
-                run_on_enter_loot_spawners(host_id, actor_id, owner, objects, scheduler_tick);
-            results.extend(run_timer_loot_spawners(
+            let mut results = run_on_enter_resource_spawners(
+                host_id,
+                actor_id,
+                owner,
+                objects,
+                scheduler_tick,
+            );
+            results.extend(run_timer_resource_spawners(
                 host_id,
                 actor_id,
                 owner,
@@ -595,20 +557,20 @@ pub fn dispatch_loot_spawners_for_event(
             ));
             results
         }
-        "on_open" => run_on_open_loot_spawners(host_id, actor_id, owner, objects, scheduler_tick),
-        "on_break" => run_on_break_loot_spawners(host_id, actor_id, owner, objects, scheduler_tick),
-        "on_kill" => run_on_kill_loot_spawners(host_id, actor_id, owner, objects, scheduler_tick),
+        crate::mudl::trigger_def::events::ON_HARVEST => {
+            run_on_harvest_resource_spawners(host_id, actor_id, owner, objects)
+        }
         _ => Vec::new(),
     };
 
-    let spawner_ids: Vec<ObjectId> = loot_spawners_for_target(host_id, objects)
+    let spawner_ids: Vec<ObjectId> = resource_spawners_for_target(host_id, objects)
         .into_iter()
         .map(|spawner| spawner.id.clone())
         .collect();
 
-    for loot in results {
-        outcome.mark_dirty(&loot.item_id);
-        if let Some(message) = loot.message {
+    for resource in results {
+        outcome.mark_dirty(&resource.item_id);
+        if let Some(message) = resource.message {
             outcome.push_line(message);
         }
     }
@@ -618,23 +580,23 @@ pub fn dispatch_loot_spawners_for_event(
     outcome
 }
 
-/// Run `on_enter` loot spawners for a room.
-pub fn run_on_enter_loot_spawners(
+/// Run `on_enter` resource spawners for a room.
+pub fn run_on_enter_resource_spawners(
     room_id: &ObjectId,
     player_id: &ObjectId,
     owner: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
     scheduler_tick: Option<u64>,
-) -> Vec<LootSpawnResult> {
-    let spawner_ids: Vec<ObjectId> = loot_spawners_in_room(room_id, objects)
+) -> Vec<ResourceSpawnResult> {
+    let spawner_ids: Vec<ObjectId> = resource_spawners_in_room(room_id, objects)
         .into_iter()
-        .filter(|s| loot_spawner_trigger(s) == LootSpawnerTrigger::OnEnter)
+        .filter(|s| resource_spawner_trigger(s) == ResourceSpawnerTrigger::OnEnter)
         .map(|s| s.id.clone())
         .collect();
-    run_loot_spawners(
+    run_resource_spawners(
         spawner_ids,
         room_id,
-        LootSpawnerTrigger::OnEnter,
+        ResourceSpawnerTrigger::OnEnter,
         player_id,
         owner,
         objects,
@@ -642,23 +604,23 @@ pub fn run_on_enter_loot_spawners(
     )
 }
 
-/// Run `timer` loot spawners for a room (periodic on each qualifying enter tick).
-pub fn run_timer_loot_spawners(
+/// Run `timer` resource spawners for a room (periodic on scheduler ticks).
+pub fn run_timer_resource_spawners(
     room_id: &ObjectId,
     player_id: &ObjectId,
     owner: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
     scheduler_tick: Option<u64>,
-) -> Vec<LootSpawnResult> {
-    let spawner_ids: Vec<ObjectId> = loot_spawners_in_room(room_id, objects)
+) -> Vec<ResourceSpawnResult> {
+    let spawner_ids: Vec<ObjectId> = resource_spawners_in_room(room_id, objects)
         .into_iter()
-        .filter(|s| loot_spawner_trigger(s) == LootSpawnerTrigger::Timer)
+        .filter(|s| resource_spawner_trigger(s) == ResourceSpawnerTrigger::Timer)
         .map(|s| s.id.clone())
         .collect();
-    run_loot_spawners(
+    run_resource_spawners(
         spawner_ids,
         room_id,
-        LootSpawnerTrigger::Timer,
+        ResourceSpawnerTrigger::Timer,
         player_id,
         owner,
         objects,
@@ -666,86 +628,38 @@ pub fn run_timer_loot_spawners(
     )
 }
 
-/// Run `on_open` loot spawners attached to a container, door, or other gate.
-pub fn run_on_open_loot_spawners(
+/// Run `on_harvest` resource spawners attached to a harvestable object.
+pub fn run_on_harvest_resource_spawners(
     target_id: &ObjectId,
     player_id: &ObjectId,
     owner: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
-    scheduler_tick: Option<u64>,
-) -> Vec<LootSpawnResult> {
-    let spawner_ids: Vec<ObjectId> = loot_spawners_for_target(target_id, objects)
+) -> Vec<ResourceSpawnResult> {
+    let spawner_ids: Vec<ObjectId> = resource_spawners_for_target(target_id, objects)
         .into_iter()
-        .filter(|s| loot_spawner_trigger(s) == LootSpawnerTrigger::OnOpen)
+        .filter(|s| resource_spawner_trigger(s) == ResourceSpawnerTrigger::OnHarvest)
         .map(|s| s.id.clone())
         .collect();
-    run_loot_spawners(
+    run_resource_spawners(
         spawner_ids,
         target_id,
-        LootSpawnerTrigger::OnOpen,
+        ResourceSpawnerTrigger::OnHarvest,
         player_id,
         owner,
         objects,
-        scheduler_tick,
-    )
-}
-
-/// Run `on_break` loot spawners attached to a breakable object.
-pub fn run_on_break_loot_spawners(
-    target_id: &ObjectId,
-    player_id: &ObjectId,
-    owner: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-    scheduler_tick: Option<u64>,
-) -> Vec<LootSpawnResult> {
-    let spawner_ids: Vec<ObjectId> = loot_spawners_for_target(target_id, objects)
-        .into_iter()
-        .filter(|s| loot_spawner_trigger(s) == LootSpawnerTrigger::OnBreak)
-        .map(|s| s.id.clone())
-        .collect();
-    run_loot_spawners(
-        spawner_ids,
-        target_id,
-        LootSpawnerTrigger::OnBreak,
-        player_id,
-        owner,
-        objects,
-        scheduler_tick,
-    )
-}
-
-/// Run `on_kill` loot spawners attached to a creature (dispatched via `execute_event`).
-pub fn run_on_kill_loot_spawners(
-    victim_id: &ObjectId,
-    killer_id: &ObjectId,
-    owner: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-    scheduler_tick: Option<u64>,
-) -> Vec<LootSpawnResult> {
-    let spawner_ids: Vec<ObjectId> = loot_spawners_for_target(victim_id, objects)
-        .into_iter()
-        .filter(|s| loot_spawner_trigger(s) == LootSpawnerTrigger::OnKill)
-        .map(|s| s.id.clone())
-        .collect();
-    run_loot_spawners(
-        spawner_ids,
-        victim_id,
-        LootSpawnerTrigger::OnKill,
-        killer_id,
-        owner,
-        objects,
-        scheduler_tick,
+        None,
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn sample_templates() -> HashMap<String, LootTemplateDef> {
+
+    fn sample_templates() -> HashMap<String, ResourceTemplateDef> {
         HashMap::from([(
-            "bonus-rations".to_string(),
-            LootTemplateDef {
-                base_name: "bonus-rations".to_string(),
+            "moon-moss".to_string(),
+            ResourceTemplateDef {
+                base_name: "moon-moss".to_string(),
                 prototype: "trail-rations".to_string(),
                 count: 2,
             },
@@ -772,13 +686,14 @@ mod tests {
         proto
     }
 
-    fn chest_with_spawner() -> (Object, Object) {
-        let chest_id = ObjectId::new("item:scene-chest-001");
-        let mut chest = Object {
-            id: chest_id.clone(),
-            name: "Travel Chest".to_string(),
+    fn moss_patch_with_spawner() -> (Object, Object) {
+        let patch_id = ObjectId::new("item:moss-patch-001");
+        let room_id = ObjectId::new("area:void-001");
+        let patch = Object {
+            id: patch_id.clone(),
+            name: "Moss Patch".to_string(),
             aliases: Vec::new(),
-            location: Some(ObjectId::new("area:void-001")),
+            location: Some(room_id.clone()),
             prototype: None,
             owner: ObjectId::new("player:admin-001"),
             permissions: PermissionFlags::EVERYONE,
@@ -788,13 +703,12 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         };
-        chest.apply_container_role(&crate::object::ContainerSpec::default());
 
         let mut spawner = Object {
-            id: ObjectId::new("loot-spawner:chest-bonus-001"),
-            name: "chest-bonus loot spawner".to_string(),
+            id: ObjectId::new("resource-spawner:moss-harvest-001"),
+            name: "moss-harvest resource spawner".to_string(),
             aliases: Vec::new(),
-            location: Some(ObjectId::new("area:void-001")),
+            location: Some(room_id),
             prototype: None,
             owner: ObjectId::new("player:admin-001"),
             permissions: PermissionFlags::EVERYONE,
@@ -804,61 +718,158 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         };
-        apply_loot_spawner_def(
+        apply_resource_spawner_def(
             &mut spawner,
-            &LootSpawnerDef {
-                base_name: "chest-bonus".to_string(),
-                target: "scene-chest".to_string(),
-                trigger: LootSpawnerTrigger::OnOpen,
+            &ResourceSpawnerDef {
+                base_name: "moss-harvest".to_string(),
+                target: "moss-patch".to_string(),
+                trigger: ResourceSpawnerTrigger::OnHarvest,
                 periodic_interval: 5,
                 chance: 1.0,
                 max_active: 2,
                 once: true,
                 entries: vec![SpawnerEntryDef {
-                    template: "bonus-rations".to_string(),
+                    template: "moon-moss".to_string(),
                     weight: 1,
                 }],
             },
             &sample_templates(),
         )
         .unwrap();
-        spawner.set_property_object_ref("loot_spawner_target", chest_id.clone());
-        spawner.add_property(loot_templates_to_property(
+        spawner.set_property_object_ref("resource_spawner_target", patch_id.clone());
+        spawner.add_property(resource_templates_to_property(
             &sample_templates().into_values().collect::<Vec<_>>(),
         ));
-        (chest, spawner)
+        (patch, spawner)
     }
 
     #[test]
-    fn on_open_spawner_adds_loot_to_container() {
+    fn on_harvest_spawner_adds_resource_to_room() {
         let player = ObjectId::new("player:hero-001");
         let owner = ObjectId::new("player:admin-001");
-        let (chest, spawner) = chest_with_spawner();
+        let (patch, spawner) = moss_patch_with_spawner();
         let proto = proto_rations();
+        let room_id = ObjectId::new("area:void-001");
         let mut objects = HashMap::from([
-            (chest.id.clone(), chest),
+            (room_id.clone(), Object {
+                id: room_id.clone(),
+                name: "Void".to_string(),
+                aliases: Vec::new(),
+                location: None,
+                prototype: None,
+                owner: owner.clone(),
+                permissions: PermissionFlags::EVERYONE,
+                properties: HashMap::new(),
+                verbs: HashMap::new(),
+                event_handlers: HashMap::new(),
+                is_deleted: false,
+                deleted_at: None,
+            }),
+            (patch.id.clone(), patch),
             (spawner.id.clone(), spawner),
             (proto.id.clone(), proto),
         ]);
 
-        let first = run_on_open_loot_spawners(
-            &ObjectId::new("item:scene-chest-001"),
+        let first = run_on_harvest_resource_spawners(
+            &ObjectId::new("item:moss-patch-001"),
             &player,
             &owner,
             &mut objects,
-            None,
         );
         assert_eq!(first.len(), 1);
-        let chest = objects.get(&ObjectId::new("item:scene-chest-001")).unwrap();
-        assert_eq!(chest.container_contents().len(), 1);
+        let spawned = objects.get(&first[0].item_id).unwrap();
+        assert_eq!(spawned.location.as_ref(), Some(&room_id));
 
-        let second = run_on_open_loot_spawners(
-            &ObjectId::new("item:scene-chest-001"),
+        let second = run_on_harvest_resource_spawners(
+            &ObjectId::new("item:moss-patch-001"),
             &player,
             &owner,
             &mut objects,
-            None,
         );
         assert!(second.is_empty(), "once=true prevents repeat drops");
+    }
+
+    #[test]
+    fn timer_spawner_uses_scheduler_tick() {
+        let player = ObjectId::new("player:hero-001");
+        let owner = ObjectId::new("player:admin-001");
+        let room_id = ObjectId::new("area:grove-001");
+        let proto = proto_rations();
+
+        let mut spawner = Object {
+            id: ObjectId::new("resource-spawner:grove-timer-001"),
+            name: "grove-timer resource spawner".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        apply_resource_spawner_def(
+            &mut spawner,
+            &ResourceSpawnerDef {
+                base_name: "grove-timer".to_string(),
+                target: "grove".to_string(),
+                trigger: ResourceSpawnerTrigger::Timer,
+                periodic_interval: 3,
+                chance: 1.0,
+                max_active: 4,
+                once: false,
+                entries: vec![SpawnerEntryDef {
+                    template: "moon-moss".to_string(),
+                    weight: 1,
+                }],
+            },
+            &sample_templates(),
+        )
+        .unwrap();
+        spawner.set_property_object_ref("resource_spawner_target", room_id.clone());
+        spawner.add_property(resource_templates_to_property(
+            &sample_templates().into_values().collect::<Vec<_>>(),
+        ));
+
+        let room = Object {
+            id: room_id.clone(),
+            name: "Grove".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+
+        let mut objects = HashMap::from([
+            (room_id.clone(), room),
+            (spawner.id.clone(), spawner),
+            (proto.id.clone(), proto),
+        ]);
+
+        let tick2 = run_timer_resource_spawners(
+            &room_id,
+            &player,
+            &owner,
+            &mut objects,
+            Some(2),
+        );
+        assert!(tick2.is_empty(), "interval=3 should not fire on tick 2");
+
+        let tick3 = run_timer_resource_spawners(
+            &room_id,
+            &player,
+            &owner,
+            &mut objects,
+            Some(3),
+        );
+        assert_eq!(tick3.len(), 1);
     }
 }

@@ -9,7 +9,7 @@ use crate::display::{
 };
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{LocationRef, Object, ObjectId};
-use crate::mudl::trigger_def::events::{ON_BREAK, ON_DROP, ON_TAKE};
+use crate::mudl::trigger_def::events::{ON_BREAK, ON_DROP, ON_HARVEST, ON_TAKE};
 use crate::world::events::{execute_event, emit_on_move_event, EventContext};
 use crate::world::move_manager::{
     move_object, move_to_container, move_to_grasp, move_to_room, MoveContext, MoveError, MoveHooks,
@@ -60,6 +60,8 @@ pub enum InventoryError {
     NotBreakable(String),
     /// Breakable object was already destroyed.
     AlreadyBroken(String),
+    /// Object cannot be harvested.
+    NotHarvestable(String),
 }
 
 impl fmt::Display for InventoryError {
@@ -108,6 +110,7 @@ impl fmt::Display for InventoryError {
             }
             Self::NotBreakable(name) => write!(f, "The {name} can't be broken."),
             Self::AlreadyBroken(name) => write!(f, "The {name} is already broken."),
+            Self::NotHarvestable(name) => write!(f, "You can't harvest from the {name}."),
         }
     }
 }
@@ -1428,6 +1431,55 @@ pub fn break_item(
     }
 
     for id in break_outcome.dirty {
+        mark_dirty(ctx, &id);
+    }
+
+    Ok(lines.join("\n"))
+}
+
+/// Harvest renewable resources from a harvestable object in the room.
+pub fn harvest_item(
+    ctx: &mut InventoryContext<'_>,
+    item_name: &str,
+) -> Result<String, InventoryError> {
+    let room_id = ctx.room_id.cloned().ok_or(InventoryError::NoRoom)?;
+    let item_id = resolve_inventory_target(
+        item_name,
+        Some(&room_id),
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Ground,
+    )?;
+
+    let item = ctx
+        .objects
+        .get(&item_id)
+        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?
+        .clone();
+
+    let display = item.name.to_lowercase();
+    if !item.is_active() {
+        return Err(InventoryError::NotFound(item_name.to_string()));
+    }
+    if !item.get_bool_property("harvestable").unwrap_or(false) {
+        return Err(InventoryError::NotHarvestable(display));
+    }
+
+    let mut lines = vec![format!("You harvest from the {display}.")];
+    let harvest_outcome = execute_event(
+        ON_HARVEST,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: item_id.clone(),
+            room_id: Some(room_id),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(harvest_outcome.lines);
+
+    for id in harvest_outcome.dirty {
         mark_dirty(ctx, &id);
     }
 

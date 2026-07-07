@@ -23,9 +23,9 @@ use mudl::display::{
     DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope, TargetResolution,
 };
 use mudl::inventory::{
-    break_item, close_container, describe_inventory, drop_item, lock_container, open_container,
-    parse_put_args, parse_unlock_args, put_item, read_item, remove_item, take_item,
-    unlock_container, wear_item, wield_item,
+    break_item, close_container, describe_inventory, drop_item, harvest_item, lock_container,
+    open_container, parse_put_args, parse_unlock_args, put_item, read_item, remove_item,
+    take_item, unlock_container, wear_item, wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
@@ -103,7 +103,7 @@ async fn run_look_command(
             let is_room_look =
                 !builder && session.objects().get(&id).is_some_and(|obj| obj.is_location());
             if is_room_look {
-                let discovery = session.perceive_hidden_creatures_on_look();
+                let discovery = session.perceive_hidden_on_look();
                 for line in discovery.lines {
                     println!("{line}");
                 }
@@ -928,6 +928,23 @@ async fn main() -> Result<()> {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after break failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "harvest" | "gather" => {
+                        if parts.len() < 2 {
+                            println!("Usage: harvest <object>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match harvest_item(&mut ctx, &item_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
+                                    error!(error = %e, "persist after harvest failed");
                                 }
                             }
                             Err(e) => println!("{e}"),

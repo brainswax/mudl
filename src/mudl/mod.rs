@@ -3,6 +3,7 @@ pub mod behavior_def;
 pub mod item_def;
 pub mod loader;
 pub mod loot_spawner_def;
+pub mod resource_spawner_def;
 pub mod npc_def;
 pub mod roles;
 pub mod spawner_def;
@@ -21,6 +22,9 @@ pub use loader::{
 };
 pub use loot_spawner_def::{
     parse_loot_spawner_file, LootSpawnerDef, LootSpawnerTrigger, LootTemplateDef,
+};
+pub use resource_spawner_def::{
+    parse_resource_spawner_file, ResourceSpawnerDef, ResourceSpawnerTrigger, ResourceTemplateDef,
 };
 pub use npc_def::{behaviors_to_values, parse_npc_file, NpcBehaviorDef, NpcDef};
 pub use roles::MudlRoleProps;

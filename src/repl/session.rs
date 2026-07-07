@@ -217,11 +217,11 @@ impl Session {
     }
 
     /// Perception checks when the player looks around the current room.
-    pub fn perceive_hidden_creatures_on_look(&mut self) -> crate::creature::BehaviorOutcome {
+    pub fn perceive_hidden_on_look(&mut self) -> crate::world::EventOutcome {
         let Some(room_id) = self.current_location.clone() else {
-            return crate::creature::BehaviorOutcome::default();
+            return crate::world::EventOutcome::default();
         };
-        let outcome = crate::creature::run_perception_discovery_on_look(
+        let outcome = crate::world::run_discovery_on_look(
             &room_id,
             &self.player_id,
             &mut self.objects,

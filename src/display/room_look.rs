@@ -119,7 +119,8 @@ fn visible_content_phrases(room: &Object, ctx: &DisplayContext) -> Vec<String> {
             item.id != ctx.observer
                 && !crate::creature::is_spawner_infrastructure(item)
                 && !crate::loot::is_loot_spawner_infrastructure(item)
-                && crate::creature::creature_visible_to_player(item)
+                && !crate::resource::is_resource_spawner_infrastructure(item)
+                && crate::world::entity_visible_to_player(item)
         })
         .collect();
     items.sort_by_key(|a| a.name.to_lowercase());
