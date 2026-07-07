@@ -313,6 +313,38 @@ Supported script actions: `say`, `say_to`, `emote`. `on_enter` runs when a playe
 
 Builders can attach templates at runtime: `@addbehavior <creature> <template>`, `@listbehaviors <creature>`.
 
+**Combat and death** (Milestone 3):
+
+```mudl
+attack path watcher
+```
+
+Player command: `attack <creature>` — turn-based melee in the current room.
+
+- **Damage** — derived from effective `strength` (stats + equipment), mitigated by target `constitution` and `dexterity`. Wielded gear with stat mods is named in the attack line.
+- **Counter-attack** — NPCs with `react=attack` strike back after your blow, using `attack_damage` from their behavior template when set.
+- **NPC death** — creature is removed; a **corpse** container (`is_corpse`) appears in the room holding all worn/wielded gear. `on_kill` loot spawners attached to the NPC fire.
+- **Player death** — your corpse and gear remain where you fell; you respawn **naked** at `home_location` (set from `starting_location` at bootstrap) with full health.
+
+Example kill loot on a fixed NPC:
+
+```mudl
+@loot-template watcher-rations
+  prototype=trail-rations
+  count=1
+@end
+
+@loot-spawner path-watcher-kill
+  target=path-watcher
+  trigger=on_kill
+  chance=1.0
+  max_active=2
+  @entry watcher-rations weight=1
+@end
+```
+
+Wizard vitals (testing): `@damage <creature> [amount]`, `@heal <creature> [amount]`.
+
 **Creature spawners** (locations only spawn randomly when a spawner is attached):
 
 ```mudl

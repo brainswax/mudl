@@ -1,14 +1,20 @@
-//! Simple damage and healing for players and NPCs.
+//! Combat, damage, healing, death, and corpses for players and NPCs.
 
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::creature::behavior::read_creature_behaviors;
+use crate::creature::equipment::{creature_effective_max_health, creature_effective_stat};
 use crate::creature::vitality::{
     apply_damage, creature_health, creature_is_defeated, creature_max_health, heal,
 };
 use crate::display::{resolve_object, ResolveScope, TargetResolution};
-use crate::mudl::AnatomyRegistry;
-use crate::object::{Object, ObjectId};
+use crate::loot::run_on_kill_loot_spawners;
+use crate::mudl::{AnatomyRegistry, CreatureReact};
+use crate::object::{
+    generate_object_id, id_base_from_display_name, ContainerSpec, Object, ObjectId, PermissionFlags,
+    Property, Value,
+};
 
 /// Default damage when a wizard omits the amount.
 pub const DEFAULT_DAMAGE_AMOUNT: i64 = 10;
@@ -23,6 +29,9 @@ pub enum CreatureCombatError {
     NotCreature(String),
     Defeated(String),
     InvalidAmount(String),
+    SelfTarget,
+    ActorDefeated,
+    NoRoom,
 }
 
 impl fmt::Display for CreatureCombatError {
@@ -32,6 +41,32 @@ impl fmt::Display for CreatureCombatError {
             Self::NotCreature(name) => write!(f, "The {name} isn't a living creature."),
             Self::Defeated(name) => write!(f, "The {name} is already down."),
             Self::InvalidAmount(msg) => write!(f, "{msg}"),
+            Self::SelfTarget => write!(f, "You can't attack yourself."),
+            Self::ActorDefeated => write!(f, "You are in no shape to fight."),
+            Self::NoRoom => write!(f, "You are nowhere to fight from."),
+        }
+    }
+}
+
+/// Outcome of an `attack` exchange — narrative lines and persistence hints.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AttackOutcome {
+    pub lines: Vec<String>,
+    pub dirty: Vec<ObjectId>,
+    /// When the player dies and respawns at home, the session should update location.
+    pub respawn_location: Option<ObjectId>,
+}
+
+impl AttackOutcome {
+    fn push_line(&mut self, line: String) {
+        if !line.is_empty() {
+            self.lines.push(line);
+        }
+    }
+
+    fn mark_dirty(&mut self, id: &ObjectId) {
+        if !self.dirty.iter().any(|d| d == id) {
+            self.dirty.push(id.clone());
         }
     }
 }
@@ -98,10 +133,406 @@ fn resolve_creature_target(
     }
 }
 
-fn mark_dirty(dirty: Option<&mut crate::world::DirtyTracker>, id: &ObjectId) {
-    if let Some(dirty) = dirty {
-        dirty.mark(id);
+fn mark_dirty(dirty: &mut Option<&mut crate::world::DirtyTracker>, id: &ObjectId) {
+    if let Some(tracker) = dirty.as_deref_mut() {
+        tracker.mark(id);
     }
+}
+
+fn resolve_room_creature_target(
+    name: &str,
+    actor_id: &ObjectId,
+    room_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> Result<ObjectId, CreatureCombatError> {
+    let resolution = resolve_object(
+        name,
+        actor_id,
+        Some(room_id),
+        objects,
+        ResolveScope::RoomOnly,
+    );
+    match resolution {
+        TargetResolution::Found(id) => Ok(id),
+        TargetResolution::NotFound => Err(CreatureCombatError::NotFound(name.to_string())),
+        TargetResolution::Ambiguous(hint) => Err(CreatureCombatError::NotFound(hint)),
+    }
+}
+
+/// Compute melee damage from attacker stats, equipment, health, and defender mitigation.
+pub fn compute_combat_damage(
+    attacker: &Object,
+    defender: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+) -> i64 {
+    let strength = creature_effective_stat(attacker, "strength", objects, anatomy);
+    let constitution = creature_effective_stat(defender, "constitution", objects, anatomy);
+    let dexterity = creature_effective_stat(defender, "dexterity", objects, anatomy);
+
+    let attack_power = strength.saturating_add(2).max(3);
+    let defense = (constitution / 3) + (dexterity / 4);
+    (attack_power - defense).max(1)
+}
+
+fn wielded_weapon_label(
+    attacker: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<String> {
+    for (slot, item_id) in attacker.body_slots() {
+        if !slot.contains("hand") {
+            continue;
+        }
+        let Some(item) = objects.get(&item_id) else {
+            continue;
+        };
+        if !item.is_active() {
+            continue;
+        }
+        if !item.equipment_stat_mods().is_empty()
+            || !item.equipment_skill_mods().is_empty()
+            || item.equipment_max_health_bonus() != 0
+        {
+            return Some(item.name.to_lowercase());
+        }
+    }
+    None
+}
+
+fn npc_retaliation_damage(
+    attacker: &Object,
+    defender: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+) -> i64 {
+    let behaviors = read_creature_behaviors(attacker);
+    if let Some(damage) = behaviors
+        .iter()
+        .filter(|e| e.react == Some(CreatureReact::Attack))
+        .filter_map(|e| e.attack_damage)
+        .max()
+    {
+        return damage.max(1);
+    }
+    compute_combat_damage(attacker, defender, objects, anatomy)
+}
+
+fn next_corpse_index(objects: &HashMap<ObjectId, Object>) -> u32 {
+    let max = objects
+        .values()
+        .filter(|obj| obj.get_bool_property("is_corpse").unwrap_or(false))
+        .count();
+    (max as u32).saturating_add(1)
+}
+
+fn move_item_into_container(
+    item_id: &ObjectId,
+    container_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) {
+    let Some(mut item) = objects.get(item_id).cloned() else {
+        return;
+    };
+    item.location = Some(container_id.clone());
+    item.set_carried_slot(None);
+    objects.insert(item_id.clone(), item);
+
+    let Some(mut container) = objects.get(container_id).cloned() else {
+        return;
+    };
+    if !container.container_contents().contains(item_id) {
+        container.add_to_list_property("contents", item_id.clone());
+        objects.insert(container_id.clone(), container);
+    }
+}
+
+fn create_creature_corpse(
+    victim: &Object,
+    room_id: &ObjectId,
+    owner: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+    outcome: &mut AttackOutcome,
+) -> ObjectId {
+    let slug = id_base_from_display_name(&victim.name);
+    let index = next_corpse_index(objects);
+    let corpse_id = generate_object_id("item", &format!("{slug}-corpse"), index);
+    let display = victim.name.to_lowercase();
+
+    let mut corpse = Object {
+        id: corpse_id.clone(),
+        name: format!("corpse of {}", victim.name),
+        aliases: vec!["corpse".to_string(), display.clone()],
+        location: Some(room_id.clone()),
+        prototype: None,
+        owner: owner.clone(),
+        permissions: PermissionFlags::EVERYONE,
+        properties: HashMap::new(),
+        verbs: HashMap::new(),
+        event_handlers: HashMap::new(),
+        is_deleted: false,
+        deleted_at: None,
+    };
+    corpse.apply_container_role(&ContainerSpec {
+        capacity: 24,
+        open: true,
+        ..ContainerSpec::default()
+    });
+    corpse.set_property_bool("is_corpse", true);
+    corpse.set_property_object_ref("corpse_of", victim.id.clone());
+    corpse.add_property(Property {
+        name: "description".to_string(),
+        value: Value::String(format!(
+            "The lifeless body of {} lies here, stripped of warmth.",
+            victim.name
+        )),
+        permissions: PermissionFlags::EVERYONE,
+        behavior: None,
+    });
+
+    let gear: Vec<ObjectId> = victim.carried_body_items();
+    objects.insert(corpse_id.clone(), corpse);
+    outcome.mark_dirty(&corpse_id);
+
+    for item_id in gear {
+        move_item_into_container(&item_id, &corpse_id, objects);
+        outcome.mark_dirty(&item_id);
+    }
+
+    corpse_id
+}
+
+fn strip_creature_gear(
+    creature_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+    outcome: &mut AttackOutcome,
+) {
+    let Some(mut creature) = objects.get(creature_id).cloned() else {
+        return;
+    };
+    creature.set_property_map("body_slots", HashMap::new());
+    objects.insert(creature_id.clone(), creature);
+    outcome.mark_dirty(creature_id);
+}
+
+fn handle_npc_death(
+    victim_id: &ObjectId,
+    killer_id: &ObjectId,
+    room_id: &ObjectId,
+    owner: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+    outcome: &mut AttackOutcome,
+) {
+    let victim = objects.get(victim_id).cloned().unwrap();
+    let display = victim.name.to_lowercase();
+
+    create_creature_corpse(&victim, room_id, owner, objects, outcome);
+    strip_creature_gear(victim_id, objects, outcome);
+
+    for loot in run_on_kill_loot_spawners(victim_id, killer_id, owner, objects) {
+        outcome.mark_dirty(&loot.item_id);
+        if let Some(message) = loot.message {
+            outcome.push_line(message);
+        }
+    }
+
+    if let Some(npc) = objects.get_mut(victim_id) {
+        npc.soft_delete();
+        outcome.mark_dirty(victim_id);
+    }
+
+    outcome.push_line(format!("The {display} crumples, leaving a corpse."));
+}
+
+fn handle_player_death(
+    player_id: &ObjectId,
+    killer_name: Option<&str>,
+    room_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+    outcome: &mut AttackOutcome,
+) {
+    let player = objects.get(player_id).cloned().unwrap();
+    let owner = player.owner.clone();
+    let home_id = player
+        .get_object_ref_property("home_location")
+        .or_else(|| player.location.clone());
+
+    create_creature_corpse(&player, room_id, &owner, objects, outcome);
+    strip_creature_gear(player_id, objects, outcome);
+
+    if let Some(home_id) = home_id.clone() {
+        let max = objects
+            .get(player_id)
+            .map(|player| creature_effective_max_health(player, objects, anatomy))
+            .unwrap_or(1);
+        if let Some(player) = objects.get_mut(player_id) {
+            player.location = Some(home_id.clone());
+            player.set_property_int("health", max);
+            outcome.mark_dirty(player_id);
+        }
+        outcome.respawn_location = Some(home_id);
+    }
+
+    if let Some(killer) = killer_name {
+        outcome.push_line(format!("You collapse as {killer}'s blow lands."));
+    } else {
+        outcome.push_line("You take the hit and collapse.".to_string());
+    }
+    outcome.push_line(
+        "You wake somewhere familiar — naked, alive, and lighter by everything you were carrying."
+            .to_string(),
+    );
+    if let Some(ref home_id) = home_id {
+        if let Some(home) = objects.get(home_id) {
+            outcome.push_line(format!("You are in {}.", home.name));
+        }
+    }
+}
+
+fn format_attack_line(
+    attacker_name: &str,
+    target_name: &str,
+    weapon: Option<&str>,
+    damage: i64,
+    after: i64,
+    max: i64,
+    addressing_self_as_attacker: bool,
+) -> String {
+    let target = target_name.to_lowercase();
+    if addressing_self_as_attacker {
+        if let Some(weapon) = weapon {
+            return format!(
+                "You strike {target} with your {weapon} for {damage} damage ({after}/{max} health)."
+            );
+        }
+        return format!(
+            "You strike {target} for {damage} damage ({after}/{max} health)."
+        );
+    }
+    let attacker = attacker_name.to_lowercase();
+    format!(
+        "{attacker} strikes you for {damage} damage ({after}/{max} health remaining)."
+    )
+}
+
+fn format_retaliation_line(attacker_name: &str, damage: i64, after: i64, max: i64) -> String {
+    format!(
+        "{} lashes out for {damage} damage ({after}/{max} health remaining).",
+        attacker_name
+    )
+}
+
+/// Player `attack <creature>` — turn-based exchange with NPC counter-attacks.
+pub fn attack_creature(
+    actor_id: &ObjectId,
+    room_id: Option<&ObjectId>,
+    objects: &mut HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+    mut dirty: Option<&mut crate::world::DirtyTracker>,
+    target_name: &str,
+) -> Result<AttackOutcome, CreatureCombatError> {
+    let room_id = room_id.ok_or(CreatureCombatError::NoRoom)?;
+
+    let actor = objects
+        .get(actor_id)
+        .ok_or(CreatureCombatError::ActorDefeated)?
+        .clone();
+    if !actor.has_creature_role() {
+        return Err(CreatureCombatError::NotCreature("you".to_string()));
+    }
+    if creature_is_defeated(&actor) {
+        return Err(CreatureCombatError::ActorDefeated);
+    }
+
+    let target_id = resolve_room_creature_target(target_name, actor_id, room_id, objects)?;
+    if target_id == *actor_id {
+        return Err(CreatureCombatError::SelfTarget);
+    }
+
+    let target = objects
+        .get(&target_id)
+        .ok_or_else(|| CreatureCombatError::NotFound(target_name.to_string()))?
+        .clone();
+    let target_display = target.name.to_lowercase();
+    if !target.has_creature_role() {
+        return Err(CreatureCombatError::NotCreature(target_display));
+    }
+    if creature_is_defeated(&target) {
+        return Err(CreatureCombatError::Defeated(target_display));
+    }
+    if target.location.as_ref() != Some(room_id) {
+        return Err(CreatureCombatError::NotFound(target_name.to_string()));
+    }
+
+    let mut outcome = AttackOutcome::default();
+    let owner = actor.owner.clone();
+
+    let weapon = wielded_weapon_label(&actor, objects);
+    let player_damage = compute_combat_damage(&actor, &target, objects, anatomy);
+    let target_max = creature_effective_max_health(&target, objects, anatomy);
+    {
+        let target_mut = objects.get_mut(&target_id).unwrap();
+        let after = apply_damage(target_mut, player_damage);
+        outcome.mark_dirty(&target_id);
+        mark_dirty(&mut dirty, &target_id);
+        outcome.push_line(format_attack_line(
+            &actor.name,
+            &target.name,
+            weapon.as_deref(),
+            player_damage,
+            after,
+            target_max,
+            true,
+        ));
+        if after == 0 {
+            if target.object_type() == "npc" {
+                handle_npc_death(&target_id, actor_id, room_id, &owner, objects, &mut outcome);
+            } else {
+                handle_player_death(
+                    &target_id,
+                    Some(&actor.name),
+                    room_id,
+                    objects,
+                    anatomy,
+                    &mut outcome,
+                );
+            }
+            for id in &outcome.dirty {
+                mark_dirty(&mut dirty, id);
+            }
+            return Ok(outcome);
+        }
+    }
+
+    if target.object_type() == "npc" {
+        let npc = objects.get(&target_id).cloned().unwrap();
+        if !creature_is_defeated(&npc) {
+            let retaliate = npc_retaliation_damage(&npc, &actor, objects, anatomy);
+            let player_max = creature_effective_max_health(&actor, objects, anatomy);
+            let player = objects.get_mut(actor_id).unwrap();
+            let after = apply_damage(player, retaliate);
+            outcome.mark_dirty(actor_id);
+            mark_dirty(&mut dirty, actor_id);
+            outcome.push_line(format_retaliation_line(&npc.name, retaliate, after, player_max));
+            if after == 0 {
+                handle_player_death(
+                    actor_id,
+                    Some(&npc.name),
+                    room_id,
+                    objects,
+                    anatomy,
+                    &mut outcome,
+                );
+            } else if after * 100 / player_max.max(1) < 25 {
+                outcome.push_line("You stagger from the blow.".to_string());
+            }
+        }
+    }
+
+    for id in &outcome.dirty {
+        mark_dirty(&mut dirty, id);
+    }
+    Ok(outcome)
 }
 
 /// Apply damage to a creature in the room or in possession.
@@ -110,7 +541,7 @@ pub fn damage_creature(
     room_id: Option<&ObjectId>,
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
-    dirty: Option<&mut crate::world::DirtyTracker>,
+    mut dirty: Option<&mut crate::world::DirtyTracker>,
     target_name: &str,
     amount: i64,
 ) -> Result<String, CreatureCombatError> {
@@ -131,7 +562,7 @@ pub fn damage_creature(
     let before = creature_health(&target);
     let target = objects.get_mut(&target_id).unwrap();
     let after = apply_damage(target, amount);
-    mark_dirty(dirty, &target_id);
+    mark_dirty(&mut dirty, &target_id);
 
     Ok(format_damage_message(
         &target.name,
@@ -148,7 +579,7 @@ pub fn heal_creature(
     room_id: Option<&ObjectId>,
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
-    dirty: Option<&mut crate::world::DirtyTracker>,
+    mut dirty: Option<&mut crate::world::DirtyTracker>,
     target_name: &str,
     amount: i64,
 ) -> Result<String, CreatureCombatError> {
@@ -175,7 +606,7 @@ pub fn heal_creature(
 
     let target = objects.get_mut(&target_id).unwrap();
     let after = heal(target, amount, Some(anatomy));
-    mark_dirty(dirty, &target_id);
+    mark_dirty(&mut dirty, &target_id);
 
     Ok(format_heal_message(
         &target.name,
@@ -237,8 +668,9 @@ pub fn format_heal_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::creature::behavior::{creature_behaviors_to_property, CreatureBehaviorEntry};
     use crate::creature::vitality::init_creature_vitality;
-    use crate::mudl::{BodySlotDef, CreatureDef, PlayerTemplate, SlotType};
+    use crate::mudl::{BodySlotDef, CreatureDef, CreatureReact, PlayerTemplate, SlotType};
     use crate::object::PermissionFlags;
 
     fn human_def() -> CreatureDef {
@@ -289,6 +721,202 @@ mod tests {
         assert_eq!(req.amount, 25);
         let default_req = parse_vital_amount_args("self", DEFAULT_HEAL_AMOUNT).unwrap();
         assert_eq!(default_req.amount, DEFAULT_HEAL_AMOUNT);
+    }
+
+    #[test]
+    fn compute_combat_damage_uses_stats_and_equipment() {
+        let anatomy = AnatomyRegistry::default();
+        let room = ObjectId::new("area:room-001");
+        let mut attacker = creature("player:hero-001", "Hero");
+        let defender = creature("npc:watcher-001", "Path Watcher");
+        let mut blade = Object {
+            id: ObjectId::new("item:blade-001"),
+            name: "Chipped Blade".to_string(),
+            aliases: Vec::new(),
+            location: Some(attacker.id.clone()),
+            prototype: None,
+            owner: ObjectId::new("player:hero-001"),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        blade.set_int_map("mod_stats", HashMap::from([("strength".to_string(), 2)]));
+        attacker.set_body_slot("right_hand", Some(blade.id.clone()));
+        let objects = HashMap::from([
+            (attacker.id.clone(), attacker.clone()),
+            (defender.id.clone(), defender.clone()),
+            (blade.id.clone(), blade),
+        ]);
+
+        let base = compute_combat_damage(&attacker, &defender, &objects, &anatomy);
+        let mut bare = attacker.clone();
+        bare.set_property_map("body_slots", HashMap::new());
+        let objects_bare = HashMap::from([
+            (bare.id.clone(), bare.clone()),
+            (defender.id.clone(), defender.clone()),
+        ]);
+        let unarmed = compute_combat_damage(&bare, &defender, &objects_bare, &anatomy);
+        assert!(base > unarmed);
+        assert!(base >= 6);
+    }
+
+    #[test]
+    fn attack_creature_damages_npc_and_triggers_counterattack() {
+        let actor = ObjectId::new("player:admin-001");
+        let room = ObjectId::new("area:room-001");
+        let mut player = creature("player:admin-001", "Admin");
+        player.location = Some(room.clone());
+        let mut watcher = creature("npc:watcher-001", "Path Watcher");
+        watcher.add_property(creature_behaviors_to_property(&[CreatureBehaviorEntry {
+            entry_type: "template".to_string(),
+            template_name: Some("aggressive".to_string()),
+            react: Some(CreatureReact::Attack),
+            event: Some("on_enter".to_string()),
+            action: None,
+            text: None,
+            wander_interval: None,
+            attack_damage: Some(12),
+        }]));
+        let mut objects = HashMap::from([
+            (player.id.clone(), player),
+            (watcher.id.clone(), watcher.clone()),
+        ]);
+        let anatomy = AnatomyRegistry::default();
+
+        let outcome = attack_creature(
+            &actor,
+            Some(&room),
+            &mut objects,
+            &anatomy,
+            None,
+            "path watcher",
+        )
+        .unwrap();
+        assert!(outcome.lines.iter().any(|l| l.contains("You strike")));
+        assert!(outcome.lines.iter().any(|l| l.contains("lashes out")));
+        assert!(creature_health(objects.get(&watcher.id).unwrap()) < 100);
+        assert!(creature_health(objects.get(&actor).unwrap()) < 100);
+    }
+
+    #[test]
+    fn killing_npc_leaves_corpse_with_gear() {
+        let actor = ObjectId::new("player:admin-001");
+        let room = ObjectId::new("area:room-001");
+        let mut player = creature("player:admin-001", "Admin");
+        player.location = Some(room.clone());
+        let mut watcher = creature("npc:watcher-001", "Path Watcher");
+        watcher.set_property_int("health", 5);
+        let mut blade = Object {
+            id: ObjectId::new("item:blade-001"),
+            name: "Rusty Knife".to_string(),
+            aliases: Vec::new(),
+            location: Some(watcher.id.clone()),
+            prototype: None,
+            owner: ObjectId::new("player:admin-001"),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        watcher.set_body_slot("right_hand", Some(blade.id.clone()));
+        let mut objects = HashMap::from([
+            (player.id.clone(), player),
+            (watcher.id.clone(), watcher.clone()),
+            (blade.id.clone(), blade.clone()),
+        ]);
+        let anatomy = AnatomyRegistry::default();
+        let blade_id = blade.id.clone();
+
+        let outcome = attack_creature(
+            &actor,
+            Some(&room),
+            &mut objects,
+            &anatomy,
+            None,
+            "path watcher",
+        )
+        .unwrap();
+        assert!(outcome.lines.iter().any(|l| l.contains("corpse")));
+        assert!(objects.get(&watcher.id).unwrap().is_deleted);
+
+        let corpse = objects
+            .values()
+            .find(|o| o.get_bool_property("is_corpse").unwrap_or(false))
+            .expect("corpse");
+        assert_eq!(corpse.location.as_ref(), Some(&room));
+        assert_eq!(objects.get(&blade_id).unwrap().location.as_ref(), Some(&corpse.id));
+        assert!(objects.get(&watcher.id).unwrap().carried_body_items().is_empty());
+    }
+
+    #[test]
+    fn player_death_respawns_naked_at_home() {
+        let actor = ObjectId::new("player:admin-001");
+        let room = ObjectId::new("area:forest-path-001");
+        let home = ObjectId::new("area:the-void-001");
+        let mut player = creature("player:admin-001", "Admin");
+        player.location = Some(room.clone());
+        player.set_property_object_ref("home_location", home.clone());
+        player.set_property_int("health", 8);
+        let mut vest = Object {
+            id: ObjectId::new("item:vest-001"),
+            name: "Leather Vest".to_string(),
+            aliases: Vec::new(),
+            location: Some(player.id.clone()),
+            prototype: None,
+            owner: ObjectId::new("player:admin-001"),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        player.set_body_slot("torso", Some(vest.id.clone()));
+        let mut watcher = creature("npc:watcher-001", "Path Watcher");
+        watcher.location = Some(room.clone());
+        watcher.add_property(creature_behaviors_to_property(&[CreatureBehaviorEntry {
+            entry_type: "template".to_string(),
+            template_name: Some("aggressive".to_string()),
+            react: Some(CreatureReact::Attack),
+            event: Some("on_enter".to_string()),
+            action: None,
+            text: None,
+            wander_interval: None,
+            attack_damage: Some(20),
+        }]));
+        let mut objects = HashMap::from([
+            (player.id.clone(), player),
+            (watcher.id.clone(), watcher),
+            (vest.id.clone(), vest.clone()),
+        ]);
+        let anatomy = AnatomyRegistry::default();
+        let vest_id = vest.id.clone();
+
+        let outcome = attack_creature(
+            &actor,
+            Some(&room),
+            &mut objects,
+            &anatomy,
+            None,
+            "path watcher",
+        )
+        .unwrap();
+        assert_eq!(outcome.respawn_location, Some(home.clone()));
+        assert!(outcome.lines.iter().any(|l| l.contains("wake")));
+        let player = objects.get(&actor).unwrap();
+        assert_eq!(player.location.as_ref(), Some(&home));
+        assert!(player.carried_body_items().is_empty());
+        assert!(creature_health(player) > 0);
+        let corpse = objects
+            .values()
+            .find(|o| o.get_bool_property("is_corpse").unwrap_or(false))
+            .expect("player corpse");
+        assert_eq!(objects.get(&vest_id).unwrap().location.as_ref(), Some(&corpse.id));
     }
 
     #[test]

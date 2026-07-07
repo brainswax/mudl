@@ -31,8 +31,9 @@ pub use spawner::{
     spawners_in_room, spawn_templates_to_property, SpawnResult,
 };
 pub use combat::{
-    damage_creature, heal_creature, parse_vital_amount_args, CreatureCombatError,
-    DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT, VitalAmountRequest,
+    attack_creature, compute_combat_damage, damage_creature, heal_creature, parse_vital_amount_args,
+    AttackOutcome, CreatureCombatError, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
+    VitalAmountRequest,
 };
 pub use vitality::{
     apply_damage, creature_base_max_health, creature_def_for, creature_health,

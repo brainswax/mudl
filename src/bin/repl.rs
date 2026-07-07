@@ -21,8 +21,8 @@ use mudl::display::{
     TargetResolution,
 };
 use mudl::creature::{
-    add_behavior_template, damage_creature, format_creature_behavior_list, heal_creature,
-    parse_vital_amount_args, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
+    add_behavior_template, attack_creature, damage_creature, format_creature_behavior_list,
+    heal_creature, parse_vital_amount_args, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
 };
 use mudl::inventory::{
     break_item, close_container, describe_inventory, drop_item, lock_container, open_container,
@@ -379,6 +379,9 @@ async fn main() -> Result<()> {
                             "  lock/unlock <container|door|window> [with <key>] - lock or unlock (auto-finds key)"
                         );
                         println!("  wear <item>                 - wear a container or garment");
+                        println!(
+                            "  attack <creature>           - strike a creature (turn-based combat)"
+                        );
                         println!("  go <dir>  (or n/s/e/w/…)    - move; shows room description and exits");
                         println!(
                             "  @set <target> <key> <value>  - wizard: set property/state/verb"
@@ -566,6 +569,37 @@ async fn main() -> Result<()> {
                                 error!(error = %e, "@dump failed");
                                 println!("The underlying structure remains hidden.");
                             }
+                        }
+                    }
+                    "attack" => {
+                        if parts.len() < 2 {
+                            println!("Usage: attack <creature>");
+                            continue;
+                        }
+                        let target = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match attack_creature(
+                            ctx.player_id,
+                            ctx.room_id,
+                            ctx.objects,
+                            ctx.anatomy,
+                            ctx.dirty,
+                            &target,
+                        ) {
+                            Ok(outcome) => {
+                                for line in outcome.lines {
+                                    println!("{line}");
+                                }
+                                if let Some(loc) = outcome.respawn_location {
+                                    session.set_current_location(loc);
+                                }
+                                if let Err(e) =
+                                    persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after attack failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
                         }
                     }
                     "@damage" => {

@@ -491,9 +491,17 @@ pub async fn bootstrap_world<P: Persistence>(
     })?;
 
     let placements = bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
-    bootstrap_world_spawners(factory, &owner, world, &placements).await?;
-    bootstrap_world_loot_spawners(factory, &owner, world, &placements).await?;
     bootstrap_world_npcs(factory, &owner, world, &name_to_id).await?;
+    bootstrap_world_spawners(factory, &owner, world, &placements).await?;
+
+    let mut loot_targets = placements.clone();
+    for def in &world.npc_defs {
+        loot_targets.insert(
+            def.base_name.clone(),
+            ObjectId::new(format!("npc:{}-001", def.base_name)),
+        );
+    }
+    bootstrap_world_loot_spawners(factory, &owner, world, &loot_targets).await?;
 
     if factory.load_object(&owner).await?.is_none() {
         let mut player = factory
@@ -503,6 +511,7 @@ pub async fn bootstrap_world<P: Persistence>(
         if let Some(start_base) = &world.starting_location {
             if let Some(start_id) = name_to_id.get(start_base) {
                 player.location = Some(start_id.clone());
+                player.set_property_object_ref("home_location", start_id.clone());
             }
         }
         factory.persistence().save_object(&player).await?;
@@ -1742,5 +1751,69 @@ mod tests {
                 .iter()
                 .any(|o| o.name == "Mist Wisp" || o.name == "Pale Lurker")
         );
+    }
+
+    #[tokio::test]
+    async fn path_watcher_kill_loot_spawner_bootstraps() {
+        use crate::creature::attack_creature;
+        use crate::loot::loot_spawners_for_target;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let npc_id = ObjectId::new("npc:path-watcher-001");
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        assert_eq!(
+            loot_spawners_for_target(&npc_id, &objects).len(),
+            1,
+            "path watcher should have on_kill loot spawner"
+        );
+
+        let forest_path = ObjectId::new("area:forest-path-001");
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(forest_path.clone()),
+        );
+        session.objects_mut().get_mut(&player_id).unwrap().location =
+            Some(forest_path.clone());
+        session
+            .objects_mut()
+            .get_mut(&npc_id)
+            .unwrap()
+            .set_property_int("health", 1);
+
+        let mut ctx = session.inventory_context();
+        let outcome = attack_creature(
+            ctx.player_id,
+            ctx.room_id,
+            ctx.objects,
+            ctx.anatomy,
+            ctx.dirty,
+            "path watcher",
+        )
+        .unwrap();
+        assert!(outcome.lines.iter().any(|l| l.contains("corpse")));
+        assert!(
+            outcome.lines.iter().any(|l| l.contains("rations")),
+            "on_kill loot should drop trail rations: {:?}",
+            outcome.lines
+        );
+        assert!(session.object(&npc_id).unwrap().is_deleted);
+        let _ = start;
     }
 }

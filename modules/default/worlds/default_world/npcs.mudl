@@ -7,3 +7,18 @@
   @use-behavior guard
   @behavior on_enter say The trees seem to lean closer when you pass.
 @end
+
+# Loot dropped when the Path Watcher is defeated in combat.
+
+@loot-template watcher-rations
+  prototype=trail-rations
+  count=1
+@end
+
+@loot-spawner path-watcher-kill
+  target=path-watcher
+  trigger=on_kill
+  chance=1.0
+  max_active=2
+  @entry watcher-rations weight=1
+@end
