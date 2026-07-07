@@ -2,7 +2,7 @@
 
 This document defines the core data structures and rules that power the MUDL world.
 
-**Status**: Draft (MVP)
+**Status**: As-built reference (M1–M4). Verb *execution* in sandboxed DSL is planned; `@trigger` scripts use the `event_script` interpreter today.
 
 ## Philosophy
 - **Everything is an Object** — rooms, items, players, NPCs, exits, abstract systems, even the world itself.
@@ -234,7 +234,7 @@ pub enum LocationRef {
 }
 ```
 
-**MoveManager** (`src/world/move_manager.rs`) implements `move_object(src, dst, obj)` with capacity, weight, and volume checks. **ContainerFit** (`src/world/container_fit.rs`) computes how many stackable units fit (by slot count, `max_weight`, and `max_volume` using `unit_weight * count`). Partial puts split stacks; compatible stacks merge by prototype or name. Inventory verbs delegate here. An `on_move` hook stub exists for future event triggers.
+**MoveManager** (`src/world/move_manager.rs`) implements `move_object(src, dst, obj)` with capacity, weight, and volume checks. **ContainerFit** (`src/world/container_fit.rs`) computes how many stackable units fit. Partial puts split stacks; compatible stacks merge by prototype or name. Inventory verbs delegate here. Successful moves fire `on_move` via `execute_event`.
 
 **Dirty tracking**: `DirtyTracker` records mutated object IDs; `persist_dirty()` saves only those rows.
 
@@ -269,8 +269,12 @@ Body plans are defined in MUDL (`creatures.mudl`) and loaded into an `AnatomyReg
 | `wear_slot` | item | String | Target slot (e.g. `torso`, `head`) |
 | `is_container` | item | Bool | Holds other items |
 | `hand_slot` | item | String | `left`, `right`, or `both` (grasp slots) |
+| `active_effects` | creature | List\<String\> | Names of active `@effect` conditions |
+| `condition_ticks` | creature | Map\<String, Int\> | Remaining ticks per timed effect |
+| `event_handlers` | any | Map\<event, Vec\<Behavior\>\> | MUDL `@trigger` scripts |
+| `home_location` | player | ObjectRef | Respawn place after death |
 
-Default naked humans have **no pockets** — only biological `grasp`, `wear`, and `limb` slots from the human body plan. Pockets will come from clothing in a follow-up.
+Default naked humans have **no pockets** — only biological `grasp`, `wear`, and `limb` slots from the human body plan. Pockets will come from clothing items later.
 
 Factory helpers: `create_player`, `create_item`, `create_container`, `create_wearable`, `create_stackable_item`, `create_item_instances`. MUDL integration: `MudlRoleProps` in `src/mudl/roles.rs`. Move operations: `src/world/move_manager.rs`. Inventory commands: `src/inventory/mod.rs`.
 
@@ -296,15 +300,6 @@ When an object is created, the engine automatically generates its ID using the `
 
 This design balances readability with the requirement that every object must have a stable, unique identity — especially important for a self-modifying world with possible duplicate names.
 
-#### Creation
-When an object is created, the engine automatically generates its ID using the `generate_id(type, base_name)` helper. The player only sees and uses the friendly name/aliases; the ID is used internally for references, persistence, and lookups.
-
-#### Usage in Code / DSL
-- Internal references always use the full ID.
-- Players usually interact via name (the engine resolves contextually).
-- Wizards/builders can use full IDs when needed for precision (`@examine room:cozy-kitchen-001`).
-
-This design balances readability with the requirement that every object must have a stable, unique identity — especially important for a self-modifying world with possible duplicate names.
 ## Implementation Notes
 * Objects are stored in a central WorldState (HashMap<ObjectId, Object> + spatial index for locations).
 * Inheritance resolution is recursive with caching.

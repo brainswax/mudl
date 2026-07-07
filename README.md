@@ -17,11 +17,11 @@ MUDL is a Rust-powered text world engine for builders who want MOO-style live mo
 
 If you have ever wanted a MUD where the **world is data you can edit live**, where **everything is an object** with prototype inheritance, and where **content lives in Git-friendly files** instead of opaque server state — this project is for you. MUDL targets three audiences:
 
-- **MUD veterans** who miss programmable worlds but want modern persistence and tooling.
-- **Rust developers** interested in async engines, DSL design, and object graphs backed by SQLite.
-- **World builders** who want a readable language for rooms, creatures, anatomy, and verbs — without recompiling the server for every change.
+- **Players** who want immersive IRC-friendly prose, turn-based combat, and discoverable secrets in optional adventure packs.
+- **Builders** who want a readable language for rooms, creatures, `@trigger` scripts, and expansion packs — without recompiling the server for every change.
+- **Engine contributors** interested in async Rust, DSL design, object graphs, and SQLite-backed persistence.
 
-The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitHub), and safe runtime self-modification. The REPL and MUDL loader are working now; IRC and the gateway layer are next.
+The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitHub), and safe runtime self-modification. The REPL, MUDL loader, combat, events, and five official expansion packs are working now; IRC and the gateway layer are next.
 
 ---
 
@@ -29,15 +29,17 @@ The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitH
 
 | Area | What you get |
 |------|----------------|
-| **MUDL DSL** | Declarative `.mudl` files for universes, worlds, maps, creatures, and player templates |
-| **Object model** | Prototype-based inheritance — rooms, items, players, NPCs, and abstract systems are all `Object`s |
-| **Anatomy & inventory** | Creature `@slot` definitions (grasp, wear, limb); take, drop, wield, wear, and container commands |
-| **Live extension** | Add properties and verbs at runtime via the REPL (`add_prop`, `add_verb`) |
-| **Persistence** | SQLite with stable `type:base-name-###` IDs and full object serialization |
-| **Flat modules** | Git-friendly layout under `modules/default/` — no deep nesting required |
-| **Naked human baseline** | Default player uses the `human` creature template with empty anatomy slots |
-| **Clean architecture** | Pure core engine; gateway RBAC (Player / Builder / Wizard) planned as a thin enforcement layer |
-| **Multi-modal input** | REPL today; IRC bot, file hot-reload, and GitHub integration on the roadmap |
+| **MUDL DSL** | Declarative `.mudl` files for universes, worlds, maps, creatures, behaviors, and expansion packs |
+| **Object model** | Prototype-based inheritance — rooms, items, players, NPCs are all `Object`s with composable roles |
+| **Anatomy & inventory** | Creature `@slot` definitions; take, drop, wield, wear, containers, stackables |
+| **Combat & creatures** | Turn-based `attack`, awareness/ambush, corpses, respawn, `@behavior-template` AI |
+| **Events & triggers** | `@trigger` scripts on places, items, and creatures; spawners, loot, harvest, schedules |
+| **Conditions** | `@effect` buffs/debuffs with DoT/HoT, duration ticks, `grant-effect` / `cure-tag` in scripts |
+| **Expansion packs** | Five drop-in adventures (haunted forest, swamp, spider den, beach resort, fey glade) |
+| **Persistence** | SQLite with stable `type:base-name-###` IDs and full object JSON roundtrip |
+| **Builder tools** | `@set` / `@unset`, `@dig` / `@link`, `@trigger`, `@examine`, place building |
+| **Clean architecture** | Pure core engine; gateway RBAC (Player / Builder / Wizard) planned as a thin layer |
+| **Tests** | 437 unit/integration tests across loader, inventory, combat, events, and persistence |
 
 ---
 
@@ -51,25 +53,20 @@ The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitH
 ### Build & Run
 
 ```bash
-# Clone and enter the repo
 git clone git@github.com:brainswax/mudl.git
 cd mudl
 
-# Optional: copy environment defaults
-cp .env.example .env
+cp .env.example .env   # optional
 
-# Build and start the REPL
 cargo build --bin repl
 cargo run --bin repl
 
-# Or use the Makefile
+# Or:
 make run-repl
-
-# Run unit tests (inline #[test] modules across src/)
-cargo test
+make dev               # fmt + check + clippy + test
 ```
 
-On startup you should see something like:
+On startup you should see:
 
 ```text
 Welcome to MUDL.
@@ -77,9 +74,9 @@ Type 'help' for commands.
 >
 ```
 
-Bootstrap, database paths, and module loading log to stderr when `RUST_LOG=info` — they stay off the prompt so play stays immersive.
+Bootstrap logs go to stderr when `RUST_LOG=info` — they stay off the prompt so play stays immersive.
 
-The REPL loads `modules/default/universe.mudl`, bootstraps `default_world` if the database is empty, and places you in **The Void** as a naked human with no starting gear.
+The REPL loads `modules/default/universe.mudl`, bootstraps `default_world` if the database is empty, and places you in **The Void** as a naked human with no starting gear. The stock world already imports all five expansion packs; install any pack live with its Quick Install block (see [expansions/README.md](modules/default/worlds/default_world/expansions/README.md)).
 
 ### Environment Variables
 
@@ -94,8 +91,6 @@ The REPL loads `modules/default/universe.mudl`, bootstraps `default_world` if th
 See [`.env.example`](.env.example) for a ready-to-copy template.
 
 ### Try It Out
-
-Player-facing commands work out of the box:
 
 ```text
 > look
@@ -125,19 +120,25 @@ A narrow passage leading north from the void.
 Exits: south, north
 ```
 
-**Common commands:** `look` / `l`, `examine` / `x`, `take` / `get`, `drop`, `inventory` / `i`, `go <dir>`, `wield`, `wear`, `create <type> <name...>`.
+**Player commands:** `look` / `l`, `examine` / `x`, `take` / `get`, `drop`, `inventory` / `i`, `go`, `attack`, `harvest`, `read`, `open` / `close`, `wield`, `wear`, `create`.
 
-**Builder commands:** `add_prop`, `add_verb`, `load`, `save`, `@dump`, `module reload`, `module bundle`.
+**Builder commands:** `@set`, `@unset`, `@examine`, `@trigger`, `@dig`, `@link`, `module reload`. Type `help` in the REPL for the full list.
 
-Full command reference: [docs/REPL.md](docs/REPL.md).
+---
 
-### Development
+## Documentation map
 
-```bash
-make help      # list Makefile targets
-make dev       # fmt + check + clippy + test
-cargo test     # 38 unit tests covering loader, inventory, persistence
-```
+| Doc | Audience | Contents |
+|-----|----------|----------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Contributors | Milestones M1–M4, module layout, event dispatch, roadmap |
+| [LANGUAGE.md](LANGUAGE.md) | Builders | MUDL syntax: creatures, `@trigger`, combat, spawners, expansions |
+| [COMMANDS.md](COMMANDS.md) | Players & builders | Command reference and output style |
+| [BUILDER.md](BUILDER.md) | Builders | `@set` / `@unset`, properties vs state vs status |
+| [OBJECT_MODEL.md](OBJECT_MODEL.md) | Contributors | `Object`, roles, IDs, display modes |
+| [MODULES.md](MODULES.md) | Expansion authors | Pack README template and authoring rules |
+| [docs/REPL.md](docs/REPL.md) | Developers | REPL setup, examples, persistence behavior |
+| [modules/default/README.md](modules/default/README.md) | Builders | Default universe layout |
+| [expansions/README.md](modules/default/worlds/default_world/expansions/README.md) | Players & builders | Official adventure packs |
 
 ---
 
@@ -156,155 +157,93 @@ cargo test     # 38 unit tests covering loader, inventory, persistence
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                     Core Engine (Rust + Tokio)               │
-│  Object Model • MUDL Loader • Commands • Inventory           │
-│  Display Layer • Events (planned) • SQLite Persistence       │
+│                     Core Engine (Rust)                       │
+│  Object Model • MUDL Loader • MoveManager • Display          │
+│  Creatures & Combat • Events (@trigger) • SQLite           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Key principles** (full detail in [ARCHITECTURE.md](ARCHITECTURE.md)):
+When a player enters a room, the engine runs subscribers (scheduler, spawners) then **host** `@trigger` scripts, then creature behaviors and condition ticks:
+
+```mermaid
+flowchart LR
+  A[go dir] --> B[on_leave]
+  B --> C[move player]
+  C --> D[execute_event on_enter]
+  D --> E[subscribers: scheduler + spawners]
+  E --> F[host @trigger scripts]
+  F --> G[creature behaviors]
+  G --> H[look + regen + condition ticks]
+```
+
+**Key principles** ([ARCHITECTURE.md](ARCHITECTURE.md)):
 
 - The **core engine is pure** — it knows nothing about IRC, auth, or transport.
-- **All world mutations** will flow through a gateway layer for RBAC enforcement.
-- **The world is data + behavior** defined primarily in MUDL files and runtime verbs.
-- **Prototype inheritance** and **runtime modification** are first-class design goals.
-
-**Deep dives:**
-
-- Object model, IDs, permissions, inheritance — [OBJECT_MODEL.md](OBJECT_MODEL.md)
-- MUDL language goals and syntax — [LANGUAGE.md](LANGUAGE.md)
-- REPL commands and display modes — [docs/REPL.md](docs/REPL.md)
+- **World content** lives in MUDL; **physics** (movement rules, combat math) stays in Rust until a sandboxed runtime exists.
+- **Host** = the object whose `@trigger` handlers run for an event (usually the room, item, or creature being acted on).
 
 ---
 
 ## Extending via MUDL
 
-World content lives in **modules** — self-contained universe packs. The official baseline uses a **flat file layout** (no subfolders inside a world):
+World content lives in **modules** — self-contained universe packs:
 
 ```
 modules/default/
-├── universe.mudl              # @universe + default world pointer
-└── worlds/
-    └── default_world/
-        ├── world.mudl         # @world entrypoint + @include list
-        ├── map.mudl           # Rooms (type: area) and exits
-        ├── creatures.mudl     # @creature anatomy (@slot definitions)
-        ├── players.mudl       # @player-template (creature=human)
-        ├── items.mudl         # Item prototypes (placeholder)
-        └── objects.mudl       # Shared prototypes (placeholder)
+├── universe.mudl
+└── worlds/default_world/
+    ├── world.mudl         # @world entrypoint + @import expansions
+    ├── map.mudl           # Areas (type: area) and exits
+    ├── creatures.mudl     # @creature, @effect, @stat, @skill
+    ├── behaviors.mudl     # @behavior-template personalities
+    ├── npcs.mudl          # @npc, @spawner, @loot-spawner
+    ├── players.mudl       # @player-template (creature=human)
+    ├── items.mudl         # Scene items and prototypes
+    ├── objects.mudl       # Shared prototypes
+    └── expansions/        # Drop-in adventure packs
 ```
 
-### Naked Human Baseline
-
-The default player template spawns with the `human` creature — ten anatomy slots, nothing equipped:
-
-```mudl
-# creatures.mudl
-@creature human
-  @slot left_hand  capacity=1 type=grasp hands=1
-  @slot right_hand capacity=1 type=grasp hands=1
-  @slot head       capacity=1 type=wear
-  @slot torso      capacity=1 type=wear
-  @slot left_arm   capacity=1 type=limb
-  @slot right_arm  capacity=1 type=limb
-  @slot left_leg   capacity=1 type=limb
-  @slot right_leg  capacity=1 type=limb
-  @slot left_foot  capacity=1 type=wear
-  @slot right_foot capacity=1 type=wear
-@end
-```
-
-```mudl
-# players.mudl
-@player-template default
-  creature=human
-  gender=neutral
-@end
-```
-
-Running `i` with no gear reports: *"You are completely naked and empty-handed."*
-
-### Example Map Fragment
-
-```mudl
-# map.mudl
-type: area
-base_name: the-void
-name: The Void
-description: You are in a featureless void. This is the starting point for new players.
-
-exits:
-  north: north-passage
-```
-
-### Fork Your Own Universe
-
-```bash
-# Copy the baseline module
-cp -r modules/default modules/my-universe
-
-# Edit the .mudl files (add worlds, creatures, rooms, etc.)
-# Then run with your module:
-MUDL_MODULE=modules/my-universe cargo run --bin repl
-
-# Or point at an example pack:
-MUDL_MODULE=examples/my-universe MUDL_WORLD=my_world cargo run --bin repl
-```
-
-Add a new creature in `creatures.mudl`, reference it from a `@player-template`, and reload with `module reload` in the REPL. Verbs and event handlers can be added in MUDL (as the interpreter matures) or live via `add_verb`.
+Fork the module, edit `.mudl` files, and run with `MUDL_MODULE=modules/my-universe`. Reload in the REPL with `module reload`.
 
 Module layout: [modules/default/README.md](modules/default/README.md) · Expansion install: [expansions/README.md](modules/default/worlds/default_world/expansions/README.md) · Overview: [MODULES.md](MODULES.md)
 
 ---
 
-## Current Status & Roadmap
+## Current Status
 
-### Implemented
+### Implemented (Milestones 1–4 partial)
 
-- **Core object model** — `Object`, `Property`, `Verb`, prototype resolution, `PermissionFlags`
-- **ObjectFactory** — stable ID generation (`type:slug-###`), soft-delete support
-- **SQLite persistence** — object round-trips, per-type counters, session restore
-- **MUDL loader** — parses `universe.mudl`, `@world`, `@include`, map definitions, `@creature`, `@player-template`
-- **World bootstrap** — creates rooms, exits, and player from flat module files
-- **Anatomy registry** — grasp / wear / limb slots drive inventory placement
-- **Player commands** — `look`, `examine`, `go`, `take`, `drop`, `put`, `remove`, `wield`, `wear`, `create`
-- **Display layer** — player, builder, and debug modes
-- **REPL** — interactive session with module reload and bundle export
-- **Tests** — loader, inventory, persistence, and anatomy coverage
+- Object graph, `MoveManager`, inventory, SQLite persistence, REPL `Session`
+- MUDL loader: universes, worlds, `@include` / `@import`, expansion packs
+- Creatures: vitals, equipment, combat, death, behaviors, awareness, spawners, loot
+- Events: `@trigger`, `execute_event`, scheduler, resource/loot spawners, `on_harvest`
+- Conditions: `@effect` with DoT/HoT, `condition_ticks`, script `grant-effect` / `cure-tag`
+- Five official expansion packs with self-contained READMEs
+- **437** unit and integration tests
 
-### Planned / In Progress
+### Planned
 
-- **Executable verbs & events** — runtime that makes the world truly self-modifying
-- **Item & object prototypes** — populate `items.mudl` and `objects.mudl` in the loader
-- **IRC bot frontend** — play and build from any IRC client
-- **API gateway / RBAC** — enforce Player / Builder / Wizard tiers on all mutations
-- **File + GitHub loaders** — hot-reload module changes from disk or webhooks
-- **Rich verb DSL** — safe sandboxed execution for live and LLM-generated code
+- **IRC bot** — play and build from any IRC client
+- **API gateway / RBAC** — enforce Player / Builder / Wizard on all mutations
+- **Sandboxed verb runtime** — replace hardcoded `event_script` actions with safe DSL execution
+- **File + GitHub hot-reload** — webhooks and live module updates
+- **Multi-user sessions** — per-connection `Session` registry for IRC
 
-Track active work on [GitHub Issues](https://github.com/brainswax/mudl/issues) and open branches.
+Track active work on [GitHub Issues](https://github.com/brainswax/mudl/issues).
 
 ---
 
 ## Contributing
 
-Contributions are welcome — Rust engine work, MUDL language design, example universes, documentation, and tests.
+Contributions are welcome — Rust engine work, MUDL content, documentation, and tests.
 
-1. **Open an issue** on [GitHub](https://github.com/brainswax/mudl/issues) to discuss larger changes.
-2. **Fork, branch, and PR** against `main`.
-3. **Run checks** before submitting: `make dev` or `cargo test`.
-4. **Prefer modules over core patches** — the best extensions are often great `.mudl` content and thin engine hooks, not bespoke core logic.
-
-**Guidelines:**
-
-- Keep the engine pure; put transport and auth in frontend/gateway layers.
-- Match existing code style (`cargo fmt`, `cargo clippy`).
-- Add tests for behavior changes.
-- Update docs when adding user-facing commands or MUDL syntax.
+1. Open an issue on [GitHub](https://github.com/brainswax/mudl/issues) for larger changes.
+2. Fork, branch, and PR against `main`.
+3. Run `make dev` or `cargo test` before submitting.
+4. Prefer **modules over core patches** — great `.mudl` content and thin engine hooks beat bespoke Rust.
 
 ---
 
 ## License
 
-Licensed under the [GNU Affero General Public License v3.0](LICENSE).
-
-Network server deployments must share corresponding source under the same license. See [LICENSE](LICENSE) for the full text.
+Licensed under the [GNU Affero General Public License v3.0](LICENSE). Network server deployments must share corresponding source under the same license.

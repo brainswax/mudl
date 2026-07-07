@@ -2,7 +2,7 @@
 
 **MUDL** — The domain-specific language for building programmable, self-modifying MUD/MOO worlds in this project.
 
-**Status**: Draft / MVP skeleton. This is a living document that will evolve with the interpreter.
+**Status**: Living spec — tracks implemented MUDL syntax (loader + `@trigger` scripts). Full sandboxed verb runtime is planned.
 
 ## Goals
 - Accessible to non-programmers (builders) while powerful enough for complex behaviors.
@@ -44,7 +44,9 @@ property "bag_of_holding" on container {
     }
 }
 ```
-### 3. Verbs / BehaviorsExecutable actions attached to objects.
+### 3. Verbs / Behaviors
+
+Executable actions attached to objects.
 
 ```mudl
 verb "bake bread" on kitchen {
@@ -91,6 +93,8 @@ Named triggers that run scripted lines when something happens in the world. Buil
 | `mod-stat` / `mod-skill` | `mod-stat actor strength 2` | Permanent stat/skill bump |
 | `set-property` | `set-property host player_discovered true` | Set a bool/int/string property |
 | `grant-effect` | `grant-effect actor regeneration` | Apply a defined `@effect` to a creature |
+| `remove-effect` | `remove-effect actor poisoned` | Remove a named effect |
+| `cure-tag` | `cure-tag actor poison` | Remove all effects matching a condition/cure tag |
 | `teleport` | `teleport haunted-entry` | Move `actor`/`host`/`target` to a place `base_name` |
 | `spawn` | `spawn mist-wisp` / `spawn item trail-rations` | Spawn creature template or item prototype in room |
 | `when` / `if` | `when health below 30 then heal 15` | Conditional — runs nested action when true |
@@ -103,9 +107,20 @@ Named triggers that run scripted lines when something happens in the world. Buil
 | Health | `when health below 30 then heal 15` |
 | Stat / skill | `when skill survival at_least 2 then narrate …` |
 | Property | `when property player_discovered then narrate …` |
+| Effect | `when effect actor poisoned then cure-tag actor poison` |
+| Condition tag | `when condition actor poison then narrate You feel ill.` |
 | Chance | `when chance 40 then spawn mist-wisp` (deterministic roll) |
+| Negation | `when not effect actor regeneration then grant-effect actor regeneration` |
 
 Optional subject prefix on conditions and targeted actions: `actor`, `host`, `target`.
+
+**Who is who at runtime:**
+
+| Role | Meaning |
+|------|---------|
+| **Actor** | Who caused the event (usually the entering player or attacker) |
+| **Host** | Whose `@trigger` handlers are running (the room, item, or creature the script is attached to) |
+| **Target** | Optional third party (e.g. combat victim on `on_kill`) |
 
 **Validation & errors:** `@trigger add` validates event names (`on_*`) and script verbs via `validate_event_name` / `validate_script_code`. At runtime, unrecognized script text is recorded in `EventOutcome::errors` (not shown to players). Inactive hosts skip dispatch with an error entry. Re-entrant event cycles and excessive nesting are rejected. Use `@trigger test` for a narrative dry-run without side effects.
 
@@ -310,12 +325,27 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
   mod_stat_dexterity=-2
   mod_skill_stealth=-1
 @end
+
+@effect poisoned
+  condition_type=poison
+  cure_tags=antidote,herb
+  damage_on_tick=4
+  duration_ticks=8
+  tick_on=on_enter
+@end
+
+@effect dew_blessing
+  heal_on_tick=3
+  duration_ticks=5
+  tick_on=on_enter
+@end
 ```
 
 - **`@stat` / `@skill`** — free-form names; core stats are `strength`, `dexterity`, `constitution`, `intelligence`, `wisdom`, `charisma`. Core skills include `combat`, `stealth`, `crafting`, `survival`. Builders may define custom stats/skills on any `@creature`.
 - **`max_health`** — template value scaled by constitution: each point above 10 adds 5 max health (constitution 12 → +10 health on a 100 template).
 - **`base_max_weight`** plus effective `strength` sets carry capacity (equipment and effects stack on top).
-- **`@effect`** defines reusable conditions; creatures track `active_effects` at runtime. `mod_stat_*` and `mod_skill_*` apply while active.
+- **`@effect`** defines reusable buffs and **conditions**. Creatures track `active_effects` at runtime; `mod_stat_*` and `mod_skill_*` apply while active.
+- **Timed conditions** — `condition_type` and `cure_tags` for `when condition` / `cure-tag`; `damage_on_tick` / `heal_on_tick` for DoT/HoT; `duration_ticks` (0 = until cured); `tick_on` (default `on_enter`). Ticks advance on room entry and persist in `condition_ticks`.
 - **`@slot` effect=`** — optional slot-tagged body-plan conditions (future wound hooks).
 
 **`examine self`** shows effective stats and skills (gear and active effects included), e.g. `You are Strength 12 (+2), Constitution 10. Your skills are Combat 1, Survival 1 (+1).`
@@ -573,7 +603,7 @@ MUDL separates **what the world knows** from **what players read**. The engine t
 | Tier | Audience | Commands | Shows |
 |------|----------|----------|-------|
 | **Player** | Everyone playing | `look`, `take`, `create`, `go`, `inventory`, … | Immersive prose only — names, descriptions, exits, natural inventory |
-| **Builder** | World authors | `examine`, `add_prop`, `add_verb`, `load`, `save`, … | Contextual detail — owners, properties, verbs, exit *names* (not raw IDs) |
+| **Builder** | World authors | `@examine`, `@set`, `@unset`, `load`, `save`, `@trigger`, … | Contextual detail — owners, properties, verbs, exit *names* (not raw IDs) |
 | **Debug** | Engine developers | `@dump`, logs (`RUST_LOG`) | Full JSON, IDs, persistence paths, bootstrap diagnostics |
 
 **Rules:**

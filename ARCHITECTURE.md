@@ -2,7 +2,7 @@
 
 **MUDL** (working name) — An IRC-first, programmable MUD/MOO with a custom domain-specific language (DSL), self-modifying world capabilities, and multi-modal authoring (IRC chat, REPL, files, GitHub).
 
-**Status**: High-level design + **Milestones 1–3 implemented**, **Milestone 4 (Events & Triggers) in progress**. ~401 unit tests. This document tracks target architecture, as-built state per milestone, and consolidation priorities for M4+.
+**Status**: High-level design + **Milestones 1–3 implemented**, **Milestone 4 (Events & Triggers) largely implemented** — `@trigger` bus, spawners, scheduler, conditions (DoT/HoT). **437** unit/integration tests. This document tracks target architecture, as-built state per milestone, and remaining M4+ debt.
 
 ## Milestone Summary (as-built)
 
@@ -11,7 +11,7 @@
 | **M1** | Object graph, `MoveManager`, inventory verbs, SQLite roundtrip, REPL `Session` | `object/`, `inventory/`, `display/`, `persistence/`, `world/move_manager` |
 | **M2** | MUDL loader, bootstrap pipeline, map/items/NPCs, `@dig`/`@link`, expansion packs | `mudl/`, `world/bootstrap`, `world/place_builder` |
 | **M3** | Creature vitals/stats/effects, equipment modifiers, combat/death, behaviors, awareness, spawners, loot | `creature/`, `loot/` |
-| **M4** (partial) | `@trigger` on places/objects/NPCs/spawn-templates; `execute_event` script bus | `world/events`, `world/event_script` |
+| **M4** (largely done) | `@trigger` bus, spawners/loot/resources, scheduler, conditions (DoT/HoT), discovery/harvest | `world/events`, `world/event_script`, `creature/conditions` |
 
 ## Vision
 A living, collaborative text world where:
@@ -119,15 +119,16 @@ M3 adds living creatures with MUDL-defined personalities, weighted spawns, and t
 
 **Hybrid (MUDL inputs, Rust formulas):** damage mitigation, surprise/crit thresholds, initiative contests, XP curves. Documented in `LANGUAGE.md`; candidates for `@formula` or data tables later.
 
-## Milestone 4 — Events & triggers (production-ready)
+## Milestone 4 — Events, triggers & conditions
 
-M4 introduces a builder-facing **`@trigger`** system on places, objects, NPCs, and spawn-templates.
+M4 adds a builder-facing **`@trigger`** system on places, objects, NPCs, and spawn-templates, plus timed **conditions** on creatures.
 
 | Component | Role |
 |-----------|------|
 | `trigger_def.rs` | Parse `@trigger <event> <action> [text…]` |
 | `events.rs` | `EventContext`, `attach_triggers`, `execute_event` |
-| `event_script.rs` | Script actions: `narrate`, `say`, `emote`, `react`, `damage`/`heal` (with targets), `mod-stat`/`mod-skill`, `set-property`, `grant-effect`, `teleport`, `spawn creature`/`item`, `when`/`if` conditionals, `stop` |
+| `event_script.rs` | Script actions: `narrate`, `say`, `emote`, `react`, `damage`/`heal`, `mod-stat`/`mod-skill`, `set-property`, `grant-effect`/`remove-effect`/`cure-tag`, `teleport`, `spawn creature`/`item`, `when`/`if` conditionals, `stop` |
+| `creature/conditions.rs` | `@effect` DoT/HoT, `duration_ticks`, `tick_on` (default `on_enter`), `condition_ticks` persistence |
 | **Wired events** | `on_enter`/`on_leave` (movement), `on_take`/`on_drop`/`on_move` (inventory), `on_break`, `on_harvest` (resource nodes), `on_death`/`on_kill` (combat), `on_discovered` (perception + triggers), `on_unlock`/`on_open` (gates, narrative-only) |
 
 **Room entry order** (`Session::go`):
@@ -148,6 +149,7 @@ portal prep → on_leave (place) → move player → execute_event(on_enter)
 - Scheduled jobs call `execute_host_event` only (no subscriber re-entry).
 - Session model is single-threaded per REPL; dispatch guard uses thread-local stack (not `Send` across tasks).
 - Conditions (`active_effects`, `condition_ticks`) and scheduler state persist as normal object properties.
+- **`EventContext`**: `actor_id` (who caused the event), `host_id` (whose `@trigger` handlers run), optional `target_id` (victim, item, etc.). Distinct from `ScriptTarget::Host` in script lines (defaults to the dispatch host).
 
 ## Hard-coded vs MUDL-driven
 
@@ -457,7 +459,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 | `create` / `create_at_location` / `@create` | Object + updated `location` |
 | `take`, `drop`, `put`, `remove`, `wield`, `wear` | Full active object graph after mutation (`persist_all`); `DirtyTracker` + `persist_dirty` available for incremental saves |
 | `go` | Player `location` |
-| `add_prop`, `add_verb`, `save` | Target object |
+| `@set`, `@unset`, `save` | Target object |
 | Bootstrap | World areas, exits, default player (idempotent) |
 
 **Startup**: `bootstrap_world()` ensures MUDL-defined content exists, then `restore_session()` hydrates all active objects from the DB and restores the player's `current_location` from their persisted `location` field.
@@ -481,7 +483,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 5. ~~Creature vitals, equipment, combat, behaviors, spawners, loot (M3)~~
 6. ~~Event bus foundation (M4 partial): `world::events`, `@trigger`, `execute_event`~~
 
-### M4 — Events & Triggers (active)
+### M4 — Events & Triggers (remaining)
 
 | Priority | Task | Rationale |
 |----------|------|-----------|
@@ -489,6 +491,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 | ~~**P0**~~ | ~~Route spawner + loot dispatch through event bus~~ | Done — §4.2 |
 | ~~**P1**~~ | ~~`gate_events` → `execute_event` (mutating door scripts)~~ | Done — §4.3 |
 | ~~**P1**~~ | ~~Align `@trigger react attack` with `attack_damage`~~ | Done — `creature_attack_damage()` |
+| ~~**P2**~~ | ~~Conditions / DoT / HoT / cures~~ | Done — `creature/conditions.rs`, expansion examples |
 | **P1** | Shared behavior-line parser; drop `npc_behaviors` legacy | §4.4 |
 | ~~**P2**~~ | ~~`on_discovered` on arbitrary objects~~ | Done — `hidden_until_discovered`, `run_discovery_on_look` |
 | ~~**P2**~~ | ~~Central `EventScheduler` (replace periodic/timer counters)~~ | Done — `world/scheduler.rs` |
