@@ -20,12 +20,14 @@ exits:
   south: the-void
   north: cottage-front
   in: haunted-entry
+  down: swamp-entry
 exit_aliases:
   s: south
   n: north
 exit_returns:
   south: north
   north: south
+  down: up
 
 type: area
 base_name: cottage-front

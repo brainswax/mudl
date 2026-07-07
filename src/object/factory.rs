@@ -293,6 +293,9 @@ impl<P: Persistence> ObjectFactory<P> {
             "allowed_types",
             "is_breakable",
             "break_text",
+            "harvestable",
+            "hidden_until_discovered",
+            "discovery_stealth",
         ] {
             if let Some(prop) = prototype.get_property(key) {
                 target.add_property(prop.clone());

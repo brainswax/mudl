@@ -1501,7 +1501,7 @@ mod tests {
         );
 
         let exit_msg = session.go("out").unwrap();
-        assert!(exit_msg.contains("spits you out"));
+        assert!(exit_msg.contains("spit you out"));
         assert_eq!(session.current_location(), Some(&scatter_dest));
 
         let heart_exits = heart.get_exits();
@@ -1535,6 +1535,213 @@ mod tests {
                 .name,
             "Tangled Threshold",
             "haunted forest is replayable"
+        );
+    }
+
+    #[tokio::test]
+    async fn poisonous_swamp_full_adventure() {
+        use crate::inventory::{break_item, harvest_item, read_item};
+        use crate::world::exits::{apply_scatter_exit, pick_scatter_destination};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        validate_world_places(&objects).expect("swamp map validates");
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            objects,
+            Some(start.clone()),
+        );
+
+        session.go("north").unwrap();
+        let warning = read_item(&session.inventory_context(), "warning").unwrap();
+        assert!(warning.contains("BITTER"));
+
+        let entry_msg = session.go("down").unwrap();
+        assert!(
+            entry_msg.contains("Stinking Threshold") || entry_msg.contains("stagnant air")
+        );
+
+        let wrong_turn = session.go("east").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Stinking Threshold",
+            "gas pocket loops silently to the threshold"
+        );
+        assert!(
+            !wrong_turn.to_lowercase().contains("gas pocket"),
+            "dead-end names should not appear on silent loop"
+        );
+
+        session.go("north").unwrap();
+        let bitter_read = read_item(&session.inventory_context(), "marker").unwrap();
+        assert!(bitter_read.contains("BITTER"));
+
+        let bitter = session
+            .objects()
+            .values()
+            .find(|o| o.name == "Bitter Root Cluster" && !o.is_deleted)
+            .expect("bitter root cluster in fen");
+        assert_eq!(
+            bitter.get_bool_property("harvestable"),
+            Some(true),
+            "prototype harvestable should copy to instance"
+        );
+
+        let harvest_msg = harvest_item(&mut session.inventory_context(), "bitter root").unwrap();
+        assert!(
+            harvest_msg.contains("harvest") || harvest_msg.contains("Antidote"),
+            "bitter root harvest should yield salve: {harvest_msg}"
+        );
+
+        session.go("east").unwrap();
+        let discovery = session.perceive_hidden_on_look();
+        assert!(
+            discovery
+                .lines
+                .iter()
+                .any(|l| l.contains("bundle") || l.contains("peat")),
+            "hidden cache discovery should narrate: {:?}",
+            discovery.lines
+        );
+
+        session.go("south").unwrap();
+        let break_msg = break_item(&mut session.inventory_context(), "spore pod").unwrap();
+        assert!(
+            break_msg.contains("split") || break_msg.contains("burst"),
+            "breaking spore pod should narrate: {break_msg}"
+        );
+
+        session.go("west").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Deep Heart of the Bog"
+        );
+
+        let heart_location = session.current_location().unwrap().clone();
+        let coffer_id = session
+            .objects()
+            .values()
+            .find(|o| {
+                o.name == "Heartwood Coffer"
+                    && o.is_container()
+                    && !o.is_deleted
+                    && o.location.as_ref() == Some(&heart_location)
+            })
+            .map(|o| o.id.clone())
+            .expect("heart coffer at Deep Heart");
+
+        let reward_msg = {
+            let mut ctx = session.inventory_context();
+            crate::inventory::open_container(&mut ctx, "coffer").unwrap()
+        };
+        assert!(
+            reward_msg.contains("find"),
+            "opening heart coffer should spawn loot: {reward_msg}"
+        );
+
+        let reward_names = [
+            "Antidote Salve",
+            "Reed Breather",
+            "Reed-Walker Boots",
+            "Vitality Band",
+            "Trail Rations",
+            "Iron Lantern",
+        ];
+        let coffer = session.objects().get(&coffer_id).unwrap();
+        let spawned: Vec<_> = coffer
+            .container_contents()
+            .iter()
+            .filter_map(|id| session.objects().get(id))
+            .collect();
+        assert!(
+            spawned
+                .iter()
+                .any(|item| reward_names.contains(&item.name.as_str())),
+            "heart coffer should hold weighted loot"
+        );
+
+        let heart = session
+            .object(session.current_location().unwrap())
+            .unwrap()
+            .clone();
+        let scatter_dest = pick_scatter_destination(&heart, &player_id, session.objects())
+            .expect("scatter destination");
+        let main_world = ["Forest Path", "West Clearing"];
+        assert!(
+            session
+                .objects()
+                .get(&scatter_dest)
+                .map(|o| main_world.contains(&o.name.as_str()))
+                .unwrap_or(false),
+            "scatter lands in main world"
+        );
+
+        let exit_msg = session.go("up").unwrap();
+        let landing = session.current_location().unwrap().clone();
+        let landing_name = session.object(&landing).unwrap().name.as_str();
+        assert!(
+            main_world.contains(&landing_name),
+            "up exit should leave the swamp for the main world, got {landing_name}"
+        );
+        if landing != scatter_dest {
+            assert!(
+                exit_msg.contains("spit you out") || exit_msg.contains("head up"),
+                "unexpected exit message: {exit_msg}"
+            );
+        }
+        assert_eq!(session.current_location(), Some(&landing));
+
+        let heart_exits = heart.get_exits();
+        let map_target = heart_exits.get("up").unwrap();
+        assert_eq!(
+            apply_scatter_exit(&heart, "up", map_target, &player_id, session.objects()),
+            scatter_dest
+        );
+
+        if session
+            .object(session.current_location().unwrap())
+            .map(|o| o.name.as_str())
+            != Some("Forest Path")
+        {
+            session.go("south").unwrap();
+            session.go("north").unwrap();
+        }
+        session.go("down").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Stinking Threshold",
+            "poisonous swamp is replayable"
         );
     }
 

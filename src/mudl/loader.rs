@@ -621,10 +621,25 @@ mod tests {
                 .any(|d| d.base_name == "haunted-entry"),
             "haunted forest expansion should load via @import"
         );
+        assert!(
+            world
+                .world_defs
+                .iter()
+                .any(|d| d.base_name == "swamp-entry"),
+            "poisonous swamp expansion should load via @import"
+        );
         assert!(world
             .item_instances
             .iter()
             .any(|i| i.base_name == "forest-hollow-oak"));
+        assert!(world
+            .item_instances
+            .iter()
+            .any(|i| i.base_name == "forest-swamp-warning"));
+        assert!(world
+            .npc_defs
+            .iter()
+            .any(|n| n.base_name == "bog-warden"));
     }
 
     #[test]

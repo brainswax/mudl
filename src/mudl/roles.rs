@@ -367,6 +367,16 @@ impl MudlRoleProps {
                 break_text: self.break_text.clone(),
             });
         }
+
+        if let Some(harvestable) = self.harvestable {
+            obj.set_property_bool("harvestable", harvestable);
+        }
+        if let Some(hidden) = self.hidden_until_discovered {
+            obj.set_property_bool("hidden_until_discovered", hidden);
+        }
+        if let Some(stealth) = self.discovery_stealth {
+            obj.set_property_int("discovery_stealth", stealth);
+        }
     }
 }
 
