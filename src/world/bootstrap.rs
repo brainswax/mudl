@@ -79,7 +79,7 @@ async fn spawn_prototype<P: Persistence>(
         )
         .await?;
     attach_triggers(&mut obj, &def.triggers);
-    factory.persistence().save_object(&obj).await?;
+    crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
     ids.insert(def.base_name.clone(), obj.id);
     Ok(())
 }
@@ -156,7 +156,7 @@ async fn spawn_instance<P: Persistence>(
 
     if parent.is_container() {
         parent.add_to_list_property("contents", obj.id.clone());
-        factory.persistence().save_object(&parent).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut parent).await?;
         objects.insert(parent_id.clone(), parent);
     }
 
@@ -173,7 +173,7 @@ async fn spawn_instance<P: Persistence>(
         }
     }
 
-    factory.persistence().save_object(&obj).await?;
+    crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
     objects.insert(obj.id.clone(), obj.clone());
     placements.insert(def.base_name.clone(), obj.id);
     Ok(())
@@ -283,6 +283,8 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -294,7 +296,7 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
         spawner.add_property(behavior_templates_to_property(
             &world.behavior_template_defs,
         ));
-        factory.persistence().save_object(&spawner).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut spawner).await?;
     }
     Ok(())
 }
@@ -342,13 +344,15 @@ pub async fn bootstrap_world_loot_spawners<P: Persistence>(
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
         apply_loot_spawner_def(&mut spawner, def, &template_map)?;
         spawner.set_property_object_ref("loot_spawner_target", target_id);
         spawner.add_property(loot_templates_to_property(&world.loot_template_defs));
-        factory.persistence().save_object(&spawner).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut spawner).await?;
     }
     Ok(())
 }
@@ -396,13 +400,50 @@ pub async fn bootstrap_world_resource_spawners<P: Persistence>(
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
         apply_resource_spawner_def(&mut spawner, def, &template_map)?;
         spawner.set_property_object_ref("resource_spawner_target", target_id);
         spawner.add_property(resource_templates_to_property(&world.resource_template_defs));
-        factory.persistence().save_object(&spawner).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut spawner).await?;
+    }
+    Ok(())
+}
+
+/// Register MUDL `@schedule` jobs on their target scopes.
+pub async fn bootstrap_world_schedules<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    world: &LoadedWorld,
+    target_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    use crate::world::scheduler::register_schedule_job;
+
+    for def in &world.schedule_defs {
+        if def.target.is_empty() {
+            anyhow::bail!("Schedule '{}' missing target", def.base_name);
+        }
+        if def.event.is_empty() {
+            anyhow::bail!("Schedule '{}' missing event", def.base_name);
+        }
+        let target_id = target_ids.get(&def.target).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Schedule '{}' targets unknown location or object '{}'",
+                def.base_name,
+                def.target
+            )
+        })?;
+        let Some(mut target) = factory.load_object(&target_id).await? else {
+            anyhow::bail!(
+                "Schedule '{}' target object {} not found",
+                def.base_name,
+                target_id
+            );
+        };
+        register_schedule_job(&mut target, def, &target_id);
+        crate::persistence::save_and_sync(factory.persistence(), &mut target).await?;
     }
     Ok(())
 }
@@ -471,7 +512,7 @@ pub async fn bootstrap_world<P: Persistence>(
                 behavior: None,
             });
         }
-        factory.persistence().save_object(&obj).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
         name_to_id.insert(def.base_name.clone(), obj.id.clone());
     }
 
@@ -543,7 +584,7 @@ pub async fn bootstrap_world<P: Persistence>(
                 }
             }
             attach_triggers(&mut obj, &def.triggers);
-            factory.persistence().save_object(&obj).await?;
+            crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
         }
     }
 
@@ -569,6 +610,7 @@ pub async fn bootstrap_world<P: Persistence>(
     }
     bootstrap_world_loot_spawners(factory, &owner, world, &loot_targets).await?;
     bootstrap_world_resource_spawners(factory, &owner, world, &loot_targets).await?;
+    bootstrap_world_schedules(factory, world, &loot_targets).await?;
 
     if factory.load_object(&owner).await?.is_none() {
         let mut player = factory
@@ -581,7 +623,7 @@ pub async fn bootstrap_world<P: Persistence>(
                 player.set_property_object_ref("home_location", start_id.clone());
             }
         }
-        factory.persistence().save_object(&player).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut player).await?;
     }
 
     let start_id = if let Some(start_base) = &world.starting_location {
@@ -611,13 +653,14 @@ pub async fn bootstrap_world<P: Persistence>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::DispatchStack;
     use crate::inventory::{
         break_item, close_container, open_container, read_item, take_item, wield_item,
         InventoryContext,
     };
     use crate::mudl::load_module;
     use crate::persistence::SqlitePersistence;
-    use crate::repl::session::Session;
+    use crate::repl::Session;
     use crate::world::exits::validate_world_places;
 
     #[tokio::test]
@@ -772,11 +815,13 @@ mod tests {
             .map(|o| (o.id.clone(), o))
             .collect();
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -1128,11 +1173,13 @@ mod tests {
             .expect("pantry");
 
         {
+            let mut dispatch = DispatchStack::default();
             let mut ctx = InventoryContext {
                 player_id: &player_id,
                 room_id: Some(&start),
                 objects: &mut objects,
                 anatomy: &anatomy,
+                dispatch: &mut dispatch,
                 dirty: None,
             };
             open_container(&mut ctx, "mailbox").unwrap();
@@ -1151,7 +1198,8 @@ mod tests {
         session.go("east").unwrap();
         assert_eq!(session.current_location(), Some(&pantry_id));
 
-        persist_all(&persistence, session.objects()).await.unwrap();
+        let mut graph = session.objects();
+        persist_all(&persistence, &mut graph).await.unwrap();
 
         let reloaded = hydrate_world(&persistence).await.unwrap();
         let restored = resolve_player_location(&player_id, &reloaded, Some(start));
@@ -1208,10 +1256,11 @@ mod tests {
         session.go("north").unwrap();
         assert_eq!(session.current_location(), Some(&cottage_front_id));
 
+        let cottage_front = session.object(&cottage_front_id).unwrap();
         let look = format_room_look_player(
-            session.object(&cottage_front_id).unwrap(),
+            &cottage_front,
             &DisplayContext::new(player_id.clone(), DisplayMode::Player)
-                .with_objects(session.objects().clone()),
+                .with_objects(session.objects()),
         );
         assert!(look.contains("in (locked door)"));
 
@@ -1220,8 +1269,8 @@ mod tests {
 
         session.go("south").unwrap();
         session.go("south").unwrap();
-        open_container(&mut session.inventory_context(), "mailbox").unwrap();
-        take_item(&mut session.inventory_context(), "cottage key").unwrap();
+        session.with_inventory(|ctx| open_container(ctx, "mailbox")).unwrap();
+        session.with_inventory(|ctx| take_item(ctx, "cottage key")).unwrap();
         session.go("north").unwrap();
         session.go("north").unwrap();
 
@@ -1232,8 +1281,8 @@ mod tests {
         assert_eq!(
             session
                 .object(session.current_location().unwrap())
-                .map(|o| o.name.as_str()),
-            Some("Cottage Interior")
+                .map(|o| o.name),
+            Some("Cottage Interior".to_string())
         );
     }
 
@@ -1305,11 +1354,13 @@ mod tests {
         validate_world_places(&objects).expect("haunted map validates");
 
         let boulder_hint = {
+            let mut dispatch = DispatchStack::default();
             let mut ctx = InventoryContext {
                 player_id: &player_id,
                 room_id: Some(&start),
                 objects: &mut objects,
                 anatomy: &anatomy,
+                dispatch: &mut dispatch,
                 dirty: None,
             };
             let hint = read_item(&ctx, "boulder").unwrap();
@@ -1359,7 +1410,8 @@ mod tests {
             .objects()
             .values()
             .find(|o| o.name == "Hollow Oak" && o.id.as_str().contains("forest-hollow"))
-            .expect("forest hollow oak portal");
+            .expect("forest hollow oak portal")
+            .clone();
         assert!(!oak.gate_has_lock(), "oak lock should be spent after entry");
 
         let wrong_turn = session.go("east").unwrap();
@@ -1381,7 +1433,7 @@ mod tests {
         );
 
         session.go("north").unwrap();
-        let moon_read = read_item(&session.inventory_context(), "marker").unwrap();
+        let moon_read = session.with_inventory(|ctx| read_item(ctx, "marker")).unwrap();
         assert!(moon_read.contains("MOON"));
 
         session.go("east").unwrap();
@@ -1418,15 +1470,14 @@ mod tests {
             Some(&heart_location)
         );
 
-        let reward_msg = {
-            let mut ctx = session.inventory_context();
-            open_container(&mut ctx, "reward chest").unwrap()
-        };
+        let reward_msg =
+            session.with_inventory(|ctx| open_container(ctx, "reward chest")).unwrap();
         assert!(
             reward_msg.contains("find"),
             "opening reward chest should spawn loot: {reward_msg}"
         );
-        let reward_chest = session.objects().get(&reward_chest_id).unwrap();
+        let graph = session.objects();
+        let reward_chest = graph.get(&reward_chest_id).unwrap();
         assert!(reward_chest.gate_is_open());
         let reward_names = [
             "Trail Rations",
@@ -1439,7 +1490,7 @@ mod tests {
         let spawned: Vec<_> = reward_chest
             .container_contents()
             .iter()
-            .filter_map(|id| session.objects().get(id))
+            .filter_map(|id| graph.get(id))
             .collect();
         assert!(
             spawned
@@ -1452,12 +1503,11 @@ mod tests {
             .object(session.current_location().unwrap())
             .unwrap()
             .clone();
-        let scatter_dest = pick_scatter_destination(&heart, &player_id, session.objects())
+        let scatter_dest = pick_scatter_destination(&heart, &player_id, &graph)
             .expect("scatter destination");
         let main_world = ["West Clearing", "Forest Path", "Behind the Cottage"];
         assert!(
-            session
-                .objects()
+            graph
                 .get(&scatter_dest)
                 .map(|o| main_world.contains(&o.name.as_str()))
                 .unwrap_or(false),
@@ -1465,30 +1515,30 @@ mod tests {
         );
 
         let exit_msg = session.go("out").unwrap();
-        assert!(exit_msg.contains("spits you out"));
+        assert!(exit_msg.contains("spit you out"));
         assert_eq!(session.current_location(), Some(&scatter_dest));
 
         let heart_exits = heart.get_exits();
         let map_target = heart_exits.get("out").unwrap();
         assert_eq!(
-            apply_scatter_exit(&heart, "out", map_target, &player_id, session.objects()),
+            apply_scatter_exit(&heart, "out", map_target, &player_id, &graph),
             scatter_dest
         );
 
-        match session
+        let landing_name = session
             .object(session.current_location().unwrap())
-            .map(|o| o.name.as_str())
-        {
-            Some("West Clearing") => {
+            .unwrap()
+            .name;
+        match landing_name.as_str() {
+            "West Clearing" => {
                 session.go("north").unwrap();
             }
-            Some("Behind the Cottage") => {
+            "Behind the Cottage" => {
                 session.go("west").unwrap();
                 session.go("north").unwrap();
             }
-            Some("Forest Path") => {}
-            Some(other) => panic!("unexpected scatter landing: {other}"),
-            None => panic!("nowhere after scatter"),
+            "Forest Path" => {}
+            other => panic!("unexpected scatter landing: {other}"),
         }
 
         session.go("in").unwrap();
@@ -1500,6 +1550,437 @@ mod tests {
             "Tangled Threshold",
             "haunted forest is replayable"
         );
+    }
+
+    #[tokio::test]
+    async fn poisonous_swamp_full_adventure() {
+        use crate::inventory::{break_item, harvest_item, read_item};
+        use crate::world::exits::{apply_scatter_exit, pick_scatter_destination};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        validate_world_places(&objects).expect("swamp map validates");
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            objects,
+            Some(start.clone()),
+        );
+
+        session.go("north").unwrap();
+        let warning = session.with_inventory(|ctx| read_item(ctx, "warning")).unwrap();
+        assert!(warning.contains("BITTER"));
+
+        let entry_msg = session.go("down").unwrap();
+        assert!(
+            entry_msg.contains("Stinking Threshold") || entry_msg.contains("stagnant air")
+        );
+
+        let wrong_turn = session.go("east").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Stinking Threshold",
+            "gas pocket loops silently to the threshold"
+        );
+        assert!(
+            !wrong_turn.to_lowercase().contains("gas pocket"),
+            "dead-end names should not appear on silent loop"
+        );
+
+        session.go("north").unwrap();
+        let bitter_read = session.with_inventory(|ctx| read_item(ctx, "marker")).unwrap();
+        assert!(bitter_read.contains("BITTER"));
+
+        let bitter = session
+            .objects()
+            .values()
+            .find(|o| o.name == "Bitter Root Cluster" && !o.is_deleted)
+            .expect("bitter root cluster in fen")
+            .clone();
+        assert_eq!(
+            bitter.get_bool_property("harvestable"),
+            Some(true),
+            "prototype harvestable should copy to instance"
+        );
+
+        let harvest_msg = session.with_inventory(|ctx| harvest_item(ctx, "bitter root")).unwrap();
+        assert!(
+            harvest_msg.contains("harvest") || harvest_msg.contains("Antidote"),
+            "bitter root harvest should yield salve: {harvest_msg}"
+        );
+
+        session.go("east").unwrap();
+        let discovery = session.perceive_hidden_on_look();
+        assert!(
+            discovery
+                .lines
+                .iter()
+                .any(|l| l.contains("bundle") || l.contains("peat")),
+            "hidden cache discovery should narrate: {:?}",
+            discovery.lines
+        );
+
+        session.go("south").unwrap();
+        let break_msg = session.with_inventory(|ctx| break_item(ctx, "spore pod")).unwrap();
+        assert!(
+            break_msg.contains("split") || break_msg.contains("burst"),
+            "breaking spore pod should narrate: {break_msg}"
+        );
+
+        session.go("west").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Deep Heart of the Bog"
+        );
+
+        let heart_location = session.current_location().unwrap().clone();
+        let coffer_id = session
+            .objects()
+            .values()
+            .find(|o| {
+                o.name == "Heartwood Coffer"
+                    && o.is_container()
+                    && !o.is_deleted
+                    && o.location.as_ref() == Some(&heart_location)
+            })
+            .map(|o| o.id.clone())
+            .expect("heart coffer at Deep Heart");
+
+        let reward_msg =
+            session.with_inventory(|ctx| crate::inventory::open_container(ctx, "coffer")).unwrap();
+        assert!(
+            reward_msg.contains("find"),
+            "opening heart coffer should spawn loot: {reward_msg}"
+        );
+
+        let reward_names = [
+            "Antidote Salve",
+            "Reed Breather",
+            "Reed-Walker Boots",
+            "Vitality Band",
+            "Trail Rations",
+            "Iron Lantern",
+        ];
+        let graph = session.objects();
+        let coffer = graph.get(&coffer_id).unwrap();
+        let spawned: Vec<_> = coffer
+            .container_contents()
+            .iter()
+            .filter_map(|id| graph.get(id))
+            .collect();
+        assert!(
+            spawned
+                .iter()
+                .any(|item| reward_names.contains(&item.name.as_str())),
+            "heart coffer should hold weighted loot"
+        );
+
+        let heart = session
+            .object(session.current_location().unwrap())
+            .unwrap()
+            .clone();
+        let scatter_dest = pick_scatter_destination(&heart, &player_id, &graph)
+            .expect("scatter destination");
+        let main_world = ["Forest Path", "West Clearing"];
+        assert!(
+            graph
+                .get(&scatter_dest)
+                .map(|o| main_world.contains(&o.name.as_str()))
+                .unwrap_or(false),
+            "scatter lands in main world"
+        );
+
+        let exit_msg = session.go("up").unwrap();
+        let landing = session.current_location().unwrap().clone();
+        let landing_obj = session.object(&landing).unwrap();
+        assert!(
+            main_world.contains(&landing_obj.name.as_str()),
+            "up exit should leave the swamp for the main world, got {}",
+            landing_obj.name
+        );
+        if landing != scatter_dest {
+            assert!(
+                exit_msg.contains("spit you out") || exit_msg.contains("head up"),
+                "unexpected exit message: {exit_msg}"
+            );
+        }
+        assert_eq!(session.current_location(), Some(&landing));
+
+        let heart_exits = heart.get_exits();
+        let map_target = heart_exits.get("up").unwrap();
+        assert_eq!(
+            apply_scatter_exit(&heart, "up", map_target, &player_id, &graph),
+            scatter_dest
+        );
+
+        if session
+            .object(session.current_location().unwrap())
+            .map(|o| o.name)
+            != Some("Forest Path".to_string())
+        {
+            session.go("south").unwrap();
+            session.go("north").unwrap();
+        }
+        session.go("down").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Stinking Threshold",
+            "poisonous swamp is replayable"
+        );
+    }
+
+    #[tokio::test]
+    async fn giant_spider_den_full_adventure() {
+        use crate::creature::attack_creature;
+        use crate::inventory::{
+            break_item, open_container, read_item, take_item, unlock_container,
+        };
+        use crate::world::exits::{apply_scatter_exit, pick_scatter_destination};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        validate_world_places(&objects).expect("spider den map validates");
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            objects,
+            Some(start.clone()),
+        );
+
+        // Reach Dry Mound via swamp puzzle route.
+        session.go("north").unwrap();
+        session.go("down").unwrap();
+        session.go("north").unwrap();
+        session.go("east").unwrap();
+        session.go("south").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Dry Mound"
+        );
+
+        let plaque = session.with_inventory(|ctx| read_item(ctx, "plaque")).unwrap();
+        assert!(plaque.contains("SILK"));
+
+        let entry_msg = session.go("in").unwrap();
+        assert!(
+            entry_msg.contains("Webbed Threshold") || entry_msg.contains("wet silk")
+        );
+
+        let wrong_turn = session.go("east").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Webbed Threshold",
+            "gloom crawl loops silently to the threshold"
+        );
+        assert!(
+            !wrong_turn.to_lowercase().contains("gloom"),
+            "dead-end names should not appear on silent loop"
+        );
+
+        session.go("north").unwrap();
+        let silk_read = session.with_inventory(|ctx| read_item(ctx, "marker")).unwrap();
+        assert!(silk_read.contains("SILK"));
+
+        let cocoon_break = session.with_inventory(|ctx| break_item(ctx, "cocoon")).unwrap();
+        assert!(
+            cocoon_break.contains("slash") || cocoon_break.contains("collapse"),
+            "cocoon break: {cocoon_break}"
+        );
+
+        session.go("east").unwrap();
+        let egg_read = session.with_inventory(|ctx| read_item(ctx, "marker")).unwrap();
+        assert!(egg_read.contains("EGG"));
+
+        let sac_break = session.with_inventory(|ctx| break_item(ctx, "egg sac")).unwrap();
+        assert!(
+            sac_break.contains("tear") || sac_break.contains("rupture"),
+            "egg sac break: {sac_break}"
+        );
+        assert!(
+            sac_break.contains("notice") || sac_break.contains("fang key"),
+            "egg sac should drop brood fang key: {sac_break}"
+        );
+
+        session.with_inventory(|ctx| take_item(ctx, "fang key")).unwrap();
+
+        session.go("south").unwrap();
+        session.with_inventory(|ctx| unlock_container(ctx, "brood gate", None)).unwrap();
+        let west_msg = session.go("west").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Crown of the Brood",
+            "unlocked gate should allow passage west: {west_msg}"
+        );
+
+        let queen_id = ObjectId::new("npc:brood-queen-001");
+        session.objects_mut(|objects| {
+            objects.get_mut(&queen_id).unwrap().set_property_int("health", 1);
+        });
+
+        let combat = session
+            .with_inventory(|ctx| {
+                attack_creature(
+                    ctx.dispatch,
+                    ctx.player_id,
+                    ctx.room_id,
+                    ctx.objects,
+                    ctx.anatomy,
+                    ctx.dirty.as_deref_mut(),
+                    "brood queen",
+                )
+            })
+            .unwrap();
+        assert!(
+            combat.lines.iter().any(|l| l.contains("corpse") || l.contains("collapses")),
+            "brood queen should be defeatable: {:?}",
+            combat.lines
+        );
+        assert!(
+            combat.lines.iter().any(|l| l.contains("web slackens")),
+            "brood queen on_kill should narrate: {:?}",
+            combat.lines
+        );
+
+        let crown_location = session.current_location().unwrap().clone();
+        let hoard_id = session
+            .objects()
+            .values()
+            .find(|o| {
+                o.name == "Brood Treasure Hoard"
+                    && o.is_container()
+                    && !o.is_deleted
+                    && o.location.as_ref() == Some(&crown_location)
+            })
+            .map(|o| o.id.clone())
+            .expect("brood hoard at crown");
+
+        let reward_msg =
+            session.with_inventory(|ctx| open_container(ctx, "hoard")).unwrap();
+        assert!(
+            reward_msg.contains("find"),
+            "opening brood hoard should spawn loot: {reward_msg}"
+        );
+
+        let reward_names = [
+            "Mithril Shard Vest",
+            "Spider-Silk Cloak",
+            "Fang of the Brood",
+            "Phial of Starlight",
+            "Boots of Carrying",
+            "Vitality Band",
+        ];
+        let graph = session.objects();
+        let hoard = graph.get(&hoard_id).unwrap();
+        let spawned: Vec<_> = hoard
+            .container_contents()
+            .iter()
+            .filter_map(|id| graph.get(id))
+            .collect();
+        assert!(
+            spawned
+                .iter()
+                .any(|item| reward_names.contains(&item.name.as_str())),
+            "brood hoard should hold high-value loot"
+        );
+
+        let crown = session
+            .object(session.current_location().unwrap())
+            .unwrap()
+            .clone();
+        let scatter_dest = pick_scatter_destination(&crown, &player_id, &graph)
+            .expect("scatter destination");
+        let escape_targets = ["Forest Path", "West Clearing", "Dry Mound"];
+        assert!(
+            graph
+                .get(&scatter_dest)
+                .map(|o| escape_targets.contains(&o.name.as_str()))
+                .unwrap_or(false),
+            "scatter lands in main world or swamp"
+        );
+
+        let exit_msg = session.go("out").unwrap();
+        let landing = session.current_location().unwrap().clone();
+        let landing_obj = session.object(&landing).unwrap();
+        assert!(
+            escape_targets.contains(&landing_obj.name.as_str()),
+            "out exit should leave the den, got {}",
+            landing_obj.name
+        );
+        if landing != scatter_dest {
+            assert!(
+                exit_msg.contains("spit you out") || exit_msg.contains("head out"),
+                "unexpected exit message: {exit_msg}"
+            );
+        }
+
+        let crown_exits = crown.get_exits();
+        let map_target = crown_exits.get("out").unwrap();
+        assert_eq!(
+            apply_scatter_exit(&crown, "out", map_target, &player_id, &graph),
+            scatter_dest
+        );
+
+        let _ = start;
     }
 
     #[tokio::test]
@@ -1562,15 +2043,16 @@ mod tests {
             objects,
             Some(ObjectId::new("area:the-void-001")),
         );
-        open_container(&mut session.inventory_context(), "mailbox").unwrap();
-        take_item(&mut session.inventory_context(), "brass key").unwrap();
-        open_container(&mut session.inventory_context(), "chest").unwrap();
-        take_item(&mut session.inventory_context(), "chipped blade").unwrap();
-        wield_item(&mut session.inventory_context(), "blade").unwrap();
+        session.with_inventory(|ctx| open_container(ctx, "mailbox")).unwrap();
+        session.with_inventory(|ctx| take_item(ctx, "brass key")).unwrap();
+        session.with_inventory(|ctx| open_container(ctx, "chest")).unwrap();
+        session.with_inventory(|ctx| take_item(ctx, "chipped blade")).unwrap();
+        session.with_inventory(|ctx| wield_item(ctx, "blade")).unwrap();
 
         let player = session.object(&player_id).unwrap();
+        let graph = session.objects();
         assert_eq!(
-            creature_effective_stat(player, "strength", session.objects(), &anatomy),
+            creature_effective_stat(&player, "strength", &graph, &anatomy),
             12
         );
     }
@@ -1698,52 +2180,53 @@ mod tests {
         let move_out = session.go("north").unwrap();
         assert!(move_out.contains("trees seem to lean closer"));
 
-        let damage_msg = {
-            let ctx = session.inventory_context();
-            damage_creature(
-                ctx.player_id,
-                ctx.room_id,
-                ctx.objects,
-                ctx.anatomy,
-                ctx.dirty,
-                "path watcher",
-                40,
-            )
-            .unwrap()
-        };
+        let damage_msg = session
+            .with_inventory(|ctx| {
+                damage_creature(
+                    ctx.player_id,
+                    ctx.room_id,
+                    ctx.objects,
+                    ctx.anatomy,
+                    ctx.dirty.as_deref_mut(),
+                    "path watcher",
+                    40,
+                )
+            })
+            .unwrap();
         assert!(damage_msg.contains("damage") || damage_msg.contains("stagger"));
         let watcher = session.object(&npc_id).unwrap();
-        assert_eq!(creature_health(watcher), 60);
+        assert_eq!(creature_health(&watcher), 60);
 
-        {
-            let ctx = session.inventory_context();
-            damage_creature(
-                ctx.player_id,
-                ctx.room_id,
-                ctx.objects,
-                ctx.anatomy,
-                ctx.dirty,
-                "self",
-                90,
-            )
+        session
+            .with_inventory(|ctx| {
+                damage_creature(
+                    ctx.player_id,
+                    ctx.room_id,
+                    ctx.objects,
+                    ctx.anatomy,
+                    ctx.dirty.as_deref_mut(),
+                    "self",
+                    90,
+                )
+            })
             .unwrap();
-        }
         let wounded = session.object(&player_id).unwrap();
-        assert_eq!(creature_health(wounded), 10);
-        assert!(!creature_is_defeated(wounded));
+        assert_eq!(creature_health(&wounded), 10);
+        assert!(!creature_is_defeated(&wounded));
 
         let display_ctx = session.display_context(DisplayMode::Player);
-        let watcher_describe = session.object(&npc_id).unwrap().describe(&display_ctx);
+        let watcher_obj = session.object(&npc_id).unwrap();
+        let watcher_describe = watcher_obj.describe(&display_ctx);
         assert!(watcher_describe.contains("wounded") || watcher_describe.contains("health"));
 
         let mut encumbered_player = session.object(&player_id).expect("player").clone();
         apply_effect(&mut encumbered_player, "weary", &world.anatomy);
-        session
-            .objects_mut()
-            .insert(player_id.clone(), encumbered_player);
+        session.objects_mut(|objects| {
+            objects.insert(player_id.clone(), encumbered_player);
+        });
         let weary_player = session.object(&player_id).unwrap();
         assert_eq!(
-            crate::creature::effect_encumbrance_factor(weary_player),
+            crate::creature::effect_encumbrance_factor(&weary_player),
             1.1
         );
     }
@@ -1786,11 +2269,13 @@ mod tests {
             "travel chest should have a loot spawner attached"
         );
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&start),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -1873,13 +2358,12 @@ mod tests {
             Some(start),
         );
 
-        {
-            let mut ctx = session.inventory_context();
-            open_container(&mut ctx, "mailbox").unwrap();
-            take_item(&mut ctx, "brass key").unwrap();
-            open_container(&mut ctx, "chest").unwrap();
-            take_item(&mut ctx, "whisper charm").unwrap();
-        }
+        session.with_inventory(|ctx| {
+            open_container(ctx, "mailbox").unwrap();
+            take_item(ctx, "brass key").unwrap();
+            open_container(ctx, "chest").unwrap();
+            take_item(ctx, "whisper charm").unwrap();
+        });
 
         let moon_entry = session.go("north").unwrap();
         session.go("in").unwrap();
@@ -1912,10 +2396,7 @@ mod tests {
             "pot spawner should seed a mist wisp on enter"
         );
 
-        let break_msg = {
-            let mut ctx = session.inventory_context();
-            break_item(&mut ctx, "pot").unwrap()
-        };
+        let break_msg = session.with_inventory(|ctx| break_item(ctx, "pot")).unwrap();
 
         assert!(break_msg.contains("smash the clay pot"));
         assert!(
@@ -1928,7 +2409,7 @@ mod tests {
             "broken pot should be removed from play"
         );
         assert!(
-            spawners_for_target(&pot_id, session.objects()).is_empty(),
+            spawners_for_target(&pot_id, &session.objects()).is_empty(),
             "pot creature spawner should be destroyed"
         );
 
@@ -2004,17 +2485,17 @@ mod tests {
             Some(clearing),
         );
 
-        open_container(&mut session.inventory_context(), "mailbox").unwrap();
-        take_item(&mut session.inventory_context(), "brass key").unwrap();
-        open_container(&mut session.inventory_context(), "chest").unwrap();
-        take_item(&mut session.inventory_context(), "whisper charm").unwrap();
+        session.with_inventory(|ctx| open_container(ctx, "mailbox")).unwrap();
+        session.with_inventory(|ctx| take_item(ctx, "brass key")).unwrap();
+        session.with_inventory(|ctx| open_container(ctx, "chest")).unwrap();
+        session.with_inventory(|ctx| take_item(ctx, "whisper charm")).unwrap();
 
         session.go("north").unwrap();
         session.go("in").unwrap();
         session.go("north").unwrap();
 
-        let moon_npcs: Vec<_> = session
-            .objects()
+        let graph = session.objects();
+        let moon_npcs: Vec<_> = graph
             .values()
             .filter(|o| {
                 o.object_type() == "npc"
@@ -2071,23 +2552,26 @@ mod tests {
             objects,
             Some(forest_path.clone()),
         );
-        session.objects_mut().get_mut(&player_id).unwrap().location = Some(forest_path.clone());
-        session
-            .objects_mut()
-            .get_mut(&npc_id)
-            .unwrap()
-            .set_property_int("health", 1);
+        session.objects_mut(|objects| {
+            objects.get_mut(&player_id).unwrap().location = Some(forest_path.clone());
+        });
+        session.objects_mut(|objects| {
+            objects.get_mut(&npc_id).unwrap().set_property_int("health", 1);
+        });
 
-        let ctx = session.inventory_context();
-        let outcome = attack_creature(
-            ctx.player_id,
-            ctx.room_id,
-            ctx.objects,
-            ctx.anatomy,
-            ctx.dirty,
-            "path watcher",
-        )
-        .unwrap();
+        let outcome = session
+            .with_inventory(|ctx| {
+                attack_creature(
+                    ctx.dispatch,
+                    ctx.player_id,
+                    ctx.room_id,
+                    ctx.objects,
+                    ctx.anatomy,
+                    ctx.dirty.as_deref_mut(),
+                    "path watcher",
+                )
+            })
+            .unwrap();
         assert!(outcome.lines.iter().any(|l| l.contains("corpse")));
         assert!(
             outcome

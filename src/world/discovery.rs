@@ -8,6 +8,7 @@ use crate::mudl::AnatomyRegistry;
 use crate::mudl::trigger_def::events;
 use crate::object::{Object, ObjectId};
 
+use super::dispatch_guard::DispatchStack;
 use super::events::{execute_event, EventContext, EventOutcome};
 
 fn mix_seed(parts: &[&str]) -> u64 {
@@ -80,6 +81,7 @@ fn hidden_objects_in_room<'a>(
 
 /// Reveal hidden objects in `room_id` and fire `on_discovered` triggers on each.
 pub fn run_object_discovery_on_look(
+    dispatch: &mut DispatchStack,
     room_id: &ObjectId,
     player_id: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
@@ -133,6 +135,7 @@ pub fn run_object_discovery_on_look(
         let display = obj.name.to_lowercase();
         outcome.push_line(format!("You notice {display} here."));
         outcome.append(execute_event(
+            dispatch,
             events::ON_DISCOVERED,
             &EventContext {
                 actor_id: player_id.clone(),
@@ -150,6 +153,7 @@ pub fn run_object_discovery_on_look(
 
 /// Unified perception pass for creatures and hidden objects when the player looks around.
 pub fn run_discovery_on_look(
+    dispatch: &mut DispatchStack,
     room_id: &ObjectId,
     player_id: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
@@ -164,7 +168,7 @@ pub fn run_discovery_on_look(
         outcome.mark_dirty(&id);
     }
     outcome.append(run_object_discovery_on_look(
-        room_id, player_id, objects, anatomy,
+        dispatch, room_id, player_id, objects, anatomy,
     ));
     outcome
 }
@@ -193,6 +197,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -217,6 +223,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -233,6 +241,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -245,7 +255,14 @@ mod tests {
         ]);
 
         assert!(!object_visible_to_player(objects.get(&cache_id).unwrap()));
-        let outcome = run_object_discovery_on_look(&room_id, &player_id, &mut objects, &anatomy);
+        let mut dispatch = DispatchStack::default();
+        let outcome = run_object_discovery_on_look(
+            &mut dispatch,
+            &room_id,
+            &player_id,
+            &mut objects,
+            &anatomy,
+        );
         assert!(outcome.lines.iter().any(|l| l.contains("supply cache")));
         assert!(outcome.lines.iter().any(|l| l.contains("kneel")));
         assert!(objects

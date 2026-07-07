@@ -2,7 +2,7 @@
 
 **MUDL** — The domain-specific language for building programmable, self-modifying MUD/MOO worlds in this project.
 
-**Status**: Draft / MVP skeleton. This is a living document that will evolve with the interpreter.
+**Status**: Living spec — tracks implemented MUDL syntax (loader + `@trigger` scripts). Full sandboxed verb runtime is planned.
 
 ## Goals
 - Accessible to non-programmers (builders) while powerful enough for complex behaviors.
@@ -44,7 +44,9 @@ property "bag_of_holding" on container {
     }
 }
 ```
-### 3. Verbs / BehaviorsExecutable actions attached to objects.
+### 3. Verbs / Behaviors
+
+Executable actions attached to objects.
 
 ```mudl
 verb "bake bread" on kitchen {
@@ -87,10 +89,40 @@ Named triggers that run scripted lines when something happens in the world. Buil
 | `narrate` / `say` / `message` | `narrate The air chills.` | Player-facing text |
 | `emote` | `emote shudders.` | Item: `The <item> …`; place: atmospheric |
 | `react` | `react flee` / `react attack` | Creature reactions (flee, attack, greet, warn) |
-| `damage` / `heal` | `heal 5` | Adjust actor health |
-| `mod-stat` / `mod-skill` | `mod-stat strength 2` | Permanent stat/skill bump on actor |
-| `teleport` | `teleport haunted-entry` | Move actor to a place `base_name` |
-| `spawn` | `spawn mist-wisp` | Spawn NPC from a `@spawn-template` in the world |
+| `damage` / `heal` | `heal 5` / `damage host 12` | Adjust health on `actor` (default), `host`, or `target` |
+| `mod-stat` / `mod-skill` | `mod-stat actor strength 2` | Permanent stat/skill bump |
+| `set-property` | `set-property host player_discovered true` | Set a bool/int/string property |
+| `grant-effect` | `grant-effect actor regeneration` | Apply a defined `@effect` to a creature |
+| `remove-effect` | `remove-effect actor poisoned` | Remove a named effect |
+| `cure-tag` | `cure-tag actor poison` | Remove all effects matching a condition/cure tag |
+| `teleport` | `teleport haunted-entry` | Move `actor`/`host`/`target` to a place `base_name` |
+| `spawn` | `spawn mist-wisp` / `spawn item trail-rations` | Spawn creature template or item prototype in room |
+| `when` / `if` | `when health below 30 then heal 15` | Conditional — runs nested action when true |
+| `stop` | `stop` | Halt remaining handlers for this event |
+
+**Conditionals** (`when … then …`):
+
+| Condition | Example |
+|-----------|---------|
+| Health | `when health below 30 then heal 15` |
+| Stat / skill | `when skill survival at_least 2 then narrate …` |
+| Property | `when property player_discovered then narrate …` |
+| Effect | `when effect actor poisoned then cure-tag actor poison` |
+| Condition tag | `when condition actor poison then narrate You feel ill.` |
+| Chance | `when chance 40 then spawn mist-wisp` (deterministic roll) |
+| Negation | `when not effect actor regeneration then grant-effect actor regeneration` |
+
+Optional subject prefix on conditions and targeted actions: `actor`, `host`, `target`.
+
+**Who is who at runtime:**
+
+| Role | Meaning |
+|------|---------|
+| **Actor** | Who caused the event (usually the entering player or attacker) |
+| **Host** | Whose `@trigger` handlers are running (the room, item, or creature the script is attached to) |
+| **Target** | Optional third party (e.g. combat victim on `on_kill`) |
+
+**Validation & errors:** `@trigger add` validates event names (`on_*`) and script verbs via `validate_event_name` / `validate_script_code`. At runtime, unrecognized script text is recorded in `EventOutcome::errors` (not shown to players). Inactive hosts skip dispatch with an error entry. Re-entrant event cycles and excessive nesting are rejected. Use `@trigger test` for a narrative dry-run without side effects.
 
 `on_kill` fires on the **victim** (killer as actor) and on the **killer** when the killer has handlers (victim as actor). `on_discovered` runs after perception reveals a hidden creature or object — via `@trigger` on the host (template `on_discovered=` lines are converted automatically at bootstrap). `on_harvest` fires when a player harvests a `harvestable=true` object; attached `@resource-spawner` blocks may drop renewable materials into the room.
 
@@ -121,6 +153,21 @@ exits:
 ```
 
 Use **`@trigger`** for all creature scripts (say, emote, narrate, react). `@behavior-template` / `@use-behavior` supply AI tactics (`react`, `attack_damage`, `awareness_check`); inline `@behavior … react …` still works for react-only overrides. Legacy `@behavior on_enter say …` is migrated to triggers at bootstrap but prefer `@trigger` in new content.
+
+**Runtime builder command** (REPL / wizard):
+
+```
+@trigger help
+@trigger list [target]                    # default target: here (current room)
+@trigger <target> <event> <script>        # add trigger
+@trigger add <target> <event> <script>
+@trigger remove <target> <event> [n]    # remove #n (default: last)
+@trigger clear <target> [event]
+@trigger set <target> <event> <n> <script>
+@trigger test <target> <event>            # dry-run narrative preview
+```
+
+Targets: object/creature/place name, `here` / `.` (current room), `me` / `self` (player). Scripts are validated at attach time (unknown verbs and malformed `when … then …` are rejected). Changes persist to the live object immediately.
 ### 5. Built-in Primitives
 * say(msg), tell(player, msg)
 * move(thing, destination)
@@ -195,7 +242,7 @@ Each world uses a flat set of `.mudl` files under `worlds/<name>/`, composed fro
   starting_location=the-void
 @end
 @include map.mudl
-@import expansions/haunted_forest.mudl
+@import expansions/haunted_forest/haunted_forest.mudl
 @include creatures.mudl
 @include players.mudl
 @include items.mudl
@@ -221,11 +268,13 @@ Self-contained `.mudl` files bundle areas, items, and hooks for drop-in world ex
 Import from `world.mudl`:
 
 ```mudl
-@import expansions/haunted_forest.mudl
-@import https://example.com/mudl/expansions/haunted_forest.mudl
+@import expansions/haunted_forest/haunted_forest.mudl
+@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl
 ```
 
 The host world keeps minimal map hooks (e.g. `forest-path` with `in: haunted-entry`); the expansion places items and defines puzzle areas.
+
+Per-module docs (self-contained install & play guides): [expansions/README.md](modules/default/worlds/default_world/expansions/README.md).
 
 Places may set `loop_to: <base_name>` so entering that room silently returns the player to another place (no movement message). Useful for maze wrong turns.
 - Set `MUDL_MODULE=modules/default` (or `MUDL_UNIVERSE` to a specific file) to load a universe.
@@ -276,12 +325,27 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
   mod_stat_dexterity=-2
   mod_skill_stealth=-1
 @end
+
+@effect poisoned
+  condition_type=poison
+  cure_tags=antidote,herb
+  damage_on_tick=4
+  duration_ticks=8
+  tick_on=on_enter
+@end
+
+@effect dew_blessing
+  heal_on_tick=3
+  duration_ticks=5
+  tick_on=on_enter
+@end
 ```
 
 - **`@stat` / `@skill`** — free-form names; core stats are `strength`, `dexterity`, `constitution`, `intelligence`, `wisdom`, `charisma`. Core skills include `combat`, `stealth`, `crafting`, `survival`. Builders may define custom stats/skills on any `@creature`.
 - **`max_health`** — template value scaled by constitution: each point above 10 adds 5 max health (constitution 12 → +10 health on a 100 template).
 - **`base_max_weight`** plus effective `strength` sets carry capacity (equipment and effects stack on top).
-- **`@effect`** defines reusable conditions; creatures track `active_effects` at runtime. `mod_stat_*` and `mod_skill_*` apply while active.
+- **`@effect`** defines reusable buffs and **conditions**. Creatures track `active_effects` at runtime; `mod_stat_*` and `mod_skill_*` apply while active.
+- **Timed conditions** — `condition_type` and `cure_tags` for `when condition` / `cure-tag`; `damage_on_tick` / `heal_on_tick` for DoT/HoT; `duration_ticks` (0 = until cured); `tick_on` (default `on_enter`). Ticks advance on room entry and persist in `condition_ticks`.
 - **`@slot` effect=`** — optional slot-tagged body-plan conditions (future wound hooks).
 
 **`examine self`** shows effective stats and skills (gear and active effects included), e.g. `You are Strength 12 (+2), Constitution 10. Your skills are Combat 1, Survival 1 (+1).`
@@ -440,6 +504,24 @@ Wizard vitals (testing): `@damage <creature> [amount]`, `@heal <creature> [amoun
 @end
 ```
 
+**Timed schedules** (`@schedule` — periodic host events on room-enter ticks):
+
+```mudl
+@schedule haunted-mist-weather
+  target=haunted-mist
+  interval=2
+  event=on_weather
+@end
+
+type: area
+base_name: haunted-mist
+@trigger on_weather narrate The mist thickens, swallowing familiar landmarks.
+```
+
+- `interval` / `every` — fire every Nth `on_enter` tick for that room (shared scheduler).
+- `event` — custom event name; matching `@trigger` scripts on the target run (no subscriber re-entry).
+- `stop` / `cancel` in a trigger script halts remaining handlers for that dispatch.
+
 **Resource spawners** (renewable harvest nodes for crafting materials):
 
 ```mudl
@@ -521,7 +603,7 @@ MUDL separates **what the world knows** from **what players read**. The engine t
 | Tier | Audience | Commands | Shows |
 |------|----------|----------|-------|
 | **Player** | Everyone playing | `look`, `take`, `create`, `go`, `inventory`, … | Immersive prose only — names, descriptions, exits, natural inventory |
-| **Builder** | World authors | `examine`, `add_prop`, `add_verb`, `load`, `save`, … | Contextual detail — owners, properties, verbs, exit *names* (not raw IDs) |
+| **Builder** | World authors | `@examine`, `@set`, `@unset`, `load`, `save`, `@trigger`, … | Contextual detail — owners, properties, verbs, exit *names* (not raw IDs) |
 | **Debug** | Engine developers | `@dump`, logs (`RUST_LOG`) | Full JSON, IDs, persistence paths, bootstrap diagnostics |
 
 **Rules:**

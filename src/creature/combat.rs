@@ -18,6 +18,7 @@ use crate::creature::vitality::{
 };
 use crate::display::{resolve_object, ResolveScope, TargetResolution};
 
+use crate::world::dispatch_guard::DispatchStack;
 use crate::world::execute_kill_events;
 use crate::mudl::{AnatomyRegistry, CreatureReact};
 use crate::object::{
@@ -370,6 +371,8 @@ fn create_creature_corpse(
         properties: HashMap::new(),
         verbs: HashMap::new(),
         event_handlers: HashMap::new(),
+        revision: 0,
+        updated_at: None,
         is_deleted: false,
         deleted_at: None,
     };
@@ -415,20 +418,33 @@ fn strip_creature_gear(
     outcome.mark_dirty(creature_id);
 }
 
+struct NpcDeathContext<'a> {
+    dispatch: &'a mut DispatchStack,
+    victim_id: &'a ObjectId,
+    killer_id: &'a ObjectId,
+    room_id: &'a ObjectId,
+    owner: &'a ObjectId,
+}
+
 fn handle_npc_death(
-    victim_id: &ObjectId,
-    killer_id: &ObjectId,
-    room_id: &ObjectId,
-    owner: &ObjectId,
+    ctx: NpcDeathContext<'_>,
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
     outcome: &mut AttackOutcome,
 ) {
+    let NpcDeathContext {
+        dispatch,
+        victim_id,
+        killer_id,
+        room_id,
+        owner,
+    } = ctx;
     let victim = objects.get(victim_id).cloned().unwrap();
     let display = victim.name.to_lowercase();
     let had_gear = !victim.carried_body_items().is_empty();
 
-    let kill_outcome = execute_kill_events(victim_id, killer_id, room_id, objects, Some(anatomy));
+    let kill_outcome =
+        execute_kill_events(dispatch, victim_id, killer_id, room_id, objects, Some(anatomy));
     for line in kill_outcome.lines {
         outcome.push_line(line);
     }
@@ -592,6 +608,7 @@ fn format_player_stagger(after: i64, max: i64) -> Option<String> {
 
 /// Player `attack <creature>` — turn-based exchange with NPC counter-attacks.
 pub fn attack_creature(
+    dispatch: &mut DispatchStack,
     actor_id: &ObjectId,
     room_id: Option<&ObjectId>,
     objects: &mut HashMap<ObjectId, Object>,
@@ -739,10 +756,13 @@ pub fn attack_creature(
         if after == 0 {
             if target.object_type() == "npc" {
                 handle_npc_death(
-                    &target_id,
-                    actor_id,
-                    room_id,
-                    &owner,
+                    NpcDeathContext {
+                        dispatch,
+                        victim_id: &target_id,
+                        killer_id: actor_id,
+                        room_id,
+                        owner: &owner,
+                    },
                     objects,
                     anatomy,
                     &mut outcome,
@@ -942,6 +962,7 @@ pub fn format_heal_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::DispatchStack;
     use crate::creature::behavior::{creature_behaviors_to_property, CreatureBehaviorEntry};
     use crate::creature::vitality::init_creature_vitality;
     use crate::mudl::{BodySlotDef, CreatureDef, CreatureReact, PlayerTemplate, SlotType};
@@ -976,6 +997,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -1014,6 +1037,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -1134,7 +1159,9 @@ mod tests {
         let anatomy = AnatomyRegistry::default();
 
         for _ in 0..5 {
+            let mut dispatch = DispatchStack::default();
             let _ = attack_creature(
+                &mut dispatch,
                 &actor,
                 Some(&room),
                 &mut objects,
@@ -1172,6 +1199,7 @@ mod tests {
             attack_damage: Some(12),
             awareness_check: None,
             perception: None,
+            grant_effect_on_hit: None,
         }]));
         let mut objects = HashMap::from([
             (player.id.clone(), player),
@@ -1179,7 +1207,9 @@ mod tests {
         ]);
         let anatomy = AnatomyRegistry::default();
 
+        let mut dispatch = DispatchStack::default();
         let outcome = attack_creature(
+            &mut dispatch,
             &actor,
             Some(&room),
             &mut objects,
@@ -1219,6 +1249,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -1231,7 +1263,9 @@ mod tests {
         let anatomy = AnatomyRegistry::default();
         let blade_id = blade.id.clone();
 
+        let mut dispatch = DispatchStack::default();
         let outcome = attack_creature(
+            &mut dispatch,
             &actor,
             Some(&room),
             &mut objects,
@@ -1279,6 +1313,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -1296,6 +1332,7 @@ mod tests {
             attack_damage: Some(20),
             awareness_check: None,
             perception: None,
+            grant_effect_on_hit: None,
         }]));
         let mut objects = HashMap::from([
             (player.id.clone(), player),
@@ -1305,7 +1342,9 @@ mod tests {
         let anatomy = AnatomyRegistry::default();
         let vest_id = vest.id.clone();
 
+        let mut dispatch = DispatchStack::default();
         let outcome = attack_creature(
+            &mut dispatch,
             &actor,
             Some(&room),
             &mut objects,
@@ -1346,7 +1385,9 @@ mod tests {
         ]);
         let anatomy = AnatomyRegistry::default();
 
+        let mut dispatch = DispatchStack::default();
         let err = attack_creature(
+            &mut dispatch,
             &actor,
             Some(&room),
             &mut objects,
@@ -1379,6 +1420,7 @@ mod tests {
             attack_damage: Some(8),
             awareness_check: None,
             perception: None,
+            grant_effect_on_hit: None,
         }]));
         let mut objects = HashMap::from([
             (player.id.clone(), player),
@@ -1386,7 +1428,9 @@ mod tests {
         ]);
         let anatomy = AnatomyRegistry::default();
 
+        let mut dispatch = DispatchStack::default();
         let outcome = attack_creature(
+            &mut dispatch,
             &actor,
             Some(&room),
             &mut objects,

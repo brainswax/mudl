@@ -236,14 +236,10 @@ pub async fn dig_place<P: Persistence>(
         request.options.return_exit.as_deref(),
     )?;
 
-    factory
-        .persistence()
-        .save_object(&from_updated)
+    crate::persistence::save_and_sync(factory.persistence(), &mut from_updated)
         .await
         .map_err(|e| PlaceBuildError::Validation(e.to_string()))?;
-    factory
-        .persistence()
-        .save_object(&new_place)
+    crate::persistence::save_and_sync(factory.persistence(), &mut new_place)
         .await
         .map_err(|e| PlaceBuildError::Validation(e.to_string()))?;
 
@@ -296,6 +292,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         }
@@ -381,8 +379,10 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let clearing = bare_place("area:clearing-001", "West Clearing");
-        factory.persistence().save_object(&clearing).await.unwrap();
+        let mut clearing = bare_place("area:clearing-001", "West Clearing");
+        crate::persistence::save_and_sync(factory.persistence(), &mut clearing)
+            .await
+            .unwrap();
         let objects = HashMap::from([(clearing.id.clone(), clearing.clone())]);
 
         dig_place(

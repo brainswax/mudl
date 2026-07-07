@@ -1,0 +1,625 @@
+# Poisonous Swamp — self-contained expansion pack for Project MUDL.
+#
+# Docs: poisonous_swamp/README.md (teaser · install · expect · extensions)
+#
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp/poisonous_swamp.mudl
+# @import expansions/poisonous_swamp/poisonous_swamp.mudl
+#
+# Host hooks: forest-path (down → swamp-entry), the-void optional — see README.
+
+@expansion poisonous_swamp
+  name=Poisonous Swamp
+  version=1
+  integrates=forest-path,the-void
+@end
+
+# --- Swamp-specific effects & behaviors ---
+
+@effect reed_breathing
+  mod_encumbrance=0.92
+  regen_on_enter=1
+@end
+
+@effect bog_resilience
+  mod_max_health=8
+  mod_skill_survival=2
+@end
+
+@condition swamp_venom
+  condition=poison
+  cure_tag=poison
+  damage_on_tick=3
+  tick_on=on_enter
+  duration=10
+  mod_stat_dexterity=-1
+@end
+
+@condition bog_miasma
+  condition=poison
+  cure_tag=poison
+  damage_on_tick=2
+  tick_on=on_enter
+  duration=6
+@end
+
+@condition bog_bleeding
+  condition=bleed
+  cure_tag=bleed
+  damage_on_tick=2
+  tick_on=on_enter
+  duration=8
+@end
+
+@behavior-template venomous
+  react=attack
+  awareness_check=true
+  perception=11
+  attack_damage=9
+  grant_effect_on_hit=swamp_venom
+  on_discovered=emote lunges from beneath the scum with startling speed.
+@end
+
+@behavior-template gas_wisp
+  react=ignore
+  on_enter=emote bobs through the vapors, too faint to catch.
+@end
+
+# --- Prototypes ---
+
+@prototype swamp-warning-post
+  name=Warning Post
+  description=A cedar post driven into the path. Green slime has climbed halfway up the grain.
+  readable=true
+  read_text=STINKING SINK — descent at your own risk. The bog keeps to a taste: BITTER, then SWEET, then DRY, then DEEP. Reed masks the worst of it. Smash what swells. Do not trust the lights.
+  weight=15.0
+  volume=10.0
+  pocketable=false
+  alias=post
+  alias=warning
+  alias=sign
+@end
+
+@prototype swamp-way-marker
+  name=Bog Marker
+  description=A driftwood stake driven into peat, its face carved with a single word.
+  readable=true
+  weight=8.0
+  volume=6.0
+  pocketable=false
+  alias=marker
+  alias=stake
+@end
+
+@prototype reed-breather-mask
+  name=Reed Breather
+  description=A mask woven from dried reed and pitch. It smells of tannin and stagnant water.
+  is_wearable=true
+  wear_slot=head
+  @grant-effect reed_breathing
+  weight=0.8
+  volume=0.6
+  pocketable=true
+  alias=mask
+  alias=reed mask
+  alias=breather
+@end
+
+@prototype bitter-root-node
+  name=Bitter Root Cluster
+  description=Pale tubers knotted in black mud. They smell sharp enough to sting the eyes.
+  harvestable=true
+  weight=4.0
+  volume=3.0
+  pocketable=false
+  alias=root
+  alias=bitter root
+@end
+
+@prototype sweet-reed-bed
+  name=Sweet Reed Bed
+  description=Tall reeds with honey-colored seed heads. The stalks feel oddly warm.
+  harvestable=true
+  weight=3.0
+  volume=4.0
+  pocketable=false
+  alias=reed
+  alias=reeds
+  alias=sweet reed
+@end
+
+@prototype spore-pod
+  name=Spore Pod
+  description=A bladder of fungus swollen with green dust. It pulses when you breathe near it.
+  breakable=true
+  break_text=You split the spore pod. Dry curls of fungus spill into your palm.
+  @trigger on_break emote bursts in a choking green cloud, then stills.
+  @trigger on_break grant-effect actor bog_miasma
+  @trigger on_break when chance 35 then spawn gas-wisp
+  weight=1.5
+  volume=1.5
+  pocketable=false
+  alias=pod
+  alias=spore pod
+  alias=fungus
+@end
+
+@prototype antidote-salve
+  name=Antidote Salve
+  description=A clay jar of grey paste that smells of crushed root and river mud.
+  stackable=true
+  stack_count=2
+  consumable=true
+  weight=0.4
+  volume=0.3
+  pocketable=true
+  alias=salve
+  alias=antidote
+  @trigger on_use narrate The paste coats your tongue with bitter tannin — the swamp's grip loosens.
+  @trigger on_use cure-tag actor poison
+@end
+
+@prototype bog-heart-chest
+  name=Heartwood Coffer
+  description=A coffer grown from black peat and pale roots. The lid yields without a lock — as if the bog decided you paid in blisters.
+  is_container=true
+  is_open=false
+  locked=false
+  capacity=5
+  max_weight=60
+  weight=14.0
+  volume=18.0
+  pocketable=false
+  alias=coffer
+  alias=heartwood coffer
+  alias=reward chest
+@end
+
+@prototype reed-walker-boots
+  name=Reed-Walker Boots
+  description=Boots lacquered with pitch and lined with woven reed. They keep your footing in slick peat.
+  is_wearable=true
+  wear_slot=left_foot
+  mod_max_weight=15
+  mod_encumbrance=0.88
+  @mod-skill survival 2
+  weight=2.5
+  volume=2.5
+  pocketable=false
+  alias=reed boots
+  alias=walker boots
+@end
+
+@prototype hidden-antidote-cache
+  name=Mossy Cache
+  description=A bundle wrapped in oiled cloth and sunk half into the peat.
+  hidden_until_discovered=true
+  discovery_stealth=7
+  is_container=true
+  is_open=true
+  capacity=2
+  max_weight=15
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=cache
+@end
+
+@prototype gas-trap-plate
+  name=Sunken Grate
+  description=An iron grate flush with the water. Vapors seep through in lazy ribbons.
+  readable=true
+  read_text=The metal is warm. Something below exhales on a schedule you cannot predict.
+  weight=25.0
+  volume=15.0
+  pocketable=false
+  alias=grate
+  alias=trap
+@end
+
+# --- Integration items (host world + entry) ---
+
+@item forest-swamp-warning
+  prototype=swamp-warning-post
+  location=forest-path
+@end
+
+# --- Way markers (navigation puzzle: BITTER → SWEET → DRY → DEEP) ---
+
+@item swamp-entry-marker
+  prototype=swamp-way-marker
+  location=swamp-entry
+  description=A stake carved with four words around its rim — bitter, sweet, dry, and deep — each pointing a different way into the fog.
+  read_text=BITTER first. The fen stings before it teaches. SWEET masks the sting. DRY opens what swells. DEEP takes what you earned.
+@end
+
+@item swamp-bitter-marker
+  prototype=swamp-way-marker
+  location=swamp-bitter
+  description=A stake facing east. The carved word reads BITTER in jagged strokes.
+  read_text=BITTER — you tasted it. SWEET lies east where the reeds run warm.
+@end
+
+@item swamp-sweet-marker
+  prototype=swamp-way-marker
+  location=swamp-sweet
+  description=A stake facing south. SWEET is carved deep enough to hold rainwater.
+  read_text=SWEET — the reeds lied kindly. DRY waits south where fungus swells.
+@end
+
+@item swamp-dry-marker
+  prototype=swamp-way-marker
+  location=swamp-dry
+  description=A stake facing west. DRY is carved in cracked letters.
+  read_text=DRY — the pod gave up its curl. DEEP lies west where the warden keeps the heart.
+@end
+
+@item swamp-heart-marker
+  prototype=swamp-way-marker
+  location=swamp-heart
+  description=Four stakes ring a black pool. Every carved face points outward — the path only leaves one way.
+  read_text=DEEP — the bog yields. Step UP when the peat releases you.
+@end
+
+@item swamp-bitter-root
+  prototype=bitter-root-node
+  location=swamp-bitter
+@end
+
+@item swamp-sweet-reed
+  prototype=sweet-reed-bed
+  location=swamp-sweet
+@end
+
+@item swamp-spore-pod
+  prototype=spore-pod
+  location=swamp-dry
+@end
+
+@item swamp-gas-grate
+  prototype=gas-trap-plate
+  location=swamp-gas
+@end
+
+@item swamp-hidden-cache
+  prototype=hidden-antidote-cache
+  location=swamp-sweet
+  @trigger on_discovered narrate You work the bundle free of the peat with a wet sucking sound.
+  @trigger on_discovered spawn item antidote-salve
+@end
+
+@item swamp-heart-coffer
+  prototype=bog-heart-chest
+  location=swamp-heart
+@end
+
+# --- Schedules ---
+
+@schedule swamp-gas-weather
+  target=swamp-gas
+  interval=3
+  event=on_weather
+@end
+
+@schedule swamp-bitter-respawn
+  target=swamp-bitter
+  interval=5
+  event=on_respawn
+@end
+
+# --- Resource spawners ---
+
+@resource-template bitter-harvest
+  prototype=antidote-salve
+  count=1
+@end
+
+@resource-spawner bitter-root-harvest
+  target=swamp-bitter-root
+  trigger=on_harvest
+  chance=0.85
+  max_active=2
+  @entry bitter-harvest weight=1
+@end
+
+@resource-template reed-fiber
+  prototype=trail-rations
+  count=1
+@end
+
+@resource-spawner sweet-reed-harvest
+  target=swamp-sweet-reed
+  trigger=on_harvest
+  chance=0.75
+  max_active=2
+  @entry reed-fiber weight=1
+@end
+
+# --- Creature spawners ---
+
+@spawn-template gas-wisp
+  name=Gas Wisp
+  creature=human
+  @use-behavior gas_wisp
+  @trigger on_enter emote flickers green at the edge of your vision.
+@end
+
+@spawn-template bog-leech
+  name=Bog Leech
+  creature=human
+  @use-behavior venomous
+  @trigger on_enter emote ripples the scum without breaking the surface.
+  @trigger on_discovered react attack
+@end
+
+@spawn-template mire-crawler
+  name=Mire Crawler
+  creature=human
+  @use-behavior lurker
+  @trigger on_discovered emote hauls itself upright, mud sheeting from its shoulders.
+@end
+
+@spawner swamp-bitter-creatures
+  location=swamp-bitter
+  trigger=on_enter
+  chance=0.7
+  max_active=1
+  @entry gas-wisp weight=2
+  @entry bog-leech weight=1
+@end
+
+@spawner swamp-sweet-creatures
+  location=swamp-sweet
+  trigger=periodic
+  periodic_interval=2
+  chance=0.6
+  max_active=1
+  @entry gas-wisp weight=3
+  @entry mire-crawler weight=1
+@end
+
+@spawner swamp-dry-creatures
+  location=swamp-dry
+  trigger=on_enter
+  chance=0.8
+  max_active=1
+  @entry bog-leech weight=2
+  @entry mire-crawler weight=1
+@end
+
+@spawner swamp-gas-wisps
+  location=swamp-gas
+  trigger=on_enter
+  chance=1.0
+  max_active=2
+  @entry gas-wisp weight=1
+@end
+
+# --- Loot spawners ---
+
+@loot-template pod-curl-salve
+  prototype=antidote-salve
+  count=1
+@end
+
+@loot-template pod-curl-rations
+  prototype=trail-rations
+  count=2
+@end
+
+@loot-spawner spore-pod-break-loot
+  target=swamp-spore-pod
+  trigger=on_break
+  once=true
+  chance=1.0
+  max_active=2
+  @entry pod-curl-salve weight=2
+  @entry pod-curl-rations weight=1
+@end
+
+@loot-template shrine-salve
+  prototype=antidote-salve
+  count=1
+@end
+
+@loot-spawner swamp-shrine-offering
+  target=swamp-shrine
+  trigger=on_enter
+  once=true
+  chance=1.0
+  max_active=1
+  @entry shrine-salve weight=1
+@end
+
+@loot-template heart-salve
+  prototype=antidote-salve
+  count=2
+@end
+
+@loot-template heart-mask
+  prototype=reed-breather-mask
+  count=1
+@end
+
+@loot-template heart-boots
+  prototype=reed-walker-boots
+  count=1
+@end
+
+@loot-template heart-band
+  prototype=vitality-band
+  count=1
+@end
+
+@loot-template heart-rations
+  prototype=trail-rations
+  count=3
+@end
+
+@loot-template heart-lantern
+  prototype=iron-lantern
+  count=1
+@end
+
+@loot-spawner swamp-heart-reward
+  target=swamp-heart-coffer
+  trigger=on_open
+  once=true
+  chance=1.0
+  max_active=1
+  @entry heart-salve weight=4
+  @entry heart-mask weight=3
+  @entry heart-boots weight=3
+  @entry heart-band weight=2
+  @entry heart-rations weight=3
+  @entry heart-lantern weight=2
+@end
+
+# --- Fixed NPC (boss-lite warden) ---
+
+@npc bog-warden
+  location=swamp-heart
+  creature=human
+  @use-behavior aggressive
+  @trigger on_enter say The peat gave you back. It will not do so twice.
+  @trigger on_enter when condition poison then say I taste venom on you. The bog shares everything.
+  @trigger on_enter when effect reed_breathing then say Mask or no mask — the deep still wants its due.
+  @trigger on_kill grant-effect actor bog_resilience
+  @trigger on_kill narrate The warden sinks beneath the black water, and the bog exhales in relief.
+@end
+
+# --- Swamp areas ---
+
+type: area
+base_name: swamp-entry
+name: Stinking Threshold
+description: You descend into a bowl of stagnant air. The forest canopy vanishes above a skin of green fog. Every step squelches. Fireflies drift too low, and none of them warm your hands.
+@trigger on_enter narrate The vapors claw at your throat — travel light and keep moving.
+@trigger on_enter when skill survival below 2 then damage actor 4
+exits:
+  north: swamp-bitter
+  east: swamp-gas
+  south: swamp-quicksand
+  west: swamp-wisps
+  up: forest-path
+exit_returns:
+  up: down
+
+type: area
+base_name: swamp-bitter
+name: Bitter Fen
+description: Black water sheets across the peat. Bitter root knots the shallows, and mosquitoes write anxious circles on your skin.
+@trigger on_enter narrate The fen stings your eyes — bitter, honest, impossible to ignore.
+@trigger on_enter when skill survival below 2 then mod-skill actor survival 1
+@trigger on_respawn narrate Fresh tubers breach the mud with a soft pop.
+@trigger on_respawn spawn gas-wisp
+exits:
+  south: swamp-entry
+  east: swamp-sweet
+  north: swamp-snare
+
+type: area
+base_name: swamp-sweet
+name: Sweet Reed Stand
+description: Honey-colored reeds crowd a shelf of firmer ground. The air here tastes almost kind, which in a bog is its own warning.
+@trigger on_enter when health below 50 then heal actor 5
+@trigger on_enter when condition poison then cure-tag actor poison
+@trigger on_enter when condition poison then narrate Sweet reed scent cuts through the venom — the bog grants one courtesy.
+@trigger on_enter narrate Bitter lies west. Dry ground waits south if you trust it.
+exits:
+  west: swamp-bitter
+  south: swamp-dry
+  east: swamp-drown
+
+type: area
+base_name: swamp-dry
+name: Dry Mound
+description: A rare rise of cracked peat where fungus swells in pale bladders. The ground feels almost trustworthy.
+@trigger on_enter narrate Something swollen nearby smells ready to burst.
+@trigger on_enter when chance 30 then spawn mire-crawler
+@trigger on_enter when not effect reed_breathing then grant-effect actor bog_miasma
+exits:
+  north: swamp-sweet
+  west: swamp-heart
+  east: swamp-shrine
+  in: spider-entry
+exit_returns:
+  in: out
+
+type: area
+base_name: swamp-heart
+name: Deep Heart of the Bog
+description: The swamp kneels here around a pool blacker than tar. Roots lace the water like clenched fingers. This is where the bog keeps what it steals.
+@trigger on_enter when health below 70 then heal actor 8
+@trigger on_enter narrate The peat loosens — your lungs remember how to work.
+exits:
+  east: swamp-dry
+  up: forest-path
+scatter_to: forest-path,the-void
+scatter_direction: up
+
+# --- Wrong turns (silent loop back to the threshold) ---
+
+type: area
+base_name: swamp-gas
+name: Gas Pocket
+description: Green vapors coil at ankle height. The grate below breathes warmth you cannot see.
+@trigger on_weather narrate The pocket belches — the vapors thicken until the stakes vanish.
+@trigger on_enter when not effect reed_breathing then grant-effect actor bog_miasma
+@trigger on_enter when effect reed_breathing then narrate The reed mask filters the worst of the vapors.
+exits:
+  out: swamp-entry
+loop_to: swamp-entry
+
+type: area
+base_name: swamp-quicksand
+name: Quicksand Shelf
+description: The peat grips your boots and refuses to explain itself.
+@trigger on_enter damage actor 5
+@trigger on_enter when chance 40 then grant-effect actor bog_bleeding
+exits:
+  out: swamp-entry
+loop_to: swamp-entry
+
+type: area
+base_name: swamp-wisps
+name: Wisp Hollow
+description: Cold lights bob between dead trunks. Each one promises a path; none of them keep the promise.
+@trigger on_enter narrate Cold lights promise shortcuts. The swamp has heard this joke before.
+@trigger on_enter when chance 45 then spawn gas-wisp
+@trigger on_enter when condition poison then damage actor 3
+exits:
+  out: swamp-entry
+loop_to: swamp-entry
+
+type: area
+base_name: swamp-snare
+name: Snare Thicket
+description: Knotted vines hang at throat height, beaded with stagnant water.
+@trigger on_enter damage actor 7
+@trigger on_enter when chance 35 then grant-effect actor bog_bleeding
+exits:
+  out: swamp-entry
+loop_to: swamp-entry
+
+type: area
+base_name: swamp-drown
+name: Drowned Glare
+description: The water shows a route that is not there. Your reflection walks faster than you do.
+@trigger on_enter narrate Your reflection beckons toward a path that is not yours.
+@trigger on_enter when skill survival below 2 then grant-effect actor swamp_venom
+@trigger on_enter when skill survival at_least 4 then narrate You refuse the false path. The bog respects stubbornness.
+exits:
+  out: swamp-entry
+loop_to: swamp-entry
+
+type: area
+base_name: swamp-shrine
+name: Sunken Shrine
+description: A stone bowl holds rainwater the color of old copper. Offerings rot gently at its lip.
+@trigger on_enter narrate Something was left here for travelers who listened.
+@trigger on_enter when health below 40 then heal actor 10
+@trigger on_enter when condition poison then spawn item antidote-salve
+@trigger on_enter when skill survival at_least 3 then mod-skill actor survival 1
+exits:
+  out: swamp-entry
+loop_to: swamp-entry

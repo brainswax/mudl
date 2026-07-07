@@ -373,6 +373,8 @@ fn clone_item_from_prototype(
         properties: proto.properties.clone(),
         verbs: proto.verbs.clone(),
         event_handlers: proto.event_handlers.clone(),
+        revision: 0,
+        updated_at: None,
         is_deleted: false,
         deleted_at: None,
     };
@@ -764,6 +766,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -785,6 +789,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -801,6 +807,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };

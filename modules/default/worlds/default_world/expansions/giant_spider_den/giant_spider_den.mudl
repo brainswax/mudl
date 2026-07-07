@@ -1,0 +1,665 @@
+# Giant Spider Den — self-contained expansion (Shelob-inspired crawl).
+#
+# Docs: giant_spider_den/README.md (teaser · install · expect · extensions)
+#
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/giant_spider_den/giant_spider_den.mudl
+# @import expansions/giant_spider_den/giant_spider_den.mudl
+#
+# Host hooks: swamp-dry (in → spider-entry), forest-path optional — see README.
+
+@expansion giant_spider_den
+  name=Giant Spider Den
+  version=1
+  integrates=swamp-dry,forest-path,the-void
+@end
+
+# --- Den-specific conditions & behaviors ---
+
+@condition web_snare
+  condition=slow
+  cure_tag=slow
+  tick_on=on_enter
+  duration=6
+  mod_encumbrance=1.2
+  mod_stat_dexterity=-3
+  mod_skill_stealth=-2
+@end
+
+@condition brood_venom
+  condition=poison
+  cure_tag=poison
+  damage_on_tick=3
+  tick_on=on_enter
+  duration=10
+@end
+
+@effect starlight_ward
+  mod_encumbrance=0.88
+  mod_skill_survival=1
+@end
+
+@effect spider_sense
+  mod_skill_survival=3
+  mod_skill_stealth=2
+  mod_stat_dexterity=1
+@end
+
+@behavior-template web-lurker
+  react=attack
+  awareness_check=true
+  perception=14
+  attack_damage=11
+  grant_effect_on_hit=brood_venom
+  on_discovered=emote drops from the webbing without a sound.
+  on_discovered_react=attack
+@end
+
+@behavior-template broodling
+  react=attack
+  awareness_check=true
+  perception=12
+  attack_damage=9
+  grant_effect_on_hit=brood_venom
+  on_discovered=emote skitters from a cocoon, legs drumming on stone.
+@end
+
+@behavior-template skittering-hatchling
+  react=attack
+  awareness_check=false
+  attack_damage=7
+  on_enter=emote clicks its mandibles in the dark.
+@end
+
+# --- Prototypes ---
+
+@prototype spider-warning-plaque
+  name=Warning Plaque
+  description=A slate plaque bolted beside a web-choked crack. Fresh silk has been layered over older scratches.
+  readable=true
+  read_text=BEYOND THE FISSURE — the brood keeps to a thread: SILK, then EGG, then FANG, then CROWN. Carry light. Cut what swells. Do not trust stillness.
+  weight=12.0
+  volume=8.0
+  pocketable=false
+  alias=plaque
+  alias=warning
+@end
+
+@prototype spider-way-marker
+  name=Web Marker
+  description=A bone peg lashed with pale silk. One word is painted in dried ichor.
+  readable=true
+  weight=5.0
+  volume=4.0
+  pocketable=false
+  alias=marker
+  alias=peg
+@end
+
+@prototype webbed-fissure
+  name=Webbed Fissure
+  description=A crack in the peat wall, strung with wet silk. The opening is wide enough to crawl through on your belly.
+  is_door=true
+  is_open=true
+  locked=false
+  weight=40.0
+  volume=30.0
+  pocketable=false
+  alias=fissure
+  alias=crack
+@end
+
+@prototype brood-iron-gate
+  name=Brood Iron Gate
+  description=Black iron bars webbed into a frame. Something vast shifts beyond them.
+  is_door=true
+  is_open=false
+  locked=true
+  lock_id=brood-fang-key
+  weight=60.0
+  volume=40.0
+  pocketable=false
+  alias=gate
+  alias=brood gate
+  alias=iron gate
+@end
+
+@prototype brood-fang-key
+  name=Brood Fang Key
+  description=A serrated fang the size of a dagger, still warm. It fits no lock made for men.
+  is_key=true
+  lock_id=brood-fang-key
+  weight=0.3
+  volume=0.2
+  pocketable=true
+  alias=fang key
+  alias=brood key
+@end
+
+@prototype egg-sac
+  name=Pulsing Egg Sac
+  description=A swollen sac of silk and membrane. Shapes move inside with patient malice.
+  breakable=true
+  break_text=You tear the sac open. Ichor runs cold over your knuckles.
+  @trigger on_break emote ruptures, spilling pale fluid across the stone.
+  @trigger on_break when chance 55 then grant-effect actor brood_venom
+  @trigger on_break when chance 25 then spawn brood-hatchling
+  weight=6.0
+  volume=5.0
+  pocketable=false
+  alias=sac
+  alias=egg sac
+@end
+
+@prototype web-cocoon
+  name=Web Cocoon
+  description=A human-sized bundle suspended from the ceiling. Something inside still breathes — or pretends to.
+  breakable=true
+  break_text=You slash the cocoon free. Whatever was inside has long since been hollowed out.
+  @trigger on_break emote collapses in a sigh of dust and silk.
+  weight=8.0
+  volume=6.0
+  pocketable=false
+  alias=cocoon
+@end
+
+@prototype starlight-phial
+  name=Phial of Starlight
+  description=A crystal vial holding light that does not flicker. It hums when webs draw near.
+  is_wearable=true
+  wear_slot=torso
+  @grant-effect starlight_ward
+  weight=0.4
+  volume=0.3
+  pocketable=true
+  alias=phial
+  alias=starlight
+  @trigger on_use narrate Starlight uncorks in your veins — poison and silk loosen their grip.
+  @trigger on_use cure-tag actor poison
+  @trigger on_use remove-effect actor web_snare
+  @trigger on_use grant-effect actor starlight_ward
+@end
+
+@prototype fang-dagger
+  name=Fang of the Brood
+  description=A polished fang set in a bronze haft. It drinks the dark rather than reflecting it.
+  weight=3.0
+  volume=2.0
+  hand_slot=right
+  @mod-stat strength 4
+  @mod-skill stealth 2
+  alias=dagger
+  alias=fang
+  alias=fang dagger
+@end
+
+@prototype mithril-shard-vest
+  name=Mithril Shard Vest
+  description=A vest of interlocked mail no thicker than a leaf. It weighs almost nothing and turns blades oddly.
+  is_wearable=true
+  wear_slot=torso
+  mod_max_health=15
+  @mod-stat constitution 3
+  @mod-stat dexterity 1
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=vest
+  alias=mithril vest
+  alias=shard vest
+@end
+
+@prototype spider-silk-cloak
+  name=Spider-Silk Cloak
+  description=A cloak woven from brood silk so fine it feels like mist. It clings without binding.
+  is_wearable=true
+  wear_slot=torso
+  @mod-skill stealth 3
+  @mod-skill survival 2
+  mod_encumbrance=0.9
+  weight=1.0
+  volume=1.0
+  pocketable=false
+  alias=cloak
+  alias=silk cloak
+@end
+
+@prototype brood-treasure-chest
+  name=Brood Treasure Hoard
+  description=A mound of silk and bone with prizes pressed into its heart. The webbing parts reluctantly.
+  is_container=true
+  is_open=false
+  locked=false
+  capacity=6
+  max_weight=80
+  weight=20.0
+  volume=24.0
+  pocketable=false
+  alias=hoard
+  alias=treasure hoard
+  alias=brood chest
+@end
+
+@prototype hidden-silk-cache
+  name=Silk-Wrapped Cache
+  description=A bundle hung high in a crevice, nearly invisible against the stone.
+  hidden_until_discovered=true
+  discovery_stealth=9
+  is_container=true
+  is_open=true
+  capacity=2
+  max_weight=20
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=cache
+@end
+
+# --- Integration (portal from Poisonous Swamp) ---
+
+@item swamp-spider-plaque
+  prototype=spider-warning-plaque
+  location=swamp-dry
+@end
+
+@item swamp-spider-fissure
+  prototype=webbed-fissure
+  location=swamp-dry
+  door_direction=in
+  door_destination=spider-entry
+@end
+
+# --- Way markers (SILK → EGG → FANG → CROWN) ---
+
+@item spider-entry-marker
+  prototype=spider-way-marker
+  location=spider-entry
+  description=A peg lashed with silk. Four words circle its head — silk, egg, fang, crown — each pointing into the dark.
+  read_text=SILK first. The brood spins before it feeds. EGG swells. FANG opens the crown. Carry light and cut what breathes.
+@end
+
+@item spider-silk-marker
+  prototype=spider-way-marker
+  location=spider-silk
+  description=A peg facing east. SILK is painted in pale ichor.
+  read_text=SILK — the threads remember. EGG lies east where the air grows warm.
+@end
+
+@item spider-egg-marker
+  prototype=spider-way-marker
+  location=spider-egg
+  description=A peg facing south. EGG drips from its letters.
+  read_text=EGG — you heard them move. FANG waits south where iron bars breathe.
+@end
+
+@item spider-fang-marker
+  prototype=spider-way-marker
+  location=spider-fang
+  description=A peg facing west. FANG is carved deep.
+  read_text=FANG — the gate knows its tooth. CROWN lies west where the mother dreams.
+@end
+
+@item spider-crown-marker
+  prototype=spider-way-marker
+  location=spider-crown
+  description=Four pegs ring a pit of silk. Every painted face points outward.
+  read_text=CROWN — the brood yields. Crawl OUT when the web releases you.
+@end
+
+@item spider-egg-sac
+  prototype=egg-sac
+  location=spider-egg
+@end
+
+@item spider-silk-cocoon
+  prototype=web-cocoon
+  location=spider-silk
+@end
+
+@item spider-hidden-cache
+  prototype=hidden-silk-cache
+  location=spider-silk
+  @trigger on_discovered narrate You find a silk-wrapped bundle wedged above the tunnel — someone tried to hide here.
+  @trigger on_discovered spawn item fang-dagger
+  @trigger on_discovered when condition poison then cure-tag actor poison
+  @trigger on_discovered when condition slow then remove-effect actor web_snare
+  @trigger on_discovered grant-effect actor spider_sense
+@end
+
+@item spider-brood-gate
+  prototype=brood-iron-gate
+  location=spider-fang
+  door_direction=west
+  door_destination=spider-crown
+  locked=true
+  lock_id=brood-fang-key
+@end
+
+@item spider-brood-hoard
+  prototype=brood-treasure-chest
+  location=spider-crown
+@end
+
+# --- Schedules ---
+
+@schedule spider-egg-tremor
+  target=spider-egg
+  interval=3
+  event=on_weather
+@end
+
+@schedule spider-silk-respawn
+  target=spider-silk
+  interval=4
+  event=on_respawn
+@end
+
+# --- Creature spawners ---
+
+@spawn-template ceiling-lurker
+  name=Ceiling Lurker
+  creature=human
+  @use-behavior web-lurker
+  @trigger on_discovered emote uncoils from the ceiling in a single fluid drop.
+@end
+
+@spawn-template brood-hatchling
+  name=Brood Hatchling
+  creature=human
+  @use-behavior broodling
+  @trigger on_discovered react attack
+@end
+
+@spawn-template skittering-spider
+  name=Skittering Spider
+  creature=human
+  @use-behavior skittering-hatchling
+@end
+
+@spawner spider-silk-ambush
+  location=spider-silk
+  trigger=on_enter
+  chance=0.85
+  max_active=1
+  @entry ceiling-lurker weight=2
+  @entry brood-hatchling weight=1
+@end
+
+@spawner spider-egg-brood
+  location=spider-egg
+  trigger=periodic
+  periodic_interval=2
+  chance=0.75
+  max_active=2
+  @entry brood-hatchling weight=3
+  @entry skittering-spider weight=2
+@end
+
+@spawner spider-fang-guard
+  location=spider-fang
+  trigger=on_enter
+  chance=1.0
+  max_active=1
+  @entry ceiling-lurker weight=1
+@end
+
+@spawner spider-crown-swarm
+  location=spider-crown
+  trigger=on_enter
+  chance=0.6
+  max_active=2
+  @entry brood-hatchling weight=2
+  @entry skittering-spider weight=1
+@end
+
+@spawner cocoon-lurker
+  target=spider-silk-cocoon
+  trigger=on_enter
+  chance=1.0
+  max_active=1
+  @entry ceiling-lurker weight=1
+@end
+
+# --- Loot spawners ---
+
+@loot-template sac-fang-key
+  prototype=brood-fang-key
+  count=1
+@end
+
+@loot-spawner egg-sac-break-loot
+  target=spider-egg-sac
+  trigger=on_break
+  once=true
+  chance=1.0
+  max_active=1
+  @entry sac-fang-key weight=1
+@end
+
+@loot-template cocoon-rations
+  prototype=trail-rations
+  count=2
+@end
+
+@loot-template cocoon-phial
+  prototype=starlight-phial
+  count=1
+@end
+
+@loot-spawner silk-cocoon-loot
+  target=spider-silk-cocoon
+  trigger=on_break
+  once=true
+  chance=1.0
+  max_active=2
+  @entry cocoon-rations weight=2
+  @entry cocoon-phial weight=1
+@end
+
+@loot-template shrine-starlight
+  prototype=starlight-phial
+  count=1
+@end
+
+@loot-spawner spider-shrine-light
+  target=spider-shrine
+  trigger=on_enter
+  once=true
+  chance=1.0
+  max_active=1
+  @entry shrine-starlight weight=1
+@end
+
+@loot-template hoard-fang-dagger
+  prototype=fang-dagger
+  count=1
+@end
+
+@loot-template hoard-mithril-vest
+  prototype=mithril-shard-vest
+  count=1
+@end
+
+@loot-template hoard-silk-cloak
+  prototype=spider-silk-cloak
+  count=1
+@end
+
+@loot-template hoard-starlight
+  prototype=starlight-phial
+  count=1
+@end
+
+@loot-template hoard-boots
+  prototype=boots-of-carrying
+  count=1
+@end
+
+@loot-template hoard-band
+  prototype=vitality-band
+  count=1
+@end
+
+@loot-spawner brood-hoard-reward
+  target=spider-brood-hoard
+  trigger=on_open
+  once=true
+  chance=1.0
+  max_active=1
+  @entry hoard-mithril-vest weight=3
+  @entry hoard-silk-cloak weight=3
+  @entry hoard-fang-dagger weight=2
+  @entry hoard-starlight weight=2
+  @entry hoard-boots weight=2
+  @entry hoard-band weight=1
+@end
+
+# --- Boss NPC ---
+
+@npc brood-queen
+  location=spider-crown
+  creature=human
+  name=Brood Queen
+  @use-behavior aggressive
+  @trigger on_enter say Something old stirs in the silk. You were expected.
+  @trigger on_enter when condition poison then say The venom in your veins pleases her. Unfortunate for you.
+  @trigger on_enter when condition slow then narrate She tastes the silk on you and smiles without lips.
+  @trigger on_kill grant-effect actor spider_sense
+  @trigger on_kill narrate The great web slackens. For a moment the den is only stone and your own breathing.
+  @trigger on_death emote collapses, legs folding like snapped spokes.
+@end
+
+# --- Den areas ---
+
+type: area
+base_name: spider-entry
+name: Webbed Threshold
+description: You crawl into a tunnel strung with wet silk. The air tastes of copper and old prey. Every sound you make has an answer somewhere above.
+@trigger on_enter narrate The fissure seals behind you with a soft, obscene patience.
+@trigger on_enter when skill stealth below 2 then grant-effect actor web_snare
+exits:
+  north: spider-silk
+  east: spider-gloom
+  south: spider-pit
+  west: spider-hatch
+  out: swamp-dry
+exit_returns:
+  out: in
+
+type: area
+base_name: spider-silk
+name: Silk Galleries
+description: Pale threads lattice the walls. Droplets hang at eye level and tremble when you breathe.
+@trigger on_enter narrate The webs brush your face like blind fingers.
+@trigger on_enter damage actor 5
+@trigger on_respawn narrate Fresh silk beads along the ceiling.
+@trigger on_respawn spawn ceiling-lurker
+exits:
+  south: spider-entry
+  east: spider-egg
+  north: spider-nest
+
+type: area
+base_name: spider-egg
+name: Egg Chamber
+description: Rounded sacs cluster in the corners, pulsing in slow unison. The stone is warm with latent hunger.
+@trigger on_weather narrate The chamber shudders — something vast turns in its sleep.
+@trigger on_enter when skill survival below 3 then damage actor 6
+exits:
+  west: spider-silk
+  south: spider-fang
+  east: spider-drown
+
+type: area
+base_name: spider-fang
+name: Fang Antechamber
+description: Iron bars webbed into a gate block the western dark. Beyond them, silk moves without wind.
+@trigger on_enter narrate You hear mandibles testing metal — patient, rhythmic, certain.
+@trigger on_enter heal actor 10
+@trigger on_enter grant-effect actor starlight_ward
+@trigger on_enter when condition poison then remove-effect actor brood_venom
+@trigger on_enter when condition slow then remove-effect actor web_snare
+exits:
+  north: spider-pit
+  east: spider-egg
+  west: spider-crown
+
+type: area
+base_name: spider-crown
+name: Crown of the Brood
+description: The tunnel opens into a cathedral of web. A pit of silk churns at its center. This is where the den keeps its appetite.
+@trigger on_enter when health below 80 then heal actor 6
+@trigger on_enter narrate The web slackens just enough to let you stand — the brood grants no other mercy.
+exits:
+  east: spider-fang
+  out: swamp-dry
+scatter_to: forest-path,the-void,swamp-dry
+scatter_direction: out
+
+# --- Wrong turns (silent loop to threshold) ---
+
+type: area
+base_name: spider-gloom
+name: Gloom Crawl
+description: The dark here has weight. Your lantern — if you had one — would die without argument.
+@trigger on_enter grant-effect actor web_snare
+@trigger on_enter damage actor 7
+exits:
+  out: spider-entry
+loop_to: spider-entry
+
+type: area
+base_name: spider-pit
+name: Pit of Strands
+description: The floor gives way into a bowl of sticky silk. Getting out costs skin.
+@trigger on_enter damage actor 9
+@trigger on_enter grant-effect actor web_snare
+@trigger on_enter when skill stealth at_least 3 then narrate You cross the strands where the web expected nobody.
+exits:
+  out: spider-entry
+loop_to: spider-entry
+
+type: area
+base_name: spider-hatch
+name: Hatchery Dead End
+description: Empty shells crack underfoot. The living left this place for somewhere hungrier.
+@trigger on_enter narrate Shells crack underfoot with the honesty of bad omens.
+@trigger on_enter when chance 45 then spawn brood-hatchling
+@trigger on_enter when chance 20 then spawn ceiling-lurker
+exits:
+  out: spider-entry
+loop_to: spider-entry
+
+type: area
+base_name: spider-nest
+name: Nest Warren
+description: Tunnels branch and branch again until direction is only a memory.
+@trigger on_enter damage actor 6
+@trigger on_enter grant-effect actor web_snare
+@trigger on_enter when skill stealth at_least 3 then narrate The warren forgets you for a merciful heartbeat.
+exits:
+  out: spider-entry
+loop_to: spider-entry
+
+type: area
+base_name: spider-drown
+name: Drowned Silk
+description: Water pools beneath the webs. Your reflection wears too many legs.
+@trigger on_enter damage actor 5
+@trigger on_enter when chance 40 then grant-effect actor brood_venom
+@trigger on_enter when skill survival at_least 3 then cure-tag actor poison
+exits:
+  out: spider-entry
+loop_to: spider-entry
+
+type: area
+base_name: spider-shrine
+name: Abandoned Shrine
+description: A stone bowl holds melted wax and a single unbroken phial of light.
+@trigger on_enter narrate Someone came this far and left a mercy for the next fool.
+@trigger on_enter spawn item starlight-phial
+@trigger on_enter when condition poison then cure-tag actor poison
+@trigger on_enter when condition slow then remove-effect actor web_snare
+@trigger on_enter when health below 50 then heal actor 10
+exits:
+  out: spider-entry
+loop_to: spider-entry

@@ -1,0 +1,882 @@
+# Sandy Shoals Resort — self-contained restorative expansion for Project MUDL.
+#
+# Docs: sandy_shoals/README.md (teaser · install · expect · extensions)
+#
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/sandy_shoals/sandy_shoals.mudl
+# @import expansions/sandy_shoals/sandy_shoals.mudl
+#
+# Host hooks: the-void (south → beach-trail), forest-path optional — see README.
+
+@expansion beach_resort
+  name=Sandy Shoals Resort
+  version=1
+  integrates=the-void,forest-path
+@end
+
+# --- Resort-specific conditions & buffs ---
+
+@condition tipsy
+  condition=drunk
+  cure_tag=drunk
+  duration=10
+  tick_on=on_enter
+  mod_stat_dexterity=-1
+  mod_stat_charisma=1
+  mod_encumbrance=1.02
+@end
+
+@condition beach_buzz
+  condition=drunk
+  cure_tag=drunk
+  duration=14
+  tick_on=on_enter
+  mod_stat_dexterity=-3
+  mod_stat_wisdom=-1
+  mod_stat_charisma=2
+  mod_encumbrance=1.06
+@end
+
+@condition three_sheets
+  condition=drunk
+  cure_tag=drunk
+  duration=18
+  tick_on=on_enter
+  mod_stat_dexterity=-5
+  mod_stat_wisdom=-3
+  mod_stat_charisma=3
+  mod_encumbrance=1.12
+@end
+
+@condition shore_regeneration
+  condition=regeneration
+  cure_tag=regeneration
+  heal_on_tick=6
+  tick_on=on_enter
+  duration=8
+  mod_stat_wisdom=1
+@end
+
+@effect sun_kissed
+  mod_max_health=6
+  mod_skill_survival=1
+  mod_encumbrance=0.94
+@end
+
+@effect resort_serenity
+  mod_max_health=12
+  mod_encumbrance=0.88
+  mod_stat_charisma=2
+  mod_skill_survival=1
+@end
+
+@effect tidepool_clarity
+  mod_stat_wisdom=2
+  mod_skill_survival=1
+@end
+
+@behavior-template resort_host
+  react=greet
+  on_enter=say Easy does it — the tide's in a generous mood today.
+@end
+
+@behavior-template beach_idle
+  react=ignore
+  on_enter=emote hums a tune you almost recognize from a dream.
+@end
+
+# --- Prototypes ---
+
+@prototype resort-trail-sign
+  name=Resort Trail Sign
+  description=A painted plank arrow points south along a sandy footpath. Salt hangs in the air even from here.
+  readable=true
+  read_text=SANDY SHOALS RESORT — south by the warm trail. Leave your worries; bring your thirst. The shore keeps to a taste: SALT, then SUN, then SIP, then SAND. Rest where the pearls gather.
+  weight=6.0
+  volume=4.0
+  pocketable=false
+  alias=sign
+  alias=trail sign
+  alias=resort sign
+@end
+
+@prototype beach-way-marker
+  name=Driftwood Marker
+  description=A pale driftwood stake, its face carved with a single sun-bleached word.
+  readable=true
+  weight=4.0
+  volume=3.0
+  pocketable=false
+  alias=marker
+  alias=stake
+  alias=post
+@end
+
+@prototype tiki-bar-counter
+  name=Tiki Bar
+  description=A bamboo counter strung with shells and paper umbrellas. Bottles wink in the shade and a blender purrs like a contented cat.
+  is_container=true
+  is_open=true
+  capacity=6
+  max_weight=30
+  weight=20.0
+  volume=18.0
+  pocketable=false
+  alias=bar
+  alias=tiki bar
+  alias=counter
+@end
+
+@prototype cocktail-glass
+  name=Cocktail Glass
+  description=A frosty glass beaded with condensation. Something colorful and irresponsible waits inside.
+  stackable=true
+  stack_count=1
+  weight=0.4
+  volume=0.3
+  pocketable=true
+  alias=glass
+  alias=drink
+  alias=cocktail
+@end
+
+@prototype sunset-spritz
+  name=Sunset Spritz
+  description=A coral-pink fizz that smells like oranges and good decisions you are about to overrule.
+  stackable=true
+  stack_count=2
+  weight=0.5
+  volume=0.4
+  pocketable=true
+  alias=spritz
+  alias=sunset spritz
+  @trigger on_take narrate The spritz sparkles on the way down — your shoulders unclench.
+  @trigger on_take grant-effect actor tipsy
+@end
+
+@prototype coral-colada
+  name=Coral Colada
+  description=Frosted coconut cream swirled with grenadine. A maraschino cherry bobs like it owns the place.
+  stackable=true
+  stack_count=2
+  weight=0.6
+  volume=0.5
+  pocketable=true
+  alias=colada
+  alias=coral colada
+  @trigger on_take narrate The colada is thick, sweet, and persuasive.
+  @trigger on_take grant-effect actor beach_buzz
+@end
+
+@prototype kraken-punch
+  name=Kraken Punch
+  description=A blue-black tiki mug with three tentacle stirrers. The menu calls it shareable. The mug disagrees.
+  stackable=true
+  stack_count=1
+  weight=0.8
+  volume=0.6
+  pocketable=true
+  alias=punch
+  alias=kraken punch
+  @trigger on_take narrate The punch hits like a friendly wave that forgot when to stop.
+  @trigger on_take grant-effect actor three_sheets
+@end
+
+@prototype beach-hammock
+  name=Striped Hammock
+  description=A cotton hammock tied between two palms. It sways in a rhythm that makes deadlines feel fictional.
+  weight=3.0
+  volume=8.0
+  pocketable=false
+  alias=hammock
+@end
+
+@prototype coconut-remedy
+  name=Coconut Remedy
+  description=A chilled coconut cracked open and spiked with lime. The menu calls it medicinal. The menu is not wrong.
+  stackable=true
+  stack_count=2
+  consumable=true
+  weight=0.5
+  volume=0.4
+  pocketable=true
+  alias=remedy
+  alias=coconut remedy
+  alias=coconut
+  @trigger on_use narrate Coconut water and lime scour the last of the umbrella drinks from your veins.
+  @trigger on_use cure-tag actor drunk
+  @trigger on_use grant-effect actor shore_regeneration
+@end
+
+@prototype shell-cluster
+  name=Shell Cluster
+  description=A scatter of spiral shells half-buried in warm sand. Someone polished the best ones.
+  harvestable=true
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=shells
+  alias=shell cluster
+@end
+
+@prototype tidepool-ledge
+  name=Tidepool Ledge
+  description=A limestone shelf cupping clear water. Anemones wink and a shadow darts beneath a frond of kelp.
+  harvestable=true
+  weight=5.0
+  volume=6.0
+  pocketable=false
+  alias=tidepool
+  alias=pool
+@end
+
+@prototype conch-shell
+  name=Conch Shell
+  description=A pink-lined conch, still cool from the surf. Hold it to your ear and the ocean negotiates.
+  is_wearable=true
+  wear_slot=head
+  mod_stat_charisma=1
+  weight=0.6
+  volume=0.5
+  pocketable=true
+  alias=conch
+  alias=shell
+@end
+
+@prototype pearl-necklace
+  name=Pearl Necklace
+  description=A strand of soft lustrous pearls that catches light like bottled moonrise.
+  is_wearable=true
+  wear_slot=torso
+  mod_stat_charisma=2
+  mod_max_health=4
+  weight=0.3
+  volume=0.2
+  pocketable=true
+  alias=pearls
+  alias=necklace
+  alias=pearl necklace
+@end
+
+@prototype resort-swimsuit
+  name=Resort Swimsuit
+  description=Bright floral fabric with suspiciously forgiving elastic. The tag reads one size fits vacation.
+  is_wearable=true
+  wear_slot=torso
+  mod_encumbrance=0.92
+  mod_stat_charisma=1
+  weight=0.4
+  volume=0.5
+  pocketable=true
+  alias=swimsuit
+  alias=suit
+@end
+
+@prototype driftwood-sandals
+  name=Driftwood Sandals
+  description=Leather straps on a sole shaped from sun-bleached wood. They make every step sound like a postcard.
+  is_wearable=true
+  wear_slot=left_foot
+  mod_encumbrance=0.9
+  weight=0.8
+  volume=0.8
+  pocketable=true
+  alias=sandals
+  alias=driftwood sandals
+@end
+
+@prototype starfish-charm
+  name=Starfish Charm
+  description=A tiny brass starfish on a cord. It is warm, as if it remembers the sun.
+  is_wearable=true
+  wear_slot=torso
+  @grant-effect sun_kissed
+  weight=0.2
+  volume=0.1
+  pocketable=true
+  alias=charm
+  alias=starfish
+  alias=starfish charm
+@end
+
+@prototype treasure-map-scroll
+  name=Rumpled Treasure Map
+  description=A salt-stiff parchment with cheerful X marks and suspiciously accurate palm trees.
+  readable=true
+  read_text=The shoals hide nothing cruel — only patience. SALT on the open shore, SUN where hammocks sway, SIP where umbrellas tilt, SAND where the tidepool breathes. The pearl waits where the water forgets to rush.
+  weight=0.2
+  volume=0.2
+  pocketable=true
+  alias=map
+  alias=treasure map
+@end
+
+@prototype message-in-bottle
+  name=Message in a Bottle
+  description=A green glass bottle corked with wax. Something knocks politely from inside.
+  readable=true
+  read_text=If you are reading this, you found the quiet shelf. The bartender owes you a garnish. Tell them the kraken sends compliments.
+  is_container=true
+  is_open=false
+  locked=false
+  capacity=1
+  max_weight=5
+  weight=0.7
+  volume=0.6
+  pocketable=true
+  alias=bottle
+  alias=message in a bottle
+@end
+
+@prototype sunscreen-salve
+  name=Sunscreen Salve
+  description=A coconut-scented tin of pale salve. The label promises broad-spectrum serenity.
+  stackable=true
+  stack_count=2
+  weight=0.3
+  volume=0.2
+  pocketable=true
+  alias=salve
+  alias=sunscreen
+@end
+
+@prototype pearl-reward-chest
+  name=Pearl Coffer
+  description=A lacquered coffer lined with velvet the color of shallow water. The latch yields with a satisfied click.
+  is_container=true
+  is_open=false
+  locked=false
+  capacity=6
+  max_weight=50
+  weight=10.0
+  volume=14.0
+  pocketable=false
+  alias=coffer
+  alias=pearl coffer
+  alias=reward chest
+@end
+
+@prototype hidden-beach-cache
+  name=Beach Cache
+  description=A oilcloth bundle wedged beneath a tidepool ledge, nearly invisible under reflected sky.
+  hidden_until_discovered=true
+  discovery_stealth=5
+  is_container=true
+  is_open=true
+  capacity=3
+  max_weight=20
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=cache
+  alias=beach cache
+@end
+
+@prototype sand-bottle-cache
+  name=Buried Bottle
+  description=The neck of a bottle pokes from packed sand, as if the beach is sharing a secret.
+  hidden_until_discovered=true
+  discovery_stealth=6
+  weight=1.0
+  volume=1.0
+  pocketable=false
+  alias=buried bottle
+@end
+
+@prototype bamboo-cabana
+  name=Bamboo Cabana
+  description=A striped cabana flap snaps lazily in the onshore breeze.
+  readable=true
+  read_text=OUT OF ORDER — the cabana is napping. Try the shore, the bar, or the tidepool instead.
+  weight=12.0
+  volume=15.0
+  pocketable=false
+  alias=cabana
+@end
+
+# --- Integration items (host world + entry) ---
+
+@item void-resort-sign
+  prototype=resort-trail-sign
+  location=the-void
+@end
+
+# --- Way markers (navigation: SALT → SUN → SIP → SAND → PEARL) ---
+
+@item beach-gate-marker
+  prototype=beach-way-marker
+  location=beach-gate
+  description=A driftwood stake ringed with four words — salt, sun, sip, and sand — each aimed down a different sandy path.
+  read_text=SALT first. Taste the open shore. SUN warms the loungers east. SIP waits where umbrellas clink. SAND breathes in the tidepool west. Then follow the hush to the pearl.
+@end
+
+@item beach-salt-marker
+  prototype=beach-way-marker
+  location=beach-shore
+  description=A stake facing east. SALT is carved in letters frosted with dried spray.
+  read_text=SALT — the surf applauds. SUN lies east where the hammocks sway.
+@end
+
+@item beach-sun-marker
+  prototype=beach-way-marker
+  location=beach-sunbeds
+  description=A stake facing south. SUN is carved deep enough to hold a little warmth.
+  read_text=SUN — you felt it. SIP lies south where glasses chime.
+@end
+
+@item beach-sip-marker
+  prototype=beach-way-marker
+  location=beach-bar
+  description=A stake facing west. SIP is carved with a tiny umbrella doodle.
+  read_text=SIP — the bar approves. SAND lies west where the tidepool gleams.
+@end
+
+@item beach-sand-marker
+  prototype=beach-way-marker
+  location=beach-tidepool
+  description=A stake facing north. SAND is carved in soft, rounded strokes.
+  read_text=SAND — the pool exhales. PEARL waits north where the water forgets to rush.
+@end
+
+@item beach-pearl-marker
+  prototype=beach-way-marker
+  location=beach-pearl
+  description=Four stakes ring a calm inlet. Every carved face points outward — the resort only releases you one way.
+  read_text=PEARL — the shoals yield. Step OUT when the tide remembers your name.
+@end
+
+@item beach-tiki-bar
+  prototype=tiki-bar-counter
+  location=beach-bar
+@end
+
+@item bar-sunset-spritz
+  prototype=sunset-spritz
+  location=beach-tiki-bar
+@end
+
+@item bar-coral-colada
+  prototype=coral-colada
+  location=beach-tiki-bar
+@end
+
+@item bar-kraken-punch
+  prototype=kraken-punch
+  location=beach-tiki-bar
+@end
+
+@item beach-east-hammock
+  prototype=beach-hammock
+  location=beach-sunbeds
+@end
+
+@item beach-west-hammock
+  prototype=beach-hammock
+  location=beach-sunbeds
+@end
+
+@item shore-shell-cluster
+  prototype=shell-cluster
+  location=beach-shore
+@end
+
+@item tidepool-harvest-ledge
+  prototype=tidepool-ledge
+  location=beach-tidepool
+@end
+
+@item tidepool-hidden-cache
+  prototype=hidden-beach-cache
+  location=beach-tidepool
+  @trigger on_discovered narrate You spot oiled cloth beneath the ledge — someone meant this to be found by patient eyes.
+  @trigger on_discovered when stat dexterity below 8 then narrate Your pleasantly blurred vision somehow helps you notice the cache first.
+  @trigger on_discovered spawn item treasure-map-scroll
+  @trigger on_discovered spawn item sunscreen-salve
+  @trigger on_discovered spawn item coconut-remedy
+@end
+
+@item shore-buried-bottle
+  prototype=sand-bottle-cache
+  location=beach-shore
+  @trigger on_discovered narrate You brush sand from a corked bottle.
+  @trigger on_discovered when stat dexterity below 7 then narrate You laugh — of course the beach hid this for someone in your condition.
+  @trigger on_discovered spawn item message-in-bottle
+  @trigger on_discovered when chance 35 then spawn item cocktail-glass
+@end
+
+@item shrine-message-bottle
+  prototype=message-in-bottle
+  location=beach-shrine
+@end
+
+@item beach-pearl-coffer
+  prototype=pearl-reward-chest
+  location=beach-pearl
+@end
+
+@item beach-napping-cabana
+  prototype=bamboo-cabana
+  location=beach-cabanas
+@end
+
+# --- Schedules ---
+
+@schedule beach-shore-weather
+  target=beach-shore
+  interval=3
+  event=on_weather
+@end
+
+@schedule beach-bar-respawn
+  target=beach-bar
+  interval=5
+  event=on_respawn
+@end
+
+@schedule beach-tidepool-weather
+  target=beach-tidepool
+  interval=4
+  event=on_weather
+@end
+
+# --- Resource spawners ---
+
+@resource-template shell-harvest-loot
+  prototype=conch-shell
+  count=1
+@end
+
+@resource-template shell-pearl-chance
+  prototype=pearl-necklace
+  count=1
+@end
+
+@resource-spawner shore-shell-harvest
+  target=shore-shell-cluster
+  trigger=on_harvest
+  chance=0.9
+  max_active=2
+  @entry shell-harvest-loot weight=3
+  @entry shell-pearl-chance weight=1
+@end
+
+@resource-template tidepool-salve
+  prototype=sunscreen-salve
+  count=1
+@end
+
+@resource-template tidepool-charm
+  prototype=starfish-charm
+  count=1
+@end
+
+@resource-spawner tidepool-harvest
+  target=tidepool-harvest-ledge
+  trigger=on_harvest
+  chance=0.8
+  max_active=2
+  @entry tidepool-salve weight=2
+  @entry tidepool-charm weight=1
+@end
+
+@resource-template bar-garnish-spritz
+  prototype=sunset-spritz
+  count=1
+@end
+
+@resource-template bar-garnish-colada
+  prototype=coral-colada
+  count=1
+@end
+
+@resource-spawner bar-garnish-respawn
+  target=beach-tiki-bar
+  trigger=on_respawn
+  chance=0.6
+  max_active=2
+  @entry bar-garnish-spritz weight=2
+  @entry bar-garnish-colada weight=1
+@end
+
+# --- Loot spawners ---
+
+@loot-template bottle-pearl
+  prototype=pearl-necklace
+  count=1
+@end
+
+@loot-spawner shrine-message-bottle-loot
+  target=shrine-message-bottle
+  trigger=on_open
+  once=true
+  chance=1.0
+  max_active=1
+  @entry bottle-pearl weight=1
+@end
+
+@loot-template shrine-salve
+  prototype=sunscreen-salve
+  count=1
+@end
+
+@loot-template shrine-cocktail
+  prototype=cocktail-glass
+  count=1
+@end
+
+@loot-spawner beach-shrine-offering
+  target=beach-shrine
+  trigger=on_enter
+  once=true
+  chance=1.0
+  max_active=1
+  @entry shrine-salve weight=2
+  @entry shrine-cocktail weight=1
+@end
+
+@loot-template pearl-swimsuit
+  prototype=resort-swimsuit
+  count=1
+@end
+
+@loot-template pearl-sandals
+  prototype=driftwood-sandals
+  count=1
+@end
+
+@loot-template pearl-necklace-reward
+  prototype=pearl-necklace
+  count=1
+@end
+
+@loot-template pearl-starfish
+  prototype=starfish-charm
+  count=1
+@end
+
+@loot-template pearl-map
+  prototype=treasure-map-scroll
+  count=1
+@end
+
+@loot-template pearl-salve-stack
+  prototype=sunscreen-salve
+  count=2
+@end
+
+@loot-spawner pearl-coffer-reward
+  target=beach-pearl-coffer
+  trigger=on_open
+  once=true
+  chance=1.0
+  max_active=1
+  @entry pearl-swimsuit weight=3
+  @entry pearl-sandals weight=3
+  @entry pearl-necklace-reward weight=2
+  @entry pearl-starfish weight=2
+  @entry pearl-map weight=2
+  @entry pearl-salve-stack weight=3
+@end
+
+# --- Friendly NPCs (no combat) ---
+
+@npc tiki-bartender
+  location=beach-bar
+  creature=human
+  name=Tiki Bartender
+  @use-behavior resort_host
+  @trigger on_enter say Tonight's special is confidence, served on the rocks.
+  @trigger on_enter when condition drunk then say How about some water with a heroic lime wedge?
+  @trigger on_enter when condition drunk then narrate The bartender slides a coconut remedy across the bamboo without breaking eye contact.
+  @trigger on_enter when condition drunk then spawn item coconut-remedy
+  @trigger on_enter when stat charisma at_least 12 then say You look like trouble in the best possible way.
+@end
+
+@npc hammock-attendant
+  location=beach-sunbeds
+  creature=human
+  name=Hammock Attendant
+  @use-behavior beach_idle
+  @trigger on_enter say The hammocks are first-come, first-snore.
+  @trigger on_enter when health below 70 then narrate The attendant presses a cool cloth into your hand without comment.
+  @trigger on_enter when health below 70 then heal actor 6
+@end
+
+@npc pier-hermit
+  location=beach-pier
+  creature=human
+  name=Pier Hermit
+  @use-behavior beach_idle
+  @trigger on_enter say The fish told me a secret, but they made me promise not to tell anyone who isn't barefoot.
+  @trigger on_enter when stat dexterity below 7 then narrate The hermit steadies you with a sun-brown hand and laughs without malice.
+  @trigger on_enter when condition drunk then say The sea forgives. The fish gossip, though.
+  @trigger on_enter when condition regeneration then narrate The hermit squints at your complexion and nods approval.
+  @trigger on_enter when skill survival below 2 then mod-skill actor survival 1
+@end
+
+# --- Resort areas ---
+
+type: area
+base_name: beach-trail
+name: Sandy Trail
+description: A warm footpath of packed sand winds between dune grass. Gulls argue somewhere ahead and the air tastes faintly of coconut sunscreen.
+@trigger on_enter narrate Your boots feel overdressed here.
+exits:
+  north: the-void
+  south: beach-gate
+exit_returns:
+  north: south
+
+type: area
+base_name: beach-gate
+name: Resort Gate
+description: A bamboo arch welcomes you to Sandy Shoals. Paper lanterns sway without hurry. Four sandy paths promise different kinds of trouble-free afternoon.
+@trigger on_enter narrate A distant blender purrs. No one is in a rush.
+@trigger on_enter when health below 50 then heal actor 5
+exits:
+  north: beach-trail
+  east: beach-shore
+  south: beach-cabanas
+  west: beach-pier
+  northeast: beach-dunes
+
+type: area
+base_name: beach-shore
+name: Open Shore
+description: Pale sand shelves into turquoise water. Waves arrive like polite applause. Shells glimmer along the tideline and a buried neck of glass winks in the sun.
+@trigger on_enter narrate Salt lace dries on your lips — the honest first taste of the resort.
+@trigger on_weather narrate A warm gust scatters sand across your ankles like friendly confetti.
+@trigger on_enter when health below 80 then heal actor 4
+@trigger on_enter when condition drunk then narrate The surf applauds your life choices with gentle skepticism.
+@trigger on_enter when chance 25 then spawn item cocktail-glass
+@trigger on_enter when skill survival below 1 then mod-skill actor survival 1
+exits:
+  west: beach-gate
+  east: beach-sunbeds
+  north: beach-shallows
+
+type: area
+base_name: beach-sunbeds
+name: Sunbed Veranda
+description: Striped hammocks sway between palms. A attendant fans herself with a menu. The boards underfoot are warm enough to convince you time is optional.
+@trigger on_enter narrate Sunlight settles on your shoulders like a blanket someone else already warmed.
+@trigger on_enter when health below 90 then heal actor 8
+@trigger on_enter grant-effect actor sun_kissed
+@trigger on_enter when condition drunk then narrate The hammock sways you sober while the tide counts your pulse back to sensible.
+@trigger on_enter when condition drunk then cure-tag actor drunk
+@trigger on_enter when condition drunk then grant-effect actor shore_regeneration
+exits:
+  west: beach-shore
+  south: beach-bar
+  east: beach-jetty
+
+type: area
+base_name: beach-bar
+name: Tiki Bar
+description: Bamboo and shells frame a bar that takes its job seriously but not itself. Paper umbrellas lean in rows. Somewhere, a shaker performs percussion.
+@trigger on_enter narrate Glasses chime — the resort's second language.
+@trigger on_respawn narrate The bartender slides fresh garnishes down the counter.
+@trigger on_enter when condition drunk then narrate The floor develops opinions about where your feet belong.
+@trigger on_enter when condition drunk then narrate You grip the tiki post and grin at nobody in particular.
+@trigger on_enter when stat charisma at_least 12 then narrate Laughter rises from a corner table in your honor — or someone's honor. Hard to tell. Feels right.
+exits:
+  north: beach-sunbeds
+  west: beach-tidepool
+  east: beach-cabanas
+
+type: area
+base_name: beach-tidepool
+name: Tidepool Shelf
+description: Clear water cups in limestone hollows. Anemones bloom in patient colors. The shelf breathes with each lazy surge.
+@trigger on_enter narrate The pool exhales salt and quiet.
+@trigger on_weather narrate A gentle surge rinses the shelf, rearranging pebbles like worry stones.
+@trigger on_enter grant-effect actor tidepool_clarity
+@trigger on_enter when health below 70 then heal actor 6
+exits:
+  east: beach-bar
+  north: beach-pearl
+  south: beach-shallows
+
+type: area
+base_name: beach-pearl
+name: Pearl Inlet
+description: The resort kneels here around a still inlet where the water forgets to rush. A velvet-lined coffer waits on a driftwood pedestal, lid resting shut as if the tide already approved you.
+@trigger on_enter narrate The surf hushes. Your pulse follows suit.
+@trigger on_enter when health below 100 then heal actor 12
+@trigger on_enter grant-effect actor resort_serenity
+@trigger on_enter when condition drunk then cure-tag actor drunk
+@trigger on_enter when condition drunk then narrate The inlet forgives excess. Your reflection looks employable again.
+@trigger on_enter when stat wisdom below 8 then narrate The water is patient. You should be too.
+exits:
+  south: beach-tidepool
+  out: beach-gate
+scatter_to: the-void, forest-path, beach-trail
+scatter_direction: out
+
+# --- Wrong turns (gentle loop back to the gate) ---
+
+type: area
+base_name: beach-dunes
+name: Dune Maze
+description: Soft dunes roll in identical smiles. Every ridge suggests progress and delivers more sand.
+@trigger on_enter when stat dexterity below 7 then narrate You sit down briefly to admire three identical horizons. The dunes take this as encouragement.
+@trigger on_enter when condition drunk then narrate The dunes rearrange themselves into a smile you choose to interpret as supportive.
+@trigger on_enter when chance 20 then spawn item sunscreen-salve
+exits:
+  out: beach-gate
+loop_to: beach-gate
+
+type: area
+base_name: beach-pier
+name: Fishing Pier
+description: A long pier points at the horizon. Lines dangle with the patience of vacation theology.
+@trigger on_enter narrate The planks creak a lazy rhythm.
+@trigger on_enter when condition drunk then narrate The horizon sways in a way that has nothing to do with the tide.
+@trigger on_enter when health below 65 then heal actor 5
+exits:
+  east: beach-gate
+  out: beach-gate
+loop_to: beach-gate
+
+type: area
+base_name: beach-jetty
+name: Windy Jetty
+description: Wind fusses with your hair and the railing. The view is excellent and leads nowhere useful.
+@trigger on_enter grant-effect actor sun_kissed
+@trigger on_enter when chance 40 then narrate A gust rearranges your hair into a verdict you choose to ignore.
+@trigger on_enter when stat charisma at_least 11 then narrate Someone on a distant boat waves. You wave back with royal confidence.
+exits:
+  out: beach-gate
+loop_to: beach-gate
+
+type: area
+base_name: beach-shallows
+name: Warm Shallows
+description: The water is knee-deep and persuasive. Your reflection waves with more enthusiasm than you do.
+@trigger on_enter when stat dexterity below 8 then narrate You splash yourself in the face. Peer review helps.
+exits:
+  out: beach-gate
+loop_to: beach-gate
+
+type: area
+base_name: beach-cabanas
+name: Cabana Row
+description: Striped cabanas snap in the breeze. One flap reads OUT OF ORDER in cheerful paint.
+@trigger on_enter narrate A cabana flap snaps OUT OF ORDER with theatrical malice.
+@trigger on_enter when condition drunk then teleport beach-sunbeds
+@trigger on_enter when condition drunk then narrate You wake on a hammock with no memory of consenting to excellent upholstery.
+exits:
+  out: beach-gate
+loop_to: beach-gate
+
+type: area
+base_name: beach-shrine
+name: Shell Shrine
+description: A ring of shells surrounds a wooden bowl of fresh water. Someone left fruit and a sense of permission.
+@trigger on_enter narrate A traveler left something for whoever arrived tired.
+@trigger on_enter when health below 60 then heal actor 8
+@trigger on_enter when chance 50 then spawn item coconut-remedy
+@trigger on_enter when condition drunk then cure-tag actor drunk
+@trigger on_enter when condition drunk then grant-effect actor shore_regeneration
+exits:
+  out: beach-gate
+loop_to: beach-gate

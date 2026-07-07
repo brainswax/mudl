@@ -112,6 +112,17 @@ pub struct Object {
     /// UTC epoch seconds when the object was soft-deleted, if applicable.
     #[serde(default)]
     pub deleted_at: Option<String>,
+    /// Monotonic revision for optimistic locking (matches the `objects.revision` column).
+    #[serde(default)]
+    pub revision: u64,
+    /// UTC epoch seconds when this object was last successfully persisted.
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// Default optimistic-lock fields for struct literals and test fixtures.
+pub const fn object_persistence_defaults() -> (u64, Option<String>) {
+    (0, None)
 }
 
 /// Maximum length of the name segment in generated object IDs.
@@ -579,6 +590,8 @@ mod tests {
             event_handlers: HashMap::new(),
             is_deleted: false,
             deleted_at: None,
+            revision: 0,
+            updated_at: None,
         };
         coins.apply_stackable_role(&StackableSpec {
             count: 20,
@@ -633,6 +646,8 @@ mod tests {
             event_handlers: HashMap::new(),
             is_deleted: false,
             deleted_at: None,
+            revision: 0,
+            updated_at: None,
         };
         stale_player.init_creature_role(anatomy.player_template("default").unwrap());
 
@@ -650,6 +665,8 @@ mod tests {
             event_handlers: HashMap::new(),
             is_deleted: false,
             deleted_at: None,
+            revision: 0,
+            updated_at: None,
         };
         bars.apply_stackable_role(&StackableSpec {
             count: 1,
@@ -690,6 +707,8 @@ mod tests {
             event_handlers: HashMap::new(),
             is_deleted: false,
             deleted_at: None,
+            revision: 0,
+            updated_at: None,
         };
         room.add_property(Property {
             name: "description".to_string(),
@@ -711,6 +730,8 @@ mod tests {
             event_handlers: HashMap::new(),
             is_deleted: false,
             deleted_at: None,
+            revision: 0,
+            updated_at: None,
         };
         coins.apply_stackable_role(&StackableSpec {
             count: 20,

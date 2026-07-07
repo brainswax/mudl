@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn parse_haunted_map_scatter_and_dead_ends() {
         let content = include_str!(
-            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+            "../../modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl"
         );
         let (defs, _) = parse_world_file(content);
         assert_eq!(defs.len(), 13);
@@ -314,15 +314,23 @@ mod tests {
     #[test]
     fn parse_haunted_moon_on_enter_trigger() {
         let content = include_str!(
-            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+            "../../modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl"
         );
         let (defs, _) = parse_world_file(content);
         let moon = defs.iter().find(|d| d.base_name == "haunted-moon").unwrap();
-        assert_eq!(moon.triggers.len(), 1);
-        assert_eq!(moon.triggers[0].event, "on_enter");
+        assert_eq!(moon.triggers.len(), 3);
+        let on_enter = moon
+            .triggers
+            .iter()
+            .find(|t| t.event == "on_enter")
+            .expect("on_enter trigger");
         assert_eq!(
-            moon.triggers[0].code,
+            on_enter.code,
             "narrate Silver mist clings to the branches."
+        );
+        assert!(
+            moon.triggers.iter().any(|t| t.event == "on_respawn"),
+            "expected on_respawn schedule triggers"
         );
     }
 }

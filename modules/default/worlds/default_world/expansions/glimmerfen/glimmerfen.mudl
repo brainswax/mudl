@@ -1,0 +1,938 @@
+# Glimmerfen — self-contained fey realm expansion for Project MUDL.
+#
+# Docs: glimmerfen/README.md (teaser · install · expect · extensions)
+#
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/glimmerfen/glimmerfen.mudl
+# @import expansions/glimmerfen/glimmerfen.mudl
+#
+# Host hooks: forest-path (through), beach-shore (mist), scatter from fey-grace — see README.
+
+@expansion fey_glade
+  name=Glimmerfen
+  version=1
+  integrates=forest-path,beach-shore,the-void,beach-trail
+@end
+
+# --- Fey-specific conditions & effects ---
+
+@condition fey_glamour
+  condition=enchantment
+  cure_tag=enchantment
+  heal_on_tick=3
+  tick_on=on_enter
+  duration=12
+  mod_stat_charisma=2
+  mod_stat_wisdom=1
+  mod_encumbrance=0.92
+@end
+
+@condition moon_mist
+  condition=enchantment
+  cure_tag=enchantment
+  tick_on=on_enter
+  duration=8
+  mod_stat_intelligence=2
+  mod_skill_crafting=1
+@end
+
+@effect dewdrop_vigor
+  mod_max_health=8
+  mod_stat_constitution=1
+  mod_encumbrance=0.95
+@end
+
+@effect songpeace
+  mod_stat_wisdom=2
+  mod_stat_charisma=1
+  mod_skill_survival=1
+@end
+
+@effect glowcap_luminance
+  mod_stat_intelligence=2
+  mod_skill_crafting=1
+  mod_encumbrance=0.92
+@end
+
+@effect rootwise
+  mod_stat_wisdom=3
+  mod_skill_survival=2
+@end
+
+@effect fey_grace
+  mod_max_health=15
+  mod_stat_charisma=2
+  mod_stat_wisdom=2
+  mod_encumbrance=0.85
+  mod_skill_stealth=1
+@end
+
+@effect wonderstruck
+  mod_stat_intelligence=1
+  mod_stat_charisma=2
+  mod_skill_crafting=1
+@end
+
+@effect pixie_dust
+  mod_stat_dexterity=2
+  mod_stat_charisma=1
+  mod_encumbrance=0.9
+@end
+
+@behavior-template fey_greeter
+  react=greet
+  on_enter=say The vale remembers gentle footsteps.
+@end
+
+@behavior-template fey_wanderer
+  react=wander
+  wander_interval=4
+  on_enter=emote leaves a trail of faint silver motes.
+@end
+
+@behavior-template fey_shy
+  react=ignore
+  on_enter=emote watches you from behind a leaf, curious but unafraid.
+@end
+
+# --- Prototypes ---
+
+@prototype fey-trail-plaque
+  name=Fey Crossing Plaque
+  description=A slate plaque mossed with luminous script. The letters seem to breathe when you are not looking directly at them.
+  readable=true
+  read_text=GLIMMERFEN — a vale between breaths. Enter where mushrooms ring true or moonmist gathers. The path keeps to a hush: DEW, then SONG, then GLOW, then ROOT. Grace waits where starlight pools.
+  weight=8.0
+  volume=6.0
+  pocketable=false
+  alias=plaque
+  alias=sign
+@end
+
+@prototype mushroom-ring-portal
+  name=Mushroom Ring
+  description=A perfect circle of pale caps on the forest floor. The air inside the ring shimmers like heat above summer stone.
+  is_door=true
+  is_open=true
+  locked=false
+  weight=15.0
+  volume=12.0
+  pocketable=false
+  alias=mushrooms
+  alias=ring
+  alias=mushroom ring
+@end
+
+@prototype moonmist-arch
+  name=Moonmist Arch
+  description=Driftwood and shell form an arch where the surf leaves ribbons of silver fog. The mist smells of starflowers.
+  is_door=true
+  is_open=true
+  locked=false
+  weight=18.0
+  volume=14.0
+  pocketable=false
+  alias=arch
+  alias=moonmist
+  alias=moonmist arch
+@end
+
+@prototype fey-way-marker
+  name=Runestone Marker
+  description=A knee-high stone wrapped in soft lichen. One word is etched in script that refuses to be mundane.
+  readable=true
+  weight=6.0
+  volume=4.0
+  pocketable=false
+  alias=marker
+  alias=stone
+  alias=runestone
+@end
+
+@prototype singing-reed-bed
+  name=Singing Reed Bed
+  description=Tall reeds that hum when the wind passes through them — not wind, you decide. Something listening.
+  harvestable=true
+  weight=3.0
+  volume=4.0
+  pocketable=false
+  alias=reeds
+  alias=singing reeds
+@end
+
+@prototype moonpetal-patch
+  name=Moonpetal Patch
+  description=White petals cup dew that glitters like ground starlight. They open only where the air stays kind.
+  harvestable=true
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=petals
+  alias=moonpetals
+  alias=moonpetal patch
+@end
+
+@prototype glowcap-cluster
+  name=Glowcap Cluster
+  description=Blue-green mushrooms that glow without heat. Tiny spores drift upward like lazy fireflies.
+  harvestable=true
+  weight=2.5
+  volume=2.0
+  pocketable=false
+  alias=mushrooms
+  alias=glowcaps
+  alias=glowcap cluster
+@end
+
+@prototype starroot-tangle
+  name=Starroot Tangle
+  description=Pale roots woven through moss. They pulse with a slow heartbeat that is not yours.
+  harvestable=true
+  weight=4.0
+  volume=3.0
+  pocketable=false
+  alias=roots
+  alias=starroot
+@end
+
+@prototype luminous-willow
+  name=Luminous Willow
+  description=A willow whose leaves hold captured dusk. They chime softly when you brush past.
+  weight=30.0
+  volume=25.0
+  pocketable=false
+  alias=willow
+  alias=tree
+  @trigger on_enter emote lets down a curtain of chiming leaves.
+  @trigger on_enter when health below 80 then heal actor 5
+@end
+
+@prototype fairy-ring-stones
+  name=Fairy Ring
+  description=A ring of white stones no taller than your ankle. The grass inside is greener, as if color itself takes vacations here.
+  readable=true
+  read_text=Step inside only if you mean no harm. The ring keeps promises, not prisoners.
+  weight=10.0
+  volume=8.0
+  pocketable=false
+  alias=fairy ring
+  alias=ring
+@end
+
+@prototype moonpetal-tea
+  name=Moonpetal Tea
+  description=A corked vial of pale liquor that smells like rain on warm stone.
+  stackable=true
+  stack_count=2
+  weight=0.3
+  volume=0.2
+  pocketable=true
+  alias=tea
+  alias=moonpetal tea
+  @trigger on_take narrate Warmth spreads from your chest outward — the vale approves.
+  @trigger on_take grant-effect actor dewdrop_vigor
+@end
+
+@prototype glowcap-tincture
+  name=Glowcap Tincture
+  description=A tiny bottle of blue-green essence that pulses when you blink.
+  stackable=true
+  stack_count=2
+  weight=0.3
+  volume=0.2
+  pocketable=true
+  alias=tincture
+  alias=glowcap tincture
+  @trigger on_take narrate Your thoughts arrange themselves in prettier rows.
+  @trigger on_take grant-effect actor glowcap_luminance
+@end
+
+@prototype pixie-dust-vial
+  name=Pixie Dust Vial
+  description=A thimble-sized crystal vial full of shimmering dust that giggles when shaken.
+  stackable=true
+  stack_count=3
+  weight=0.2
+  volume=0.1
+  pocketable=true
+  alias=dust
+  alias=pixie dust
+  @trigger on_take narrate Your feet suddenly believe in second chances.
+  @trigger on_take grant-effect actor pixie_dust
+@end
+
+@prototype elven-circlet
+  name=Elven Circlet
+  description=A circlet of woven silver leaves that never tarnishes. It fits as if the metal remembers your shape.
+  is_wearable=true
+  wear_slot=head
+  mod_stat_wisdom=2
+  mod_stat_charisma=2
+  mod_max_health=5
+  weight=0.4
+  volume=0.3
+  pocketable=true
+  alias=circlet
+  alias=elven circlet
+@end
+
+@prototype starbloom-charm
+  name=Starbloom Charm
+  description=A dried starbloom pressed in resin. It glows faintly when you tell the truth.
+  is_wearable=true
+  wear_slot=torso
+  @grant-effect songpeace
+  weight=0.2
+  volume=0.1
+  pocketable=true
+  alias=charm
+  alias=starbloom
+  alias=starbloom charm
+@end
+
+@prototype gnome-pruning-knife
+  name=Gnome Pruning Knife
+  description=A tiny blade with a handle carved like an acorn. It is sharp enough for wonder, not war.
+  weight=0.5
+  volume=0.4
+  hand_slot=right
+  @mod-skill crafting 2
+  @mod-skill survival 1
+  alias=knife
+  alias=pruning knife
+@end
+
+@prototype fey-cloak
+  name=Feytravel Cloak
+  description=A cloak the color of twilight between two friendly thoughts. Moths land on it as if it were a branch.
+  is_wearable=true
+  wear_slot=torso
+  mod_encumbrance=0.88
+  mod_skill_stealth=2
+  @grant-effect wonderstruck
+  weight=1.2
+  volume=1.5
+  pocketable=false
+  alias=cloak
+  alias=fey cloak
+@end
+
+@prototype lore-scroll
+  name=Scroll of Gentle Roads
+  description=A birchbark scroll tied with violet thread. The ink shifts when you exhale.
+  readable=true
+  read_text=Glimmerfen asks little: arrive softly, leave kinder. DEW on the morning glade, SONG where reeds remember music, GLOW where mushrooms keep counsel, ROOT where the bridge breathes. Grace is not a prize — it is permission to rest.
+  weight=0.2
+  volume=0.2
+  pocketable=true
+  alias=scroll
+  alias=lore scroll
+@end
+
+@prototype grace-gift-chest
+  name=Grace Coffer
+  description=A coffer grown from living wood and mother-of-pearl. The latch opens as if it had been waiting for your name.
+  is_container=true
+  is_open=false
+  locked=false
+  capacity=6
+  max_weight=50
+  weight=11.0
+  volume=15.0
+  pocketable=false
+  alias=coffer
+  alias=grace coffer
+  alias=gift chest
+@end
+
+@prototype hidden-gnome-cache
+  name=Gnome Cache
+  description=A hollow log fitted with a door so small you must kneel. Someone tidy lives nearby.
+  hidden_until_discovered=true
+  discovery_stealth=6
+  is_container=true
+  is_open=true
+  capacity=2
+  max_weight=15
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=cache
+  alias=gnome cache
+@end
+
+@prototype hidden-fairy-nest
+  name=Fairy Nest
+  description=A thimble cup of moss and spider silk, tucked beneath a fern. Something inside exhales glitter.
+  hidden_until_discovered=true
+  discovery_stealth=7
+  weight=0.5
+  volume=0.5
+  pocketable=false
+  alias=nest
+  alias=fairy nest
+@end
+
+@prototype elder-reading-stone
+  name=Reading Stone
+  description=A flat stone warmed by no sun you can see. Book-shaped moss grows along one edge.
+  readable=true
+  read_text=Sit. Breathe. The vale does the rest.
+  weight=20.0
+  volume=15.0
+  pocketable=false
+  alias=stone
+  alias=reading stone
+@end
+
+# --- Integration items (host world portals + plaque) ---
+
+@item forest-fey-ring
+  prototype=mushroom-ring-portal
+  location=forest-path
+  door_direction=through
+  door_destination=fey-threshold
+@end
+
+@item beach-fey-arch
+  prototype=moonmist-arch
+  location=beach-shore
+  door_direction=mist
+  door_destination=fey-threshold
+@end
+
+@item forest-fey-plaque
+  prototype=fey-trail-plaque
+  location=forest-path
+@end
+
+# --- Way markers (navigation: DEW → SONG → GLOW → ROOT → GRACE) ---
+
+@item fey-threshold-marker
+  prototype=fey-way-marker
+  location=fey-threshold
+  description=A runestone ringed with four words — dew, song, glow, and root — each aimed along a different silvered path.
+  read_text=DEW first. Taste the morning glade. SONG waits where reeds remember music. GLOW gathers where mushrooms keep counsel. ROOT breathes beneath the living bridge. Then follow the hush to grace.
+@end
+
+@item fey-dew-marker
+  prototype=fey-way-marker
+  location=fey-dewglade
+  description=A stone facing east. DEW is etched in letters that catch light from nowhere.
+  read_text=DEW — the petals noticed you. SONG lies east where the reeds hum.
+@end
+
+@item fey-song-marker
+  prototype=fey-way-marker
+  location=fey-songbower
+  description=A stone facing south. SONG is carved in flowing script like a melody frozen mid-phrase.
+  read_text=SONG — you heard it. GLOW lies south where caps keep counsel.
+@end
+
+@item fey-glow-marker
+  prototype=fey-way-marker
+  location=fey-glowfen
+  description=A stone facing west. GLOW is carved beside a tiny mushroom doodle.
+  read_text=GLOW — the fen winks at you. ROOT lies west where the bridge breathes.
+@end
+
+@item fey-root-marker
+  prototype=fey-way-marker
+  location=fey-rootbridge
+  description=A stone facing north. ROOT is carved in interwoven lines like living wood.
+  read_text=ROOT — the bridge approved. GRACE waits north where starlight pools.
+@end
+
+@item fey-grace-marker
+  prototype=fey-way-marker
+  location=fey-grace
+  description=Four stones ring a still pool. Every etched face points outward — the vale releases you one way.
+  read_text=GRACE — Glimmerfen yields. Step OUT when the starlight remembers your name.
+@end
+
+@item fey-dew-petals
+  prototype=moonpetal-patch
+  location=fey-dewglade
+@end
+
+@item fey-song-reeds
+  prototype=singing-reed-bed
+  location=fey-songbower
+@end
+
+@item fey-glow-caps
+  prototype=glowcap-cluster
+  location=fey-glowfen
+@end
+
+@item fey-star-roots
+  prototype=starroot-tangle
+  location=fey-rootbridge
+@end
+
+@item fey-luminous-willow
+  prototype=luminous-willow
+  location=fey-songbower
+@end
+
+@item fey-fairy-ring
+  prototype=fairy-ring-stones
+  location=fey-glowfen
+  @trigger on_enter narrate The stones hum a welcome so quiet you feel it in your teeth.
+  @trigger on_enter when chance 40 then spawn item pixie-dust-vial
+@end
+
+@item fey-gnome-cache
+  prototype=hidden-gnome-cache
+  location=fey-rootbridge
+  @trigger on_discovered narrate A tidy door in a hollow log — someone small left this for the observant.
+  @trigger on_discovered spawn item gnome-pruning-knife
+  @trigger on_discovered spawn item lore-scroll
+@end
+
+@item fey-fairy-nest
+  prototype=hidden-fairy-nest
+  location=fey-dewglade
+  @trigger on_discovered narrate A thimble nest exhales glitter that lands on your lashes like snow.
+  @trigger on_discovered when skill stealth at_least 2 then narrate You must have arrived softly — the nest approves.
+  @trigger on_discovered spawn item pixie-dust-vial
+@end
+
+@item fey-elder-stone
+  prototype=elder-reading-stone
+  location=fey-grace
+@end
+
+@item fey-grace-coffer
+  prototype=grace-gift-chest
+  location=fey-grace
+@end
+
+# --- Schedules ---
+
+@schedule fey-mist-weather
+  target=fey-mist
+  interval=3
+  event=on_weather
+@end
+
+@schedule fey-song-respawn
+  target=fey-songbower
+  interval=4
+  event=on_respawn
+@end
+
+@schedule fey-dew-respawn
+  target=fey-dewglade
+  interval=5
+  event=on_respawn
+@end
+
+# --- Ambient creature spawners (wonder, not danger) ---
+
+@spawn-template glimmer-moth
+  name=Glimmer Moth
+  creature=human
+  @use-behavior fey_shy
+  @trigger on_enter emote spirals past your shoulder trailing soft light.
+@end
+
+@spawn-template pixie-wisp
+  name=Pixie Wisp
+  creature=human
+  @use-behavior fey_wanderer
+  @trigger on_enter emote giggles from inside a fern, then pretends it was the wind.
+@end
+
+@spawn-template song-spirit
+  name=Song Spirit
+  creature=human
+  @use-behavior fey_shy
+  @trigger on_enter emote adds a harmony you almost recognize from childhood.
+@end
+
+@spawner fey-dew-moths
+  location=fey-dewglade
+  trigger=on_enter
+  chance=0.8
+  max_active=2
+  @entry glimmer-moth weight=2
+  @entry pixie-wisp weight=1
+@end
+
+@spawner fey-song-spirits
+  location=fey-songbower
+  trigger=on_enter
+  chance=0.9
+  max_active=2
+  @entry song-spirit weight=2
+  @entry pixie-wisp weight=2
+@end
+
+@spawner fey-glow-wisps
+  location=fey-glowfen
+  trigger=periodic
+  periodic_interval=3
+  chance=0.7
+  max_active=2
+  @entry glimmer-moth weight=2
+  @entry pixie-wisp weight=1
+@end
+
+@spawner fey-song-respawn-faeries
+  location=fey-songbower
+  trigger=on_respawn
+  chance=0.6
+  max_active=1
+  @entry pixie-wisp weight=1
+@end
+
+# --- Resource spawners (plant harvesting) ---
+
+@resource-template dew-harvest-tea
+  prototype=moonpetal-tea
+  count=1
+@end
+
+@resource-template dew-harvest-petals
+  prototype=starbloom-charm
+  count=1
+@end
+
+@resource-spawner moonpetal-harvest
+  target=fey-dew-petals
+  trigger=on_harvest
+  chance=0.85
+  max_active=2
+  @entry dew-harvest-tea weight=3
+  @entry dew-harvest-petals weight=1
+@end
+
+@resource-template song-harvest-dust
+  prototype=pixie-dust-vial
+  count=1
+@end
+
+@resource-template song-harvest-scroll
+  prototype=lore-scroll
+  count=1
+@end
+
+@resource-spawner singing-reed-harvest
+  target=fey-song-reeds
+  trigger=on_harvest
+  chance=0.8
+  max_active=2
+  @entry song-harvest-dust weight=2
+  @entry song-harvest-scroll weight=1
+@end
+
+@resource-template glow-harvest-tincture
+  prototype=glowcap-tincture
+  count=1
+@end
+
+@resource-template glow-harvest-circlet
+  prototype=elven-circlet
+  count=1
+@end
+
+@resource-spawner glowcap-harvest
+  target=fey-glow-caps
+  trigger=on_harvest
+  chance=0.85
+  max_active=2
+  @entry glow-harvest-tincture weight=3
+  @entry glow-harvest-circlet weight=1
+@end
+
+@resource-template root-harvest-cloak
+  prototype=fey-cloak
+  count=1
+@end
+
+@resource-template root-harvest-tea
+  prototype=moonpetal-tea
+  count=1
+@end
+
+@resource-spawner starroot-harvest
+  target=fey-star-roots
+  trigger=on_harvest
+  chance=0.75
+  max_active=2
+  @entry root-harvest-cloak weight=1
+  @entry root-harvest-tea weight=2
+@end
+
+# --- Loot spawners ---
+
+@loot-template shrine-dust
+  prototype=pixie-dust-vial
+  count=1
+@end
+
+@loot-template shrine-tea
+  prototype=moonpetal-tea
+  count=1
+@end
+
+@loot-spawner fey-shrine-offering
+  target=fey-shrine
+  trigger=on_enter
+  once=true
+  chance=1.0
+  max_active=1
+  @entry shrine-dust weight=2
+  @entry shrine-tea weight=1
+@end
+
+@loot-template grace-circlet
+  prototype=elven-circlet
+  count=1
+@end
+
+@loot-template grace-cloak
+  prototype=fey-cloak
+  count=1
+@end
+
+@loot-template grace-charm
+  prototype=starbloom-charm
+  count=1
+@end
+
+@loot-template grace-dust
+  prototype=pixie-dust-vial
+  count=2
+@end
+
+@loot-template grace-knife
+  prototype=gnome-pruning-knife
+  count=1
+@end
+
+@loot-template grace-scroll
+  prototype=lore-scroll
+  count=1
+@end
+
+@loot-spawner fey-grace-reward
+  target=fey-grace-coffer
+  trigger=on_open
+  once=true
+  chance=1.0
+  max_active=1
+  @entry grace-circlet weight=3
+  @entry grace-cloak weight=3
+  @entry grace-charm weight=2
+  @entry grace-dust weight=3
+  @entry grace-knife weight=2
+  @entry grace-scroll weight=2
+@end
+
+# --- Peaceful NPCs ---
+
+@npc elder-elf-sage
+  location=fey-grace
+  creature=human
+  name=Elder Elf Sage
+  @use-behavior fey_greeter
+  @trigger on_enter say You need not hurry in Glimmerfen. The starlight has already decided you are welcome.
+  @trigger on_enter when health below 60 then heal actor 10
+  @trigger on_enter when health below 60 then narrate The elder touches your brow — weariness loosens like a knot untied.
+  @trigger on_enter when condition enchantment then grant-effect actor fey_glamour
+  @trigger on_enter when condition enchantment then narrate The elder smiles as if you arrived wearing starlight on purpose.
+@end
+
+@npc gnome-gardener
+  location=fey-dewglade
+  creature=human
+  name=Gnome Gardener
+  @use-behavior fey_greeter
+  @trigger on_enter say Moonpetals open for folk who arrive without thunder in their hearts.
+  @trigger on_enter grant-effect actor dewdrop_vigor
+@end
+
+@npc fairy-guide
+  location=fey-threshold
+  creature=human
+  name=Fairy Guide
+  @use-behavior fey_wanderer
+  @trigger on_enter say Follow the hush, not the hurry — dew, song, glow, root, then grace.
+  @trigger on_enter when skill survival below 2 then narrate The fairy traces glowing letters in the air until you nod.
+@end
+
+# --- Fey realm areas ---
+
+type: area
+base_name: fey-threshold
+name: Threshold of Glimmerfen
+description: Silver grass bends without wind. The air tastes of rain that chose not to fall. Every path looks patient.
+@trigger on_enter narrate Your footsteps sound borrowed, as if the vale is lending you quiet.
+@trigger on_enter when health below 50 then heal actor 6
+@trigger on_enter grant-effect actor wonderstruck
+@trigger on_enter when skill survival at_least 3 then mod-skill actor survival 1
+exits:
+  north: fey-dewglade
+  east: fey-mist
+  south: fey-bramble
+  west: fey-mirror
+  through: forest-path
+  mist: beach-shore
+exit_returns:
+  through: through
+  mist: mist
+
+type: area
+base_name: fey-dewglade
+name: Dewglade
+description: Moonpetals open in a meadow where morning seems to have paused for tea. Dew hangs in the air like polite punctuation.
+@trigger on_enter narrate The glade smells of rain on warm stone.
+@trigger on_respawn narrate Fresh petals unfurl with a sound like distant bells.
+@trigger on_enter when health below 85 then heal actor 5
+@trigger on_enter grant-effect actor dewdrop_vigor
+exits:
+  south: fey-threshold
+  east: fey-songbower
+  north: fey-thorn
+
+type: area
+base_name: fey-songbower
+name: Songbower
+description: A willow bows over reeds that hum in harmonies no single throat could own. The bower feels attended, not occupied.
+@trigger on_enter narrate The reeds add a harmony to your breathing.
+@trigger on_respawn narrate A new note threads through the bower — the vale is composing again.
+@trigger on_respawn spawn pixie-wisp
+@trigger on_enter grant-effect actor songpeace
+exits:
+  west: fey-dewglade
+  south: fey-glowfen
+  east: fey-wisp
+
+type: area
+base_name: fey-glowfen
+name: Glowfen
+description: Mushrooms hold council in blue-green light. A fairy ring of white stones waits with the patience of old manners.
+@trigger on_enter narrate Spores rise like lazy fireflies, unconcerned with ceilings.
+@trigger on_enter grant-effect actor glowcap_luminance
+@trigger on_enter when skill crafting at_least 1 then narrate You recognize the caps as kin to every good idea you almost wrote down.
+@trigger on_enter when chance 35 then spawn pixie-wisp
+@trigger on_enter when condition enchantment then heal actor 4
+exits:
+  north: fey-songbower
+  west: fey-rootbridge
+  south: fey-glimmer
+
+type: area
+base_name: fey-rootbridge
+name: Rootbridge
+description: Living roots arch over a stream so clear you can see starlight stored in the pebbles below. The wood breathes slowly, in unison.
+@trigger on_enter narrate The bridge exhales moss-scented calm.
+@trigger on_enter grant-effect actor rootwise
+@trigger on_enter when health below 75 then heal actor 7
+exits:
+  east: fey-glowfen
+  north: fey-grace
+  west: fey-fern
+
+type: area
+base_name: fey-grace
+name: Grace Pool
+description: Starlight gathers in a pool that does not ripple when you speak. A coffer of living wood waits without impatience. This is where Glimmerfen keeps its gentleness on purpose.
+@trigger on_enter narrate The vale loosens its hold on your shoulders — you feel permitted to rest.
+@trigger on_enter when health below 100 then heal actor 12
+@trigger on_enter grant-effect actor fey_grace
+@trigger on_enter grant-effect actor fey_glamour
+exits:
+  south: fey-rootbridge
+  out: fey-threshold
+scatter_to: the-void, forest-path, beach-trail
+scatter_direction: out
+
+# --- Gentle wrong turns (loop back to threshold) ---
+
+type: area
+base_name: fey-mist
+name: Kindly Mist
+description: Silver mist folds the paths into identical kindnesses. You are not lost — only being introduced to patience.
+@trigger on_weather narrate The mist rearranges itself into shapes you almost recognize from dreams.
+@trigger on_enter grant-effect actor moon_mist
+@trigger on_enter narrate Starflowers bloom in your thoughts — briefly, impossibly.
+exits:
+  out: fey-threshold
+loop_to: fey-threshold
+
+type: area
+base_name: fey-bramble
+name: Soft Bramble
+description: Brambles part for you without being asked. The trail circles back with the politeness of a good host.
+@trigger on_enter narrate Thorns turn aside as if you are expected elsewhere.
+@trigger on_enter grant-effect actor dewdrop_vigor
+@trigger on_enter when health below 80 then heal actor 5
+exits:
+  out: fey-threshold
+loop_to: fey-threshold
+
+type: area
+base_name: fey-mirror
+name: Mirror Glade
+description: A still pool shows trees that are not behind you. Your reflection smiles first.
+@trigger on_enter narrate Your reflection bows — you are not sure which of you initiated it.
+@trigger on_enter grant-effect actor wonderstruck
+@trigger on_enter when skill wisdom at_least 10 then teleport fey-grace
+@trigger on_enter when skill wisdom at_least 10 then narrate The pool offers a shortcut. You accept before manners can object.
+exits:
+  out: fey-threshold
+loop_to: fey-threshold
+
+type: area
+base_name: fey-thorn
+name: Thorn Quiet
+description: Rose thorns here are decorative and philosophical. The path returns you to the threshold with a whisper of petals.
+exits:
+  out: fey-threshold
+loop_to: fey-threshold
+
+type: area
+base_name: fey-wisp
+name: Wisp Hollow
+description: Cold lights drift between ferns. Each promises a shortcut; each delivers a gentle lesson in circles.
+@trigger on_enter when chance 40 then spawn glimmer-moth
+@trigger on_enter grant-effect actor fey_glamour
+@trigger on_enter narrate The lights bow — you are not sure which of you initiated it.
+exits:
+  out: fey-threshold
+loop_to: fey-threshold
+
+type: area
+base_name: fey-glimmer
+name: Glimmer Dell
+description: The dell sparkles with mica and good intentions. It is beautiful and not quite the way through.
+@trigger on_enter when chance 30 then spawn glimmer-moth
+exits:
+  out: fey-threshold
+loop_to: fey-threshold
+
+type: area
+base_name: fey-fern
+name: Fern Cathedral
+description: Ferns arch into a green nave. Somewhere a gnome has been gardening with devotional attention.
+@trigger on_enter narrate A tiny wheelbarrow track crosses the moss — someone industrious and kind lives nearby.
+@trigger on_enter when skill crafting below 1 then mod-skill actor crafting 1
+@trigger on_enter when chance 25 then spawn pixie-wisp
+exits:
+  out: fey-threshold
+loop_to: fey-threshold
+
+type: area
+base_name: fey-shrine
+name: Petal Shrine
+description: A bowl of dew holds fallen petals arranged like a constellation. Offerings here are memories of kindness.
+@trigger on_enter narrate You feel briefly catalogued among good intentions.
+@trigger on_enter spawn item moonpetal-tea
+@trigger on_enter when health below 50 then heal actor 10
+@trigger on_enter when condition enchantment then narrate The petals sort your thoughts into gentler piles.
+@trigger on_enter when skill crafting below 1 then mod-skill actor crafting 1
+exits:
+  out: fey-threshold
+loop_to: fey-threshold

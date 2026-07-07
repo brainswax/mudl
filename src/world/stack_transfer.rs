@@ -575,6 +575,8 @@ mod tests {
             properties: Default::default(),
             verbs: Default::default(),
             event_handlers: Default::default(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         }

@@ -7,12 +7,13 @@ use super::behavior_def::parse_behavior_file;
 use super::item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
 use super::loot_spawner_def::parse_loot_spawner_file;
 use super::resource_spawner_def::parse_resource_spawner_file;
+use super::schedule_def::parse_schedule_file;
 use super::npc_def::parse_npc_file;
 use super::spawner_def::parse_spawner_file;
 use super::world_def::{parse_world_file, WorldDef};
 use crate::mudl::{
     LootSpawnerDef, LootTemplateDef, NpcDef, ResourceSpawnerDef, ResourceTemplateDef,
-    SpawnTemplateDef, SpawnerDef,
+    ScheduleDef, SpawnTemplateDef, SpawnerDef,
 };
 
 /// A loaded MUDL source — local file or remote URL fetched at load time.
@@ -49,6 +50,7 @@ pub struct LoadedWorld {
     pub loot_spawner_defs: Vec<LootSpawnerDef>,
     pub resource_template_defs: Vec<ResourceTemplateDef>,
     pub resource_spawner_defs: Vec<ResourceSpawnerDef>,
+    pub schedule_defs: Vec<ScheduleDef>,
     pub behavior_template_defs: Vec<super::behavior_def::BehaviorTemplateDef>,
     pub starting_location: Option<String>,
 }
@@ -212,6 +214,7 @@ fn load_world(
     let mut loot_spawner_defs = Vec::new();
     let mut resource_template_defs = Vec::new();
     let mut resource_spawner_defs = Vec::new();
+    let mut schedule_defs = Vec::new();
     let mut behavior_template_defs = Vec::new();
     let mut resolved_start = starting_location;
 
@@ -233,6 +236,7 @@ fn load_world(
         let (resource_templates, resource_spawners) = parse_resource_spawner_file(&file_content);
         resource_template_defs.extend(resource_templates);
         resource_spawner_defs.extend(resource_spawners);
+        schedule_defs.extend(parse_schedule_file(&file_content));
         behavior_template_defs.extend(parse_behavior_file(&file_content));
         if start.is_some() {
             resolved_start = start;
@@ -263,6 +267,7 @@ fn load_world(
         loot_spawner_defs,
         resource_template_defs,
         resource_spawner_defs,
+        schedule_defs,
         behavior_template_defs,
         starting_location: resolved_start,
     })
@@ -616,10 +621,40 @@ mod tests {
                 .any(|d| d.base_name == "haunted-entry"),
             "haunted forest expansion should load via @import"
         );
+        assert!(
+            world
+                .world_defs
+                .iter()
+                .any(|d| d.base_name == "swamp-entry"),
+            "poisonous swamp expansion should load via @import"
+        );
         assert!(world
             .item_instances
             .iter()
             .any(|i| i.base_name == "forest-hollow-oak"));
+        assert!(world
+            .item_instances
+            .iter()
+            .any(|i| i.base_name == "forest-swamp-warning"));
+        assert!(world
+            .npc_defs
+            .iter()
+            .any(|n| n.base_name == "bog-warden"));
+        assert!(
+            world
+                .world_defs
+                .iter()
+                .any(|d| d.base_name == "spider-entry"),
+            "giant spider den expansion should load via @import"
+        );
+        assert!(world
+            .item_instances
+            .iter()
+            .any(|i| i.base_name == "swamp-spider-fissure"));
+        assert!(world
+            .npc_defs
+            .iter()
+            .any(|n| n.base_name == "brood-queen"));
     }
 
     #[test]
@@ -627,14 +662,14 @@ mod tests {
         let universe = load_module("modules/default").unwrap();
         let world = universe.active_world().unwrap();
         assert!(world.sources.iter().any(
-            |s| matches!(s, MudlSource::File(p) if p.ends_with("expansions/haunted_forest.mudl"))
+            |s| matches!(s, MudlSource::File(p) if p.ends_with("expansions/haunted_forest/haunted_forest.mudl"))
         ));
     }
 
     #[test]
     fn import_file_url_loads_expansion() {
         let expansion =
-            PathBuf::from("modules/default/worlds/default_world/expansions/haunted_forest.mudl")
+            PathBuf::from("modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl")
                 .canonicalize()
                 .unwrap();
         let url = format!("file://{}", expansion.display());

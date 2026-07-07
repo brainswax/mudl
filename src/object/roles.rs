@@ -1255,6 +1255,8 @@ mod tests {
             event_handlers: HashMap::new(),
             is_deleted: false,
             deleted_at: None,
+            revision: 0,
+            updated_at: None,
         }
     }
 

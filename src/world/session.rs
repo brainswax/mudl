@@ -2,16 +2,6 @@ use std::collections::HashMap;
 
 use crate::object::{Object, ObjectFactory, ObjectId};
 use crate::persistence::Persistence;
-use crate::world::dirty::DirtyTracker;
-
-/// Hydrated world state restored from persistence on startup.
-#[derive(Debug, Clone)]
-pub struct WorldSession {
-    pub objects: HashMap<ObjectId, Object>,
-    pub current_location: Option<ObjectId>,
-    pub dirty: DirtyTracker,
-}
-
 /// Load all active objects from persistence into an in-memory map.
 pub async fn hydrate_world<P: Persistence>(
     persistence: &P,
@@ -42,19 +32,11 @@ pub fn resolve_player_location(
     }
 }
 
-/// Bootstrap + hydrate: returns full session state for the REPL or other frontends.
-pub async fn restore_session<P: Persistence>(
+/// Hydrate the shared object graph from persistence (no per-player location).
+pub async fn restore_world_graph<P: Persistence>(
     persistence: &P,
-    player_id: ObjectId,
-    bootstrap_location: Option<ObjectId>,
-) -> anyhow::Result<WorldSession> {
-    let objects = hydrate_world(persistence).await?;
-    let current_location = resolve_player_location(&player_id, &objects, bootstrap_location);
-    Ok(WorldSession {
-        objects,
-        current_location,
-        dirty: DirtyTracker::default(),
-    })
+) -> anyhow::Result<HashMap<ObjectId, Object>> {
+    hydrate_world(persistence).await
 }
 
 /// Resolve start location after bootstrap when the world already exists.
@@ -80,24 +62,31 @@ pub async fn resolve_bootstrap_location<P: Persistence>(
 /// Persist a batch of objects (e.g. after inventory or movement changes).
 pub async fn persist_objects<P: Persistence>(
     persistence: &P,
-    objects: &HashMap<ObjectId, Object>,
+    objects: &mut HashMap<ObjectId, Object>,
     ids: &[ObjectId],
 ) -> anyhow::Result<()> {
-    for id in ids {
-        if let Some(obj) = objects.get(id) {
-            persistence.save_object(obj).await?;
-        }
-    }
+    crate::persistence::save_objects_batch_with_retry(
+        persistence,
+        objects,
+        ids,
+        crate::persistence::DEFAULT_SAVE_RETRIES,
+    )
+    .await?;
     Ok(())
 }
 
-/// Persist every object in the map.
+/// Persist every object in the map inside one transaction when supported.
 pub async fn persist_all<P: Persistence>(
     persistence: &P,
-    objects: &HashMap<ObjectId, Object>,
+    objects: &mut HashMap<ObjectId, Object>,
 ) -> anyhow::Result<()> {
-    for obj in objects.values() {
-        persistence.save_object(obj).await?;
-    }
+    let ids: Vec<ObjectId> = objects.keys().cloned().collect();
+    crate::persistence::save_objects_batch_with_retry(
+        persistence,
+        objects,
+        &ids,
+        crate::persistence::DEFAULT_SAVE_RETRIES,
+    )
+    .await?;
     Ok(())
 }

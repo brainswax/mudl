@@ -87,7 +87,31 @@ Clearing optional object fields:
 - `@unset <target> location` → `location = None`
 - `@unset <target> prototype` → `prototype = None`
 
-### Existing wizard commands (unchanged)
+### Event scripts (`@trigger`)
+
+Attach live behavior without recompiling the engine. Scripts validate at attach time; changes persist immediately.
+
+```
+@trigger help
+@trigger here on_enter narrate Silver mist clings to the branches.
+@trigger chest on_open say The lid creaks.
+@trigger list here
+@trigger test here on_enter
+```
+
+Events include `on_enter`, `on_kill`, `on_harvest`, `on_discovered`, and more. Script verbs: `narrate`, `damage`, `grant-effect`, `cure-tag`, `spawn`, `when … then …`, `stop`. Full reference: [LANGUAGE.md](LANGUAGE.md#4-events--hooks).
+
+**Host** = the object whose handlers run (the room, item, or creature you attach the trigger to). **Actor** = who caused the event (usually the player).
+
+### Place building
+
+| Command | Purpose |
+|---------|---------|
+| `@dig <dir> <name...>` | Create a new place and link from here |
+| `@link <dir> <target> [--return <dir>]` | Wire an exit (reciprocal by default) |
+| `@unlink <dir>` | Remove an exit from here |
+
+### Other wizard commands
 
 | Command | Purpose |
 |---------|---------|
@@ -96,6 +120,8 @@ Clearing optional object fields:
 | `@dump [target]` | Full JSON debug dump |
 | `@delete <target>` | Soft-delete |
 | `@undelete <id>` | Restore soft-deleted object |
+| `@import <url-or-path>` | Load expansion MUDL at runtime |
+| `@damage` / `@heal` | Adjust creature health |
 | `load <id>` / `save <id>` | Session cache ↔ persistence |
 
 ### Removed commands

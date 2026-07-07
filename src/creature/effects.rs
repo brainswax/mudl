@@ -2,8 +2,10 @@
 
 use std::collections::HashMap;
 
-use crate::mudl::{AnatomyRegistry, EffectDef};
+use crate::mudl::AnatomyRegistry;
 use crate::object::{Object, PermissionFlags, Property, Value};
+
+use super::conditions::{apply_condition, modifiers_from_def};
 
 /// Aggregated modifiers from active effects.
 #[derive(Debug, Clone, PartialEq)]
@@ -65,36 +67,20 @@ pub fn collect_active_effect_modifiers(
     mods
 }
 
-fn modifiers_from_def(def: &EffectDef) -> EffectModifiers {
-    EffectModifiers {
-        max_health_bonus: def.mod_max_health,
-        max_weight_bonus: def.mod_max_weight,
-        encumbrance_factor: def.mod_encumbrance,
-        stat_mods: def.stat_mods.clone(),
-        skill_mods: def.skill_mods.clone(),
-    }
-}
-
 /// Apply an effect by name (idempotent) and refresh derived properties on the creature.
 pub fn apply_effect(creature: &mut Object, effect_name: &str, anatomy: &AnatomyRegistry) {
-    if anatomy.effect(effect_name).is_none() {
-        return;
-    }
-    let mut current = active_effects(creature);
-    if !current.iter().any(|e| e == effect_name) {
-        current.push(effect_name.to_string());
-        set_active_effects(creature, current);
-    }
-    refresh_effect_derived_properties(creature, anatomy);
+    apply_condition(creature, effect_name, anatomy);
 }
 
 /// Remove an effect and refresh derived properties.
 pub fn remove_effect(creature: &mut Object, effect_name: &str, anatomy: &AnatomyRegistry) {
-    let current: Vec<String> = active_effects(creature)
-        .into_iter()
-        .filter(|e| e != effect_name)
-        .collect();
-    set_active_effects(creature, current);
+    let mut current = active_effects(creature);
+    current.retain(|e| e != effect_name);
+    if current.is_empty() {
+        creature.properties.remove("active_effects");
+    } else {
+        set_active_effects(creature, current);
+    }
     refresh_effect_derived_properties(creature, anatomy);
 }
 
@@ -139,7 +125,8 @@ pub fn effect_max_weight_bonus(creature: &Object) -> i64 {
 mod tests {
     use super::*;
     use crate::creature::vitality::init_creature_vitality;
-    use crate::mudl::{CreatureDef, EffectDef};
+    use crate::mudl::CreatureDef;
+    use crate::mudl::EffectDef;
     use crate::object::PermissionFlags;
 
     fn weary_effect() -> EffectDef {
@@ -151,6 +138,12 @@ mod tests {
             stat_mods: HashMap::from([("dexterity".to_string(), -2)]),
             skill_mods: HashMap::from([("stealth".to_string(), -1)]),
             regen_on_enter: 0,
+            condition_type: None,
+            cure_tags: Vec::new(),
+            damage_on_tick: 0,
+            heal_on_tick: 0,
+            tick_on: "on_enter".to_string(),
+            duration_ticks: 0,
         }
     }
 
@@ -172,6 +165,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         }

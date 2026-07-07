@@ -1,6 +1,6 @@
 # Example Universes
 
-Place alternative universe packs here using the same flat layout as `modules/default/`:
+Alternative universe packs live here using the same layout as `modules/default/`. See [MODULES.md](../MODULES.md) and [LANGUAGE.md](../LANGUAGE.md) for MUDL syntax.
 
 ```
 examples/my-universe/

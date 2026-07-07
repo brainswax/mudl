@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(npcs[0].base_name, "path-watcher");
         assert_eq!(npcs[0].location, "forest-path");
         assert!(npcs[0].behaviors.is_empty());
-        assert_eq!(npcs[0].triggers.len(), 3);
+        assert_eq!(npcs[0].triggers.len(), 4);
         assert_eq!(npcs[0].triggers[0].event, "on_enter");
         assert!(npcs[0].triggers[0].code.contains("trees seem to lean closer"));
     }

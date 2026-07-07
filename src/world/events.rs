@@ -1,9 +1,10 @@
 //! Core event bus — `@trigger` scripts on places and objects fire through here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::mudl::{AnatomyRegistry, TriggerDef};
 use crate::object::{Behavior, LocationRef, Object, ObjectId, PermissionFlags};
+use crate::world::dispatch_guard::{DispatchError, DispatchStack};
 use crate::world::move_manager::MoveResult;
 
 use crate::mudl::trigger_def::events;
@@ -28,7 +29,11 @@ pub struct EventContext {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventOutcome {
     pub lines: Vec<String>,
-    pub dirty: Vec<ObjectId>,
+    pub dirty: HashSet<ObjectId>,
+    /// When true, remaining handlers and phases for this dispatch are skipped.
+    pub cancelled: bool,
+    /// Non-fatal script/subscriber failures collected for logging and builder diagnostics.
+    pub errors: Vec<String>,
 }
 
 impl EventOutcome {
@@ -37,19 +42,35 @@ impl EventOutcome {
     }
 
     pub fn mark_dirty(&mut self, id: &ObjectId) {
-        if !self.dirty.iter().any(|d| d == id) {
-            self.dirty.push(id.clone());
-        }
+        self.dirty.insert(id.clone());
+    }
+
+    pub fn record_error(&mut self, message: impl Into<String>) {
+        self.errors.push(message.into());
+    }
+
+    pub fn cancel(&mut self) {
+        self.cancelled = true;
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 
     pub fn append(&mut self, other: EventOutcome) {
-        for line in other.lines {
-            self.push_line(line);
-        }
-        for id in other.dirty {
-            self.mark_dirty(&id);
+        self.lines.extend(other.lines);
+        self.dirty.extend(other.dirty);
+        self.errors.extend(other.errors);
+        if other.cancelled {
+            self.cancelled = true;
         }
     }
+}
+
+fn dispatch_error_outcome(err: DispatchError) -> EventOutcome {
+    let mut outcome = EventOutcome::default();
+    outcome.record_error(err.to_string());
+    outcome
 }
 
 /// Attach MUDL `@trigger` definitions to a live object.
@@ -87,17 +108,40 @@ pub fn run_event_handlers_on(host: &Object, event_name: &str) -> Vec<String> {
 
 /// Execute `event_name` with full script semantics (react, teleport, spawn, stat mods, …).
 ///
-/// Also dispatches registered subscribers (creature spawners, loot spawners) on the host.
+/// Dispatch order (production):
+/// 1. Subscribers — scheduler tick, due `@schedule` jobs, spawner modules
+/// 2. Host `@trigger` scripts — registration order; stops early when [`EventOutcome::cancelled`]
 pub fn execute_event(
+    dispatch: &mut DispatchStack,
     event_name: &str,
     ctx: &EventContext,
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: Option<&AnatomyRegistry>,
 ) -> EventOutcome {
+    let _guard = match dispatch.enter(&ctx.host_id, event_name) {
+        Ok(guard) => guard,
+        Err(err) => return dispatch_error_outcome(err),
+    };
+
+    if !objects
+        .get(&ctx.host_id)
+        .is_some_and(|host| host.is_active())
+    {
+        let mut outcome = EventOutcome::default();
+        outcome.record_error(format!(
+            "event '{event_name}' skipped: host {} is missing or inactive",
+            ctx.host_id
+        ));
+        return outcome;
+    }
+
     let mut outcome = EventOutcome::default();
     outcome.append(dispatch_event_subscribers(
         event_name, ctx, objects, anatomy,
     ));
+    if outcome.is_cancelled() {
+        return outcome;
+    }
     outcome.append(execute_host_event(
         event_name, ctx, objects, anatomy,
     ));
@@ -106,6 +150,7 @@ pub fn execute_event(
 
 /// Convenience: run death/kill triggers and loot spawners when a creature is slain.
 pub fn execute_kill_events(
+    dispatch: &mut DispatchStack,
     victim_id: &ObjectId,
     killer_id: &ObjectId,
     room_id: &ObjectId,
@@ -121,12 +166,14 @@ pub fn execute_kill_events(
         target_id: Some(killer_id.clone()),
     };
     outcome.append(execute_event(
+        dispatch,
         events::ON_DEATH,
         &victim_ctx,
         objects,
         anatomy,
     ));
     outcome.append(execute_event(
+        dispatch,
         events::ON_KILL,
         &victim_ctx,
         objects,
@@ -141,6 +188,7 @@ pub fn execute_kill_events(
             target_id: Some(victim_id.clone()),
         };
         outcome.append(execute_event(
+            dispatch,
             events::ON_KILL,
             &killer_ctx,
             objects,
@@ -153,6 +201,7 @@ pub fn execute_kill_events(
 
 /// Resolve the room context for a completed move and fire `on_move` on the moved object.
 pub fn emit_on_move_event(
+    dispatch: &mut DispatchStack,
     actor_id: &ObjectId,
     move_result: &MoveResult,
     objects: &mut HashMap<ObjectId, Object>,
@@ -166,6 +215,7 @@ pub fn emit_on_move_event(
         target_id: None,
     };
     execute_event(
+        dispatch,
         crate::mudl::trigger_def::events::ON_MOVE,
         &ctx,
         objects,
@@ -193,6 +243,7 @@ fn room_id_for_location(
 
 #[cfg(test)]
 mod tests {
+    use crate::world::dispatch_guard::MAX_DISPATCH_DEPTH;
     use super::*;
     use std::collections::HashMap;
 
@@ -208,6 +259,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -259,6 +312,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -275,6 +330,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -290,6 +347,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -307,7 +366,9 @@ mod tests {
             (npc_id.clone(), npc),
         ]);
 
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             "on_discovered",
             &EventContext {
                 actor_id: player_id,
@@ -344,6 +405,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -365,6 +428,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -404,6 +469,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -416,7 +483,9 @@ mod tests {
             (proto.id.clone(), proto),
         ]);
 
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             events::ON_OPEN,
             &EventContext {
                 actor_id: player_id.clone(),
@@ -433,6 +502,209 @@ mod tests {
             outcome.lines
         );
         assert!(!outcome.dirty.is_empty());
+    }
+
+    #[test]
+    fn stop_cancels_remaining_host_handlers() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:test-001");
+        let mut room = Object {
+            id: room_id.clone(),
+            name: "Test Room".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
+            is_deleted: false,
+            deleted_at: None,
+        };
+        attach_triggers(
+            &mut room,
+            &[
+                TriggerDef {
+                    event: "on_enter".to_string(),
+                    code: "narrate First line.".to_string(),
+                },
+                TriggerDef {
+                    event: "on_enter".to_string(),
+                    code: "stop".to_string(),
+                },
+                TriggerDef {
+                    event: "on_enter".to_string(),
+                    code: "narrate Third line.".to_string(),
+                },
+            ],
+        );
+
+        let mut objects = HashMap::from([(room_id.clone(), room)]);
+        let mut dispatch = DispatchStack::default();
+        let outcome = execute_event(
+            &mut dispatch,
+            "on_enter",
+            &EventContext {
+                actor_id: player_id,
+                host_id: room_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.lines.len(), 1);
+        assert_eq!(outcome.lines[0], "First line.");
+    }
+
+    #[test]
+    fn execute_event_records_inactive_host_error() {
+        let player_id = ObjectId::new("player:hero-001");
+        let host_id = ObjectId::new("item:gone-001");
+        let mut objects = HashMap::new();
+        let mut dispatch = DispatchStack::default();
+        let outcome = execute_event(
+            &mut dispatch,
+            "on_open",
+            &EventContext {
+                actor_id: player_id,
+                host_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("inactive"));
+    }
+
+    #[test]
+    fn dispatch_guard_rejects_reentrant_cycle() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:test-001");
+        let room = Object {
+            id: room_id.clone(),
+            name: "Test Room".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let mut objects = HashMap::from([(room_id.clone(), room)]);
+
+        let mut dispatch = DispatchStack::default();
+        dispatch.test_seed(room_id.clone(), "on_enter");
+
+        let outcome = execute_event(
+            &mut dispatch,
+            "on_enter",
+            &EventContext {
+                actor_id: player_id,
+                host_id: room_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("cycle"));
+    }
+
+    #[test]
+    fn dispatch_guard_rejects_excessive_depth() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:test-001");
+        let room = Object {
+            id: room_id.clone(),
+            name: "Test Room".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let mut objects = HashMap::from([(room_id.clone(), room)]);
+
+        let mut dispatch = DispatchStack::default();
+        for i in 0..MAX_DISPATCH_DEPTH {
+            let host = ObjectId::new(format!("area:depth-{i:03}"));
+            dispatch.test_seed(host, "on_enter");
+        }
+
+        let outcome = execute_event(
+            &mut dispatch,
+            "on_enter",
+            &EventContext {
+                actor_id: player_id,
+                host_id: room_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("depth exceeded"));
+    }
+
+    #[test]
+    fn missing_event_handlers_is_silent_success() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:quiet-001");
+        let room = Object {
+            id: room_id.clone(),
+            name: "Quiet Room".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let mut objects = HashMap::from([(room_id.clone(), room)]);
+        let mut dispatch = DispatchStack::default();
+        let outcome = execute_event(
+            &mut dispatch,
+            "on_open",
+            &EventContext {
+                actor_id: player_id,
+                host_id: room_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert!(outcome.lines.is_empty());
+        assert!(outcome.errors.is_empty());
+        assert!(!outcome.cancelled);
     }
 
     #[test]
@@ -454,6 +726,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -476,6 +750,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -493,7 +769,9 @@ mod tests {
             (chest_id.clone(), chest),
         ]);
 
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             events::ON_OPEN,
             &EventContext {
                 actor_id: player_id.clone(),

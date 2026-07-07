@@ -1,6 +1,7 @@
 pub mod bootstrap;
 pub mod container_fit;
 pub mod dirty;
+pub mod dispatch_guard;
 pub mod discovery;
 pub mod door;
 pub mod exit_index;
@@ -17,9 +18,11 @@ pub mod possession;
 pub mod scheduler;
 pub mod session;
 pub mod stack_transfer;
+pub mod world_state;
 
 pub use bootstrap::bootstrap_world;
 pub use dirty::{persist_dirty, DirtyTracker};
+pub use dispatch_guard::{DispatchError, DispatchStack, MAX_DISPATCH_DEPTH};
 pub use discovery::{
     entity_visible_to_player, is_object_hidden_from_player, object_visible_to_player,
     run_discovery_on_look, run_object_discovery_on_look,
@@ -32,6 +35,7 @@ pub use exits::{
 };
 pub use event_script::{
     execute_host_event, execute_script, parse_script, resolve_place_id, ScriptAction,
+    ScriptCondition, ScriptTarget,
 };
 pub use events::{
     attach_triggers, emit_on_move_event, execute_event, execute_kill_events,
@@ -54,7 +58,10 @@ pub use portal::{
     passable_portal_blocks_passage, passable_portal_for_direction, portal_for_direction,
     portal_kind_label, portal_passage_block, portal_permits_exit, portals_in_room, PortalBlock,
 };
-pub use scheduler::{advance_tick, current_tick, periodic_fires};
+pub use scheduler::{
+    advance_tick, current_tick, due_schedule_jobs, increment_counter, periodic_fires,
+    read_counter, register_schedule_job, reset_counter,
+};
 pub use possession::{
     body_slot_item, body_slot_item_valid, body_slots, carried_body_items,
     clear_creature_slots_for_item, clear_item_from_body_slots, grasp_action_phrase,
@@ -64,8 +71,9 @@ pub use possession::{
 };
 pub use session::{
     hydrate_world, persist_all, persist_objects, resolve_bootstrap_location,
-    resolve_player_location, restore_session, WorldSession,
+    resolve_player_location, restore_world_graph,
 };
+pub use world_state::{SharedWorld, WorldMutation, WorldState};
 pub use stack_transfer::{
     compute_stack_transfer_plan, split_stack_id, stack_merge_key, StackTransferPlan,
 };

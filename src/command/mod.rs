@@ -3,6 +3,7 @@
 pub mod editor;
 pub mod parse;
 pub mod place;
+pub mod trigger;
 
 pub use editor::{
     apply_set, apply_unset, parse_set_command, parse_unset_command, ParsedSetCommand,
@@ -15,11 +16,19 @@ pub use place::{
     parse_dig_command, parse_link_command, parse_unlink_command, ParsedDigCommand,
     ParsedLinkCommand, ParsedUnlinkCommand,
 };
+pub use trigger::{
+    apply_trigger_add, apply_trigger_clear, apply_trigger_remove, apply_trigger_set,
+    format_trigger_list, narrate_trigger_added, narrate_trigger_cleared, narrate_trigger_removed,
+    narrate_trigger_set, narrate_trigger_test_empty, parse_trigger_command, preview_trigger_test,
+    resolve_trigger_target_name, trigger_command_help, validate_trigger_host, TriggerCommand,
+    TriggerError,
+};
 
 use std::collections::HashMap;
 
 use crate::display::{resolve_object, ResolveScope, TargetResolution};
 use crate::inventory::{take_item, InventoryContext, InventoryError};
+use crate::world::DispatchStack;
 use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse, MudlRoleProps};
 use crate::object::{ContainerSpec, Object, ObjectFactory, ObjectId, WearableSpec};
 use crate::persistence::Persistence;
@@ -380,12 +389,12 @@ pub async fn create_at_location_with_options<P: Persistence>(
         || options.mudl_props.has_scalar_overrides()
     {
         apply_create_property_overrides(&mut obj, &options);
-        factory.persistence().save_object(&obj).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
     }
 
     if let Some(loc_id) = location {
         obj.location = Some(loc_id.clone());
-        factory.persistence().save_object(&obj).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
     }
 
     Ok(obj)
@@ -403,13 +412,13 @@ pub async fn create_key_for_container<P: Persistence>(
         anyhow::bail!("{key_display_name}: target is not a container");
     }
     let lock_id = container.ensure_container_lock_id();
-    factory.persistence().save_object(container).await?;
+    crate::persistence::save_and_sync(factory.persistence(), container).await?;
     let mut key = factory
         .create_key(key_display_name, owner, &lock_id, None)
         .await?;
     if let Some(loc) = location {
         key.location = Some(loc);
-        factory.persistence().save_object(&key).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut key).await?;
     }
     Ok(key)
 }
@@ -444,11 +453,13 @@ pub fn take_from_location(
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
 ) -> Result<String, InventoryError> {
+    let mut dispatch = DispatchStack::default();
     let mut ctx = InventoryContext {
         player_id,
         room_id: location_id,
         objects,
         anatomy,
+        dispatch: &mut dispatch,
         dirty: None,
     };
     take_item(&mut ctx, item_name)
@@ -457,7 +468,7 @@ pub fn take_from_location(
 /// Persist inventory-related changes (player + all touched objects).
 pub async fn persist_inventory_changes<P: Persistence>(
     persistence: &P,
-    objects: &HashMap<ObjectId, Object>,
+    objects: &mut HashMap<ObjectId, Object>,
 ) -> anyhow::Result<()> {
     persist_all(persistence, objects).await
 }
@@ -465,7 +476,7 @@ pub async fn persist_inventory_changes<P: Persistence>(
 /// Persist only dirty objects; falls back to full persist when tracker is empty.
 pub async fn persist_inventory_dirty<P: Persistence>(
     persistence: &P,
-    objects: &HashMap<ObjectId, Object>,
+    objects: &mut HashMap<ObjectId, Object>,
     dirty: &mut DirtyTracker,
 ) -> anyhow::Result<()> {
     if dirty.is_empty() {
@@ -488,7 +499,8 @@ pub async fn soft_delete_object<P: Persistence>(
         .ok_or_else(|| anyhow::anyhow!("Object not found: {id}"))?;
     let name = obj.name.clone();
     obj.soft_delete();
-    persistence.save_object(&obj).await?;
+    let meta = persistence.save_object(&obj).await?;
+    meta.apply_to(&mut obj);
     objects.insert(id.clone(), obj);
     Ok(crate::display::narrate_soft_delete(&name))
 }
@@ -508,7 +520,8 @@ pub async fn undelete_object<P: Persistence>(
     }
     let name = obj.name.clone();
     obj.undelete();
-    persistence.save_object(&obj).await?;
+    let meta = persistence.save_object(&obj).await?;
+    meta.apply_to(&mut obj);
     objects.insert(id.clone(), obj);
     Ok(crate::display::narrate_restore(&name))
 }
@@ -549,6 +562,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -775,7 +790,7 @@ mod tests {
 
         let mut objects = hydrate_world(&persistence).await.unwrap();
         take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy).unwrap();
-        persist_all(&persistence, &objects).await.unwrap();
+        persist_all(&persistence, &mut objects).await.unwrap();
 
         let restored = hydrate_world(&persistence).await.unwrap();
         let player = restored.get(&owner).unwrap();
@@ -1066,6 +1081,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -1197,6 +1214,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         }

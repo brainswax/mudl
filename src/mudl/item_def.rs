@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn parse_haunted_forest_consumable_prototypes() {
         let content = include_str!(
-            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+            "../../modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl"
         );
         let (prototypes, _) = parse_item_file(content);
         let charm = prototypes
@@ -392,9 +392,11 @@ mod tests {
             .iter()
             .find(|p| p.base_name == "haunted-clay-pot")
             .expect("haunted-clay-pot prototype");
-        assert_eq!(pot.triggers.len(), 1);
+        assert_eq!(pot.triggers.len(), 2);
         assert_eq!(pot.triggers[0].event, "on_break");
         assert_eq!(pot.triggers[0].code, "emote shatters into pale dust.");
+        assert_eq!(pot.triggers[1].event, "on_break");
+        assert_eq!(pot.triggers[1].code, "grant-effect actor forest_dread");
     }
 
     #[test]

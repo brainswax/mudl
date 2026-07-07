@@ -30,6 +30,7 @@ pub struct CreatureBehaviorEntry {
     pub attack_damage: Option<i64>,
     pub awareness_check: Option<bool>,
     pub perception: Option<i64>,
+    pub grant_effect_on_hit: Option<String>,
 }
 
 /// Outcome of running creature behaviors — narrative lines and touched object ids.
@@ -88,6 +89,12 @@ fn behavior_entry_map(entry: &CreatureBehaviorEntry) -> Value {
     if let Some(perception) = entry.perception {
         map.insert("perception".to_string(), Value::Int(perception));
     }
+    if let Some(effect) = &entry.grant_effect_on_hit {
+        map.insert(
+            "grant_effect_on_hit".to_string(),
+            Value::String(effect.clone()),
+        );
+    }
     Value::Map(map)
 }
 
@@ -139,6 +146,10 @@ fn entry_from_map(map: &HashMap<String, Value>) -> Option<CreatureBehaviorEntry>
         }),
         perception: map.get("perception").and_then(|v| match v {
             Value::Int(n) => Some(*n),
+            _ => None,
+        }),
+        grant_effect_on_hit: map.get("grant_effect_on_hit").and_then(|v| match v {
+            Value::String(s) => Some(s.clone()),
             _ => None,
         }),
     })
@@ -251,6 +262,7 @@ fn template_to_entry(template: &BehaviorTemplateDef) -> CreatureBehaviorEntry {
         attack_damage: Some(template.attack_damage),
         awareness_check: template.awareness_check,
         perception: template.perception,
+        grant_effect_on_hit: template.grant_effect_on_hit.clone(),
     }
 }
 
@@ -266,6 +278,7 @@ fn template_to_discovered_entry(template: &BehaviorTemplateDef) -> Option<Creatu
         attack_damage: Some(template.attack_damage),
         awareness_check: None,
         perception: None,
+        grant_effect_on_hit: template.grant_effect_on_hit.clone(),
     })
 }
 
@@ -281,6 +294,7 @@ fn script_to_entry(script: &NpcBehaviorDef) -> Option<CreatureBehaviorEntry> {
         attack_damage: None,
         awareness_check: None,
         perception: None,
+        grant_effect_on_hit: None,
     })
 }
 
@@ -335,6 +349,12 @@ pub fn behavior_templates_to_property(templates: &[BehaviorTemplateDef]) -> Prop
                 map.insert(
                     "on_discovered_react".to_string(),
                     Value::String(react.as_str().to_string()),
+                );
+            }
+            if let Some(effect) = &template.grant_effect_on_hit {
+                map.insert(
+                    "grant_effect_on_hit".to_string(),
+                    Value::String(effect.clone()),
                 );
             }
             Value::Map(map)
@@ -445,6 +465,12 @@ pub fn resolve_behavior_templates(host: &Object) -> HashMap<String, BehaviorTemp
                                                 None
                                             }
                                         }),
+                                    grant_effect_on_hit: map
+                                        .get("grant_effect_on_hit")
+                                        .and_then(|v| match v {
+                                            Value::String(s) => Some(s.clone()),
+                                            _ => None,
+                                        }),
                                 },
                             ))
                         })
@@ -477,6 +503,14 @@ pub fn read_creature_behaviors(obj: &Object) -> Vec<CreatureBehaviorEntry> {
 }
 
 /// Resolve attack damage from `creature_behaviors` entries (templates, tactics).
+/// Effect name applied to attack targets when this creature hits (from behavior templates).
+pub fn creature_grant_effect_on_hit(creature: &Object) -> Option<String> {
+    read_creature_behaviors(creature)
+        .into_iter()
+        .filter_map(|entry| entry.grant_effect_on_hit)
+        .next()
+}
+
 pub fn creature_attack_damage(creature: &Object) -> i64 {
     read_creature_behaviors(creature)
         .iter()
@@ -539,6 +573,7 @@ fn legacy_npc_behaviors(obj: &Object) -> Vec<CreatureBehaviorEntry> {
                                     attack_damage: None,
                                     awareness_check: None,
                                     perception: None,
+                                    grant_effect_on_hit: None,
                                 });
                             }
                             let action = map.get("action").and_then(|v| match v {
@@ -560,6 +595,7 @@ fn legacy_npc_behaviors(obj: &Object) -> Vec<CreatureBehaviorEntry> {
                                 attack_damage: None,
                                 awareness_check: None,
                                 perception: None,
+                                grant_effect_on_hit: None,
                             })
                         })
                         .collect(),
@@ -710,6 +746,9 @@ pub fn npc_attack_player(
     surprise: bool,
 ) -> Option<Vec<String>> {
     let npc_name = objects.get(npc_id).map(|n| n.name.clone())?;
+    let on_hit_effect = objects
+        .get(npc_id)
+        .and_then(creature_grant_effect_on_hit);
     let player = objects.get_mut(player_id)?;
     if !player.has_creature_role() || creature_health(player) <= 0 {
         return None;
@@ -719,15 +758,21 @@ pub fn npc_attack_player(
     if let Some(npc) = objects.get_mut(npc_id) {
         set_creature_discovered(npc, true);
     }
-    let line = if surprise {
+    let mut lines = vec![if surprise {
         format!(
             "{npc_name} strikes from hiding for {damage} damage ({after} health remaining)."
         )
     } else {
         format!("{npc_name} attacks you for {damage} damage ({after} health remaining).")
-    };
-    let _ = (room_id, anatomy);
-    Some(vec![line])
+    }];
+    if let (Some(effect), Some(anatomy)) = (on_hit_effect.as_deref(), anatomy) {
+        if let Some(player) = objects.get_mut(player_id) {
+            crate::creature::apply_condition(player, effect, anatomy);
+            lines.push(format!("You feel the {effect} effect take hold."));
+        }
+    }
+    let _ = room_id;
+    Some(lines)
 }
 
 fn flee_npc(
@@ -1100,6 +1145,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -1175,6 +1222,8 @@ mod tests {
                     event_handlers: HashMap::new(),
                     is_deleted: false,
                     deleted_at: None,
+                    revision: 0,
+                    updated_at: None,
                 },
             ),
         ]);
@@ -1334,6 +1383,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };

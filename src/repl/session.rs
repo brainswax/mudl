@@ -1,20 +1,20 @@
-//! Per-player REPL session: world graph, location, anatomy, and dirty persistence.
+//! REPL connection facade: shared [`WorldState`] + per-player [`PlayerSession`].
 
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::command::persist_inventory_dirty;
 use crate::display::{
     format_room_look_player, narrate_go, narrate_go_encumbered, narrate_no_exit,
-    narrate_no_location, narrate_overloaded, narrate_scatter_exit, object_name, resolve_object,
+    narrate_no_location, narrate_overloaded, narrate_scatter_exit, object_name,
     DisplayContext, DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::inventory::InventoryContext;
 use crate::inventory::{prepare_gate_for_passage, InventoryError};
 use crate::mudl::AnatomyRegistry;
+use crate::mudl::trigger_def::events::{ON_ENTER, ON_LEAVE};
 use crate::object::{player_encumbrance_level_with_anatomy, EncumbranceLevel, ObjectFactory};
 use crate::object::{Object, ObjectId};
 use crate::persistence::Persistence;
+use crate::repl::PlayerSession;
 use crate::world::exits::{apply_loop_entry, apply_scatter_exit, can_traverse_exit};
 use crate::world::exit_index::ExitIndex;
 use crate::world::navigation::resolve_exit;
@@ -24,11 +24,7 @@ use crate::world::place_builder::{
 use crate::world::portal::{
     passable_portal_for_direction, portal_passage_block, portal_permits_exit,
 };
-use crate::world::{
-    execute_event, persist_all, persist_dirty, resolve_player_location, restore_session,
-    DirtyTracker, EventContext,
-};
-use crate::mudl::trigger_def::events::{ON_ENTER, ON_LEAVE};
+use crate::world::{EventContext, SharedWorld, WorldState};
 
 /// Errors from session-level navigation and state operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,22 +59,41 @@ impl std::fmt::Display for SessionError {
 
 impl std::error::Error for SessionError {}
 
-/// One player's interactive session over the object graph.
+/// One REPL connection: mutex-protected world plus per-player view.
 ///
-/// Holds the authoritative in-memory world slice for this connection. Persistence
-/// is applied incrementally via [`DirtyTracker`](crate::world::DirtyTracker).
-#[derive(Debug)]
+/// IRC hosts one [`SharedWorld`] for all nicks; each connection gets its own
+/// [`PlayerSession`]. Mutations run inside [`Self::with_locked`] so the world lock
+/// is held for the whole command (inventory borrows, event dispatch, persist).
 pub struct Session {
-    pub player_id: ObjectId,
-    anatomy: AnatomyRegistry,
-    objects: HashMap<ObjectId, Object>,
-    current_location: Option<ObjectId>,
-    dirty: DirtyTracker,
+    world: SharedWorld,
+    pub player: PlayerSession,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("player", &self.player)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Session {
-    /// Hydrate from persistence and resolve the player's current location.
-    /// Build a session from an in-memory object graph (tests and tooling).
+    /// Hydrate world from persistence and attach a player connection.
+    pub async fn restore<P: Persistence>(
+        persistence: &P,
+        player_id: ObjectId,
+        bootstrap_location: Option<ObjectId>,
+        anatomy: AnatomyRegistry,
+    ) -> anyhow::Result<Self> {
+        let world = WorldState::restore(persistence, anatomy).await?;
+        let player = PlayerSession::restore(player_id, bootstrap_location, &world);
+        Ok(Self {
+            world: world.into_shared(),
+            player,
+        })
+    }
+
+    /// Build from an in-memory graph (tests and tooling).
     #[cfg(test)]
     pub fn test_session(
         player_id: ObjectId,
@@ -86,360 +101,166 @@ impl Session {
         objects: HashMap<ObjectId, Object>,
         current_location: Option<ObjectId>,
     ) -> Self {
+        let world = WorldState::with_objects(anatomy, objects);
         Self {
-            player_id,
-            anatomy,
-            objects,
-            current_location,
-            dirty: DirtyTracker::default(),
+            world: world.into_shared(),
+            player: PlayerSession::test(player_id, current_location),
         }
     }
 
-    pub async fn restore<P: Persistence>(
-        persistence: &P,
-        player_id: ObjectId,
-        bootstrap_location: Option<ObjectId>,
-        anatomy: AnatomyRegistry,
-    ) -> anyhow::Result<Self> {
-        let world = restore_session(persistence, player_id.clone(), bootstrap_location).await?;
-        Ok(Self {
-            player_id,
-            anatomy,
-            objects: world.objects,
-            current_location: world.current_location,
-            dirty: world.dirty,
-        })
+    pub fn shared_world(&self) -> &SharedWorld {
+        &self.world
+    }
+
+    /// Read-only access under the world mutex.
+    pub fn with_world<R>(&self, f: impl FnOnce(&WorldState, &PlayerSession) -> R) -> R {
+        let guard = self.world.lock_blocking();
+        f(&guard, &self.player)
+    }
+
+    /// Mutable access for one command — holds the lock for the whole closure.
+    pub fn with_locked<R>(
+        &mut self,
+        f: impl FnOnce(&mut WorldState, &mut PlayerSession) -> R,
+    ) -> R {
+        let mut guard = self.world.lock_blocking();
+        f(&mut guard, &mut self.player)
+    }
+
+    pub fn mutate_player<R>(
+        &mut self,
+        f: impl FnOnce(&mut WorldState, &mut PlayerSession) -> R,
+    ) -> R {
+        self.with_locked(f)
     }
 
     pub fn player_id(&self) -> &ObjectId {
-        &self.player_id
+        self.player.player_id()
     }
 
-    pub fn anatomy(&self) -> &AnatomyRegistry {
-        &self.anatomy
+    pub fn anatomy(&self) -> AnatomyRegistry {
+        self.with_world(|world, _| world.anatomy().clone())
     }
 
     pub fn set_anatomy(&mut self, anatomy: AnatomyRegistry) {
-        self.anatomy = anatomy;
+        self.mutate_player(|world, _| world.set_anatomy(anatomy));
     }
 
-    pub fn objects(&self) -> &HashMap<ObjectId, Object> {
-        &self.objects
+    pub fn object(&self, id: &ObjectId) -> Option<Object> {
+        self.with_world(|world, _| world.object(id).cloned())
     }
 
-    pub fn objects_mut(&mut self) -> &mut HashMap<ObjectId, Object> {
-        &mut self.objects
+    /// Snapshot of the object graph (clones under the world lock).
+    pub fn objects(&self) -> HashMap<ObjectId, Object> {
+        self.with_world(|world, _| world.objects().clone())
     }
 
-    pub fn object(&self, id: &ObjectId) -> Option<&Object> {
-        self.objects.get(id)
+    pub fn objects_mut<R>(&mut self, f: impl FnOnce(&mut HashMap<ObjectId, Object>) -> R) -> R {
+        self.mutate_player(|world, _| f(world.objects_mut()))
     }
 
-    pub fn object_mut(&mut self, id: &ObjectId) -> Option<&mut Object> {
-        self.dirty.mark(id);
-        self.objects.get_mut(id)
+    pub fn object_mut<R>(
+        &mut self,
+        id: &ObjectId,
+        f: impl FnOnce(&mut Object) -> R,
+    ) -> Option<R> {
+        self.mutate_player(|world, _| world.object_mut(id).map(f))
     }
 
     pub fn current_location(&self) -> Option<&ObjectId> {
-        self.current_location.as_ref()
+        self.player.current_location()
     }
 
     pub fn set_current_location(&mut self, location: ObjectId) {
-        self.current_location = Some(location);
-        self.dirty.mark(&self.player_id);
-    }
-
-    pub fn dirty(&self) -> &DirtyTracker {
-        &self.dirty
-    }
-
-    pub fn dirty_mut(&mut self) -> &mut DirtyTracker {
-        &mut self.dirty
+        self.mutate_player(|world, player| {
+            player.set_current_location(location, world);
+        });
     }
 
     pub fn mark_dirty(&mut self, id: &ObjectId) {
-        self.dirty.mark(id);
+        self.mutate_player(|world, _| world.mark_dirty(id));
     }
 
-    /// Insert or replace an object and mark it dirty.
     pub fn upsert_object(&mut self, obj: Object) {
-        self.dirty.mark(&obj.id);
-        self.objects.insert(obj.id.clone(), obj);
+        self.mutate_player(|world, _| world.upsert_object(obj));
     }
 
-    /// Insert into the session graph without marking dirty (e.g. `load` from DB).
     pub fn cache_object(&mut self, obj: Object) {
-        self.objects.insert(obj.id.clone(), obj);
+        self.mutate_player(|world, _| world.cache_object(obj));
     }
 
-    /// Load a single object from persistence into the session if absent.
     pub async fn ensure_object<P: Persistence>(
         &mut self,
         persistence: &P,
         id: &ObjectId,
     ) -> anyhow::Result<bool> {
-        if self.objects.contains_key(id) {
-            return Ok(true);
-        }
-        if let Some(obj) = persistence.load_object(id).await? {
-            self.objects.insert(id.clone(), obj);
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        let mut world = self.world.lock_blocking();
+        world.ensure_object(persistence, id).await
     }
 
-    /// Re-resolve current location from the player object's persisted `location`.
     pub fn sync_location_from_player(&mut self) {
-        self.current_location = resolve_player_location(
-            &self.player_id,
-            &self.objects,
-            self.current_location.clone(),
-        );
+        self.mutate_player(|world, player| player.sync_location_from_world(world));
     }
 
-    /// Resolve a command target against this session's object graph.
     pub fn resolve_target(&self, name: &str, scope: ResolveScope) -> TargetResolution {
-        resolve_object(
-            name,
-            &self.player_id,
-            self.current_location.as_ref(),
-            &self.objects,
-            scope,
-        )
+        self.with_world(|world, player| player.resolve_target(world, name, scope))
     }
 
-    /// Build display context using the session's object map (clone for `'static` helpers).
     pub fn display_context(&self, mode: DisplayMode) -> DisplayContext {
-        DisplayContext::new(self.player_id.clone(), mode)
-            .with_objects(self.objects.clone())
-            .with_anatomy(self.anatomy.clone())
+        self.with_world(|world, player| player.display_context(world, mode))
     }
 
-    /// Perception checks when the player looks around the current room.
     pub fn perceive_hidden_on_look(&mut self) -> crate::world::EventOutcome {
-        let Some(room_id) = self.current_location.clone() else {
-            return crate::world::EventOutcome::default();
-        };
-        let outcome = crate::world::run_discovery_on_look(
-            &room_id,
-            &self.player_id,
-            &mut self.objects,
-            &self.anatomy,
-        );
-        for id in &outcome.dirty {
-            self.dirty.mark(id);
-        }
-        outcome
+        self.mutate_player(|world, player| {
+            let Some(room_id) = player.current_location().cloned() else {
+                return crate::world::EventOutcome::default();
+            };
+            let crate::world::WorldMutation {
+                objects,
+                anatomy,
+                dispatch,
+                dirty,
+            } = world.borrow_mutation();
+            let outcome = crate::world::run_discovery_on_look(
+                dispatch,
+                &room_id,
+                player.player_id(),
+                objects,
+                anatomy,
+            );
+            for id in &outcome.dirty {
+                dirty.mark(id);
+            }
+            outcome
+        })
     }
 
-    /// Mutable inventory command context wired to session dirty tracking.
-    pub fn inventory_context(&mut self) -> InventoryContext<'_> {
-        InventoryContext {
-            player_id: &self.player_id,
-            room_id: self.current_location.as_ref(),
-            objects: &mut self.objects,
-            anatomy: &self.anatomy,
-            dirty: Some(&mut self.dirty),
-        }
+    pub fn inventory_context<'a>(&'a mut self) -> InventoryContextHolder<'a> {
+        InventoryContextHolder { session: self }
+    }
+
+    /// Run inventory helpers under the world lock (bootstrap and REPL).
+    pub fn with_inventory<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::inventory::InventoryContext<'_>) -> R,
+    ) -> R {
+        self.inventory_context().with(f)
     }
 
     /// Move the player along an exit from the current location.
-    ///
-    /// Returns movement narration plus a brief look at the arrival room (description,
-    /// exits, visible items).
     pub fn go(&mut self, direction: &str) -> Result<String, SessionError> {
-        let loc_id = self
-            .current_location
-            .as_ref()
-            .ok_or(SessionError::NoLocation)?
-            .clone();
-
-        let room = self
-            .objects
-            .get(&loc_id)
-            .ok_or(SessionError::LocationMissing)?
-            .clone();
-
-        let index = ExitIndex::from_place(&room);
-        let (dir_label, map_target_id) = resolve_exit(&index, direction)
-            .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
-
-        if !can_traverse_exit(&room, dir_label, map_target_id, &self.objects) {
-            return Err(SessionError::NoExit(direction.to_string()));
-        }
-
-        let mut portal_prep_lines = Vec::new();
-        if let Some(portal) = passable_portal_for_direction(&loc_id, dir_label, &self.objects) {
-            if portal_permits_exit(portal, map_target_id) && portal_passage_block(portal).is_some()
-            {
-                let portal_id = portal.id.clone();
-                let portal_name = portal.name.to_lowercase();
-                let mut ctx = self.inventory_context();
-                match prepare_gate_for_passage(&mut ctx, &portal_id) {
-                    Ok(lines) => portal_prep_lines = lines,
-                    Err(InventoryError::NoMatchingKey(_))
-                    | Err(InventoryError::ContainerLocked(_)) => {
-                        return Err(SessionError::DoorLocked(portal_name));
-                    }
-                    Err(InventoryError::ContainerClosed(_)) => {
-                        return Err(SessionError::DoorClosed(portal_name));
-                    }
-                    Err(InventoryError::InvalidTarget(msg)) => {
-                        return Err(SessionError::Blocked(msg));
-                    }
-                    Err(err) => return Err(SessionError::Blocked(err.to_string())),
-                }
-            }
-        }
-
-        let encumbrance = self
-            .objects
-            .get(&self.player_id)
-            .map(|player| {
-                player_encumbrance_level_with_anatomy(player, &self.objects, Some(&self.anatomy))
-            })
-            .ok_or(SessionError::PlayerMissing)?;
-        if encumbrance == EncumbranceLevel::Overloaded {
-            return Err(SessionError::Overloaded);
-        }
-
-        let looped_target = apply_loop_entry(map_target_id, &self.objects);
-        let target_id = apply_scatter_exit(
-            &room,
-            dir_label,
-            &looped_target,
-            &self.player_id,
-            &self.objects,
-        );
-
-        let leave_outcome = execute_event(
-            ON_LEAVE,
-            &EventContext {
-                actor_id: self.player_id.clone(),
-                host_id: loc_id.clone(),
-                room_id: Some(loc_id.clone()),
-                target_id: Some(target_id.clone()),
-            },
-            &mut self.objects,
-            Some(&self.anatomy),
-        );
-
-        let player = self
-            .objects
-            .get_mut(&self.player_id)
-            .ok_or(SessionError::PlayerMissing)?;
-        player.location = Some(target_id.clone());
-        self.dirty.mark(&self.player_id);
-
-        self.current_location = Some(target_id.clone());
-
-        let looped = looped_target != *map_target_id;
-        let scattered = target_id != looped_target;
-        let mut lines = portal_prep_lines;
-        lines.extend(leave_outcome.lines);
-        for id in leave_outcome.dirty {
-            self.dirty.mark(&id);
-        }
-        if scattered {
-            let dest_name = object_name(&target_id, &self.objects);
-            lines.push(narrate_scatter_exit(&dest_name));
-        } else if !looped {
-            let movement_line = match encumbrance {
-                EncumbranceLevel::Encumbered => narrate_go_encumbered(dir_label),
-                EncumbranceLevel::Unencumbered | EncumbranceLevel::Overloaded => {
-                    narrate_go(dir_label)
-                }
-            };
-            lines.push(movement_line);
-        }
-        let enter_outcome = execute_event(
-            ON_ENTER,
-            &EventContext {
-                actor_id: self.player_id.clone(),
-                host_id: target_id.clone(),
-                room_id: Some(target_id.clone()),
-                target_id: None,
-            },
-            &mut self.objects,
-            Some(&self.anatomy),
-        );
-        for line in enter_outcome.lines {
-            lines.push(line);
-        }
-        for id in enter_outcome.dirty {
-            self.dirty.mark(&id);
-        }
-
-        let behavior_outcome = crate::creature::run_creature_behaviors(
-            "on_enter",
-            &target_id,
-            &self.player_id,
-            &mut self.objects,
-            &self.anatomy,
-        );
-        for id in behavior_outcome.dirty {
-            self.dirty.mark(&id);
-        }
-        for behavior_line in behavior_outcome.lines {
-            lines.push(behavior_line);
-        }
-        if let Some(room) = self.objects.get(&target_id) {
-            let ctx = DisplayContext::new(self.player_id.clone(), DisplayMode::Player)
-                .with_objects(self.objects.clone())
-                .with_anatomy(self.anatomy.clone())
-                .with_flags(DisplayFlags::BRIEF);
-            lines.push(format_room_look_player(room, &ctx));
-        }
-        if let Some(mut player) = self.objects.get(&self.player_id).cloned() {
-            if let Some(regen) = crate::creature::apply_equipment_regen_on_enter(
-                &mut player,
-                &self.objects,
-                &self.anatomy,
-            ) {
-                self.objects.insert(self.player_id.clone(), player);
-                self.dirty.mark(&self.player_id);
-                lines.push(regen);
-            }
-        }
-        Ok(lines.join("\n"))
+        self.mutate_player(|world, player| go_impl(direction, world, player))
     }
 
-    /// Dig a new place from the current location (`@dig`).
     pub async fn dig_place<P: Persistence>(
         &mut self,
         factory: &ObjectFactory<P>,
         request: DigRequest,
     ) -> Result<DigResult, PlaceBuildError> {
-        let from_id = self
-            .current_location
-            .as_ref()
-            .ok_or(PlaceBuildError::NoLocation)?
-            .clone();
-        let from = self
-            .objects
-            .get(&from_id)
-            .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?
-            .clone();
-        if !from.is_location() {
-            return Err(PlaceBuildError::NotAPlace(from.name.clone()));
-        }
-
-        let result = dig_place(
-            factory,
-            &from,
-            self.player_id.clone(),
-            request,
-            &self.objects,
-        )
-        .await?;
-        for id in apply_dig_result(&mut self.objects, &result) {
-            self.dirty.mark(&id);
-        }
-        Ok(result)
+        let mut guard = self.world.lock_blocking();
+        dig_place_impl(factory, request, &mut guard, &self.player).await
     }
 
-    /// Link an exit between two places (`@link`).
     pub fn link_exit(
         &mut self,
         from_id: &ObjectId,
@@ -448,92 +269,332 @@ impl Session {
         reciprocal: bool,
         return_exit: Option<&str>,
     ) -> Result<Vec<String>, PlaceBuildError> {
-        let from = self
-            .objects
-            .get(from_id)
-            .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?
-            .clone();
-        if !from.is_location() {
-            return Err(PlaceBuildError::NotAPlace(from.name));
-        }
-        let target = self
-            .objects
-            .get(target_id)
-            .ok_or_else(|| PlaceBuildError::NotFound(target_id.as_str().to_string()))?
-            .clone();
-        if !target.is_location() {
-            return Err(PlaceBuildError::NotAPlace(target.name));
-        }
-
-        let mut from_mut = from;
-        let mut target_mut = target;
-        let notes = link_places(
-            &mut from_mut,
-            &mut target_mut,
-            direction,
-            &self.objects,
-            reciprocal,
-            return_exit,
-        )?;
-        self.dirty.mark(&from_mut.id);
-        self.dirty.mark(&target_mut.id);
-        self.objects.insert(from_mut.id.clone(), from_mut);
-        self.objects.insert(target_mut.id.clone(), target_mut);
-        Ok(notes)
+        self.mutate_player(|world, _| {
+            link_exit_impl(from_id, direction, target_id, reciprocal, return_exit, world)
+        })
     }
 
-    /// Remove an exit from a place (`@unlink`).
     pub fn unlink_exit(
         &mut self,
         from_id: &ObjectId,
         direction: &str,
     ) -> Result<String, PlaceBuildError> {
-        let from_name = self
-            .objects
-            .get(from_id)
-            .map(|o| o.name.clone())
-            .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
-        let from = self
-            .objects
-            .get_mut(from_id)
-            .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
-        let removed = unlink_exit(from, direction)?;
-        self.dirty.mark(from_id);
-        Ok(format!(
-            "Removed {} exit '{}'{}",
-            from_name,
-            direction,
-            removed
-                .and_then(|id| self.objects.get(&id).map(|o| format!(" (was {})", o.name)))
-                .unwrap_or_default()
-        ))
+        self.mutate_player(|world, _| unlink_exit_impl(from_id, direction, world))
     }
 
-    /// Persist only dirty objects (no-op count when nothing changed).
     pub async fn persist_changes<P: Persistence>(
         &mut self,
         persistence: &P,
     ) -> anyhow::Result<usize> {
-        persist_dirty(persistence, &self.objects, &mut self.dirty).await
+        let mut world = self.world.lock_blocking();
+        world.persist_changes(persistence).await
     }
 
-    /// Persist dirty objects, or the full graph when the tracker is empty.
     pub async fn persist<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
-        persist_inventory_dirty(persistence, &self.objects, &mut self.dirty).await
+        let mut world = self.world.lock_blocking();
+        world.persist(persistence).await
     }
 
-    /// Force-save every object in the session.
-    pub async fn persist_all<P: Persistence>(&self, persistence: &P) -> anyhow::Result<()> {
-        persist_all(persistence, &self.objects).await
+    pub async fn persist_all<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
+        let mut world = self.world.lock_blocking();
+        world.persist_all(persistence).await
     }
 
     pub fn len(&self) -> usize {
-        self.objects.len()
+        self.with_world(|world, _| world.len())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.objects.is_empty()
+        self.with_world(|world, _| world.is_empty())
     }
+
+    pub fn dirty_len(&self) -> usize {
+        self.with_world(|world, _| world.dirty().len())
+    }
+
+    pub fn is_dirty(&self, id: &ObjectId) -> bool {
+        self.with_world(|world, _| world.dirty().is_dirty(id))
+    }
+
+    pub fn clear_dirty(&mut self) {
+        self.mutate_player(|world, _| world.dirty_mut().clear());
+    }
+}
+
+/// Holds the world lock while building an [`InventoryContext`](crate::inventory::InventoryContext).
+pub struct InventoryContextHolder<'a> {
+    session: &'a mut Session,
+}
+
+impl<'a> InventoryContextHolder<'a> {
+    pub fn with<R>(&mut self, f: impl FnOnce(&mut crate::inventory::InventoryContext<'_>) -> R) -> R {
+        self.session.mutate_player(|world, player| {
+            let mut ctx = player.inventory_context(world);
+            f(&mut ctx)
+        })
+    }
+}
+
+fn go_impl(
+    direction: &str,
+    world: &mut WorldState,
+    player: &mut PlayerSession,
+) -> Result<String, SessionError> {
+    let actor_id = player.actor_id().clone();
+    let loc_id = player
+        .current_location()
+        .ok_or(SessionError::NoLocation)?
+        .clone();
+
+    let room = world
+        .object(&loc_id)
+        .ok_or(SessionError::LocationMissing)?
+        .clone();
+
+    let index = ExitIndex::from_place(&room);
+    let (dir_label, map_target_id) = resolve_exit(&index, direction)
+        .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
+
+    if !can_traverse_exit(&room, dir_label, map_target_id, world.objects()) {
+        return Err(SessionError::NoExit(direction.to_string()));
+    }
+
+    let mut portal_prep_lines = Vec::new();
+    if let Some(portal) = passable_portal_for_direction(&loc_id, dir_label, world.objects()) {
+        if portal_permits_exit(portal, map_target_id) && portal_passage_block(portal).is_some() {
+            let portal_id = portal.id.clone();
+            let portal_name = portal.name.to_lowercase();
+            let mut ctx = player.inventory_context(world);
+            match prepare_gate_for_passage(&mut ctx, &portal_id) {
+                Ok(lines) => portal_prep_lines = lines,
+                Err(InventoryError::NoMatchingKey(_))
+                | Err(InventoryError::ContainerLocked(_)) => {
+                    return Err(SessionError::DoorLocked(portal_name));
+                }
+                Err(InventoryError::ContainerClosed(_)) => {
+                    return Err(SessionError::DoorClosed(portal_name));
+                }
+                Err(InventoryError::InvalidTarget(msg)) => {
+                    return Err(SessionError::Blocked(msg));
+                }
+                Err(err) => return Err(SessionError::Blocked(err.to_string())),
+            }
+        }
+    }
+
+    let encumbrance = world
+        .object(&actor_id)
+        .map(|player_obj| {
+            player_encumbrance_level_with_anatomy(
+                player_obj,
+                world.objects(),
+                Some(world.anatomy()),
+            )
+        })
+        .ok_or(SessionError::PlayerMissing)?;
+    if encumbrance == EncumbranceLevel::Overloaded {
+        return Err(SessionError::Overloaded);
+    }
+
+    let looped_target = apply_loop_entry(map_target_id, world.objects());
+    let target_id = apply_scatter_exit(
+        &room,
+        dir_label,
+        &looped_target,
+        &actor_id,
+        world.objects(),
+    );
+
+    let anatomy = world.anatomy_arc();
+    let leave_outcome = world.execute_event(
+        ON_LEAVE,
+        &EventContext {
+            actor_id: actor_id.clone(),
+            host_id: loc_id.clone(),
+            room_id: Some(loc_id.clone()),
+            target_id: Some(target_id.clone()),
+        },
+    );
+
+    let player_obj = world
+        .object_mut(&actor_id)
+        .ok_or(SessionError::PlayerMissing)?;
+    player_obj.location = Some(target_id.clone());
+
+    player.set_location_cache(target_id.clone());
+    world.mark_dirty(&actor_id);
+
+    let looped = looped_target != *map_target_id;
+    let scattered = target_id != looped_target;
+    let mut lines = portal_prep_lines;
+    lines.extend(leave_outcome.lines);
+    for id in leave_outcome.dirty {
+        world.mark_dirty(&id);
+    }
+    if scattered {
+        let dest_name = object_name(&target_id, world.objects());
+        lines.push(narrate_scatter_exit(&dest_name));
+    } else if !looped {
+        let movement_line = match encumbrance {
+            EncumbranceLevel::Encumbered => narrate_go_encumbered(dir_label),
+            EncumbranceLevel::Unencumbered | EncumbranceLevel::Overloaded => narrate_go(dir_label),
+        };
+        lines.push(movement_line);
+    }
+    let enter_outcome = world.execute_event(
+        ON_ENTER,
+        &EventContext {
+            actor_id: actor_id.clone(),
+            host_id: target_id.clone(),
+            room_id: Some(target_id.clone()),
+            target_id: None,
+        },
+    );
+    for line in enter_outcome.lines {
+        lines.push(line);
+    }
+    for id in enter_outcome.dirty {
+        world.mark_dirty(&id);
+    }
+
+    let behavior_outcome = crate::creature::run_creature_behaviors(
+        "on_enter",
+        &target_id,
+        &actor_id,
+        world.objects_mut(),
+        anatomy.as_ref(),
+    );
+    for id in behavior_outcome.dirty {
+        world.mark_dirty(&id);
+    }
+    for behavior_line in behavior_outcome.lines {
+        lines.push(behavior_line);
+    }
+    if let Some(room) = world.object(&target_id) {
+        let ctx = DisplayContext::new(actor_id.clone(), DisplayMode::Player)
+            .with_objects(world.objects().clone())
+            .with_anatomy(world.anatomy().clone())
+            .with_flags(DisplayFlags::BRIEF);
+        lines.push(format_room_look_player(room, &ctx));
+    }
+    if let Some(mut player_obj) = world.object(&actor_id).cloned() {
+        let mut player_dirty = false;
+        if let Some(regen) = crate::creature::apply_equipment_regen_on_enter(
+            &mut player_obj,
+            world.objects(),
+            anatomy.as_ref(),
+        ) {
+            lines.push(regen);
+            player_dirty = true;
+        }
+        let tick = crate::creature::tick_conditions(&mut player_obj, anatomy.as_ref(), "on_enter");
+        for line in tick.lines {
+            lines.push(line);
+        }
+        if tick.dirty {
+            player_dirty = true;
+        }
+        if player_dirty {
+            world.upsert_object(player_obj);
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
+async fn dig_place_impl<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    request: DigRequest,
+    world: &mut WorldState,
+    player: &PlayerSession,
+) -> Result<DigResult, PlaceBuildError> {
+    let from_id = player
+        .current_location()
+        .ok_or(PlaceBuildError::NoLocation)?
+        .clone();
+    let from = world
+        .object(&from_id)
+        .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?
+        .clone();
+    if !from.is_location() {
+        return Err(PlaceBuildError::NotAPlace(from.name.clone()));
+    }
+
+    let result = dig_place(
+        factory,
+        &from,
+        player.actor_id().clone(),
+        request,
+        world.objects(),
+    )
+    .await?;
+    for id in apply_dig_result(world.objects_mut(), &result) {
+        world.mark_dirty(&id);
+    }
+    Ok(result)
+}
+
+fn link_exit_impl(
+    from_id: &ObjectId,
+    direction: &str,
+    target_id: &ObjectId,
+    reciprocal: bool,
+    return_exit: Option<&str>,
+    world: &mut WorldState,
+) -> Result<Vec<String>, PlaceBuildError> {
+    let from = world
+        .object(from_id)
+        .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?
+        .clone();
+    if !from.is_location() {
+        return Err(PlaceBuildError::NotAPlace(from.name));
+    }
+    let target = world
+        .object(target_id)
+        .ok_or_else(|| PlaceBuildError::NotFound(target_id.as_str().to_string()))?
+        .clone();
+    if !target.is_location() {
+        return Err(PlaceBuildError::NotAPlace(target.name));
+    }
+
+    let mut from_mut = from;
+    let mut target_mut = target;
+    let notes = link_places(
+        &mut from_mut,
+        &mut target_mut,
+        direction,
+        world.objects(),
+        reciprocal,
+        return_exit,
+    )?;
+    world.mark_dirty(&from_mut.id);
+    world.mark_dirty(&target_mut.id);
+    world.upsert_object(from_mut);
+    world.upsert_object(target_mut);
+    Ok(notes)
+}
+
+fn unlink_exit_impl(
+    from_id: &ObjectId,
+    direction: &str,
+    world: &mut WorldState,
+) -> Result<String, PlaceBuildError> {
+    let from_name = world
+        .object(from_id)
+        .map(|o| o.name.clone())
+        .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
+    let from = world
+        .object_mut(from_id)
+        .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
+    let removed = unlink_exit(from, direction)?;
+    world.mark_dirty(from_id);
+    Ok(format!(
+        "Removed {} exit '{}'{}",
+        from_name,
+        direction,
+        removed
+            .and_then(|id| world.object(&id).map(|o| format!(" (was {})", o.name)))
+            .unwrap_or_default()
+    ))
 }
 
 #[cfg(test)]
@@ -555,6 +616,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         }
@@ -636,6 +699,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn world_and_player_are_separate() {
+        let (_persistence, session) = sample_session().await;
+        assert_eq!(session.len(), 3);
+        assert_eq!(
+            session.player.current_location().map(|id| id.as_str()),
+            Some("room:void-001")
+        );
+        assert_eq!(session.player.actor_id().as_str(), "player:hero-001");
+    }
+
+    #[tokio::test]
     async fn go_updates_player_and_location() {
         let (_persistence, mut session) = sample_session().await;
         let msg = session.go("north").unwrap();
@@ -648,29 +722,29 @@ mod tests {
         );
         assert_eq!(
             session
-                .object(&session.player_id)
-                .and_then(|p| p.location.as_ref())
-                .map(|id| id.as_str()),
-            Some("room:north-001")
+                .object(session.player_id())
+                .and_then(|p| p.location.map(|id| id.as_str().to_string())),
+            Some("room:north-001".to_string())
         );
-        assert!(session.dirty().is_dirty(&session.player_id));
+        assert!(session.is_dirty(session.player_id()));
     }
 
     #[tokio::test]
     async fn go_blocks_when_overloaded() {
         let (_persistence, mut session) = sample_session().await;
-        let player_id = session.player_id.clone();
+        let player_id = session.player_id().clone();
         let mut heavy = bare("item:anvil-001", "Anvil");
         heavy.set_property_numeric("weight", 100.0);
         heavy.location = Some(player_id.clone());
 
-        let player = session.object_mut(&player_id).unwrap();
-        player.set_property_int("max_weight", 100);
-        player.set_property_map(
-            "body_slots",
-            HashMap::from([("right_hand".to_string(), heavy.id.clone())]),
-        );
-        session.objects.insert(heavy.id.clone(), heavy);
+        session.object_mut(&player_id, |player| {
+            player.set_property_int("max_weight", 100);
+            player.set_property_map(
+                "body_slots",
+                HashMap::from([("right_hand".to_string(), heavy.id.clone())]),
+            );
+        });
+        session.upsert_object(heavy);
 
         let err = session.go("north").unwrap_err();
         assert_eq!(err, SessionError::Overloaded);
@@ -684,18 +758,19 @@ mod tests {
     #[tokio::test]
     async fn go_warns_when_encumbered_but_allows_movement() {
         let (_persistence, mut session) = sample_session().await;
-        let player_id = session.player_id.clone();
+        let player_id = session.player_id().clone();
         let mut heavy = bare("item:crate-001", "Crate");
         heavy.set_property_numeric("weight", 92.0);
         heavy.location = Some(player_id.clone());
 
-        let player = session.object_mut(&player_id).unwrap();
-        player.set_property_int("max_weight", 100);
-        player.set_property_map(
-            "body_slots",
-            HashMap::from([("right_hand".to_string(), heavy.id.clone())]),
-        );
-        session.objects.insert(heavy.id.clone(), heavy);
+        session.object_mut(&player_id, |player| {
+            player.set_property_int("max_weight", 100);
+            player.set_property_map(
+                "body_slots",
+                HashMap::from([("right_hand".to_string(), heavy.id.clone())]),
+            );
+        });
+        session.upsert_object(heavy);
 
         let msg = session.go("north").unwrap();
         assert!(msg.contains("too encumbered to move easily"));
@@ -711,7 +786,7 @@ mod tests {
         use crate::object::WearableSpec;
 
         let (_persistence, mut session) = sample_session().await;
-        let player_id = session.player_id.clone();
+        let player_id = session.player_id().clone();
         let mut heavy = bare("item:crate-001", "Crate");
         heavy.set_property_numeric("weight", 92.0);
         heavy.location = Some(player_id.clone());
@@ -723,17 +798,18 @@ mod tests {
         boots.apply_wearable_role(&boot_spec);
         boots.location = Some(player_id.clone());
 
-        let player = session.object_mut(&player_id).unwrap();
-        player.set_property_int("max_weight", 100);
-        player.set_property_map(
-            "body_slots",
-            HashMap::from([
-                ("right_hand".to_string(), heavy.id.clone()),
-                ("left_foot".to_string(), boots.id.clone()),
-            ]),
-        );
-        session.objects.insert(heavy.id.clone(), heavy);
-        session.objects.insert(boots.id.clone(), boots);
+        session.object_mut(&player_id, |player| {
+            player.set_property_int("max_weight", 100);
+            player.set_property_map(
+                "body_slots",
+                HashMap::from([
+                    ("right_hand".to_string(), heavy.id.clone()),
+                    ("left_foot".to_string(), boots.id.clone()),
+                ]),
+            );
+        });
+        session.upsert_object(heavy);
+        session.upsert_object(boots);
 
         let msg = session.go("north").unwrap();
         assert!(!msg.contains("too encumbered to move easily"));
@@ -758,7 +834,7 @@ mod tests {
 
         let count = session.persist_changes(&persistence).await.unwrap();
         assert_eq!(count, 1);
-        assert!(session.dirty().is_empty());
+        assert_eq!(session.dirty_len(), 0);
 
         let player = persistence
             .load_object(&ObjectId::new("player:hero-001"))
@@ -777,14 +853,13 @@ mod tests {
         sword.location = Some(room_id);
         session.upsert_object(sword);
 
-        let mut ctx = session.inventory_context();
-        take_item(&mut ctx, "rusty").unwrap();
+        session.inventory_context().with(|ctx| take_item(ctx, "rusty").unwrap());
 
-        assert!(session.dirty().len() >= 2);
+        assert!(session.dirty_len() >= 2);
 
         session.persist_changes(&persistence).await.unwrap();
         let player = persistence
-            .load_object(&session.player_id)
+            .load_object(session.player_id())
             .await
             .unwrap()
             .unwrap();
@@ -805,13 +880,11 @@ mod tests {
         let bars_id = bars.id.clone();
         session.upsert_object(bars);
 
-        let mut ctx = session.inventory_context();
-        take_item(&mut ctx, "gold").unwrap();
-        session.dirty_mut().clear();
+        session.inventory_context().with(|ctx| take_item(ctx, "gold").unwrap());
+        session.clear_dirty();
 
-        let mut ctx = session.inventory_context();
-        drop_item(&mut ctx, "gold").unwrap();
-        assert!(!session.dirty().is_empty());
+        session.inventory_context().with(|ctx| drop_item(ctx, "gold").unwrap());
+        assert!(session.dirty_len() > 0);
 
         session.persist_changes(&persistence).await.unwrap();
         let bars = persistence.load_object(&bars_id).await.unwrap().unwrap();

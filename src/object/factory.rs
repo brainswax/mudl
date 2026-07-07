@@ -58,7 +58,7 @@ impl<P: Persistence> ObjectFactory<P> {
         if let Some(def) = anatomy.creature(&template.creature) {
             init_creature_vitality(&mut player, def);
         }
-        self.commit(&player).await?;
+        self.commit(&mut player).await?;
         Ok(player)
     }
 
@@ -89,8 +89,11 @@ impl<P: Persistence> ObjectFactory<P> {
             event_handlers: HashMap::new(),
             is_deleted: false,
             deleted_at: None,
+            revision: 0,
+            updated_at: None,
         };
-        self.persistence.save_object(&npc).await?;
+        let meta = self.persistence.save_object(&npc).await?;
+        meta.apply_to(&mut npc);
         let template = PlayerTemplate {
             name: def.base_name.clone(),
             creature: def.creature.clone(),
@@ -110,7 +113,7 @@ impl<P: Persistence> ObjectFactory<P> {
             behavior_templates,
             &def.triggers,
         );
-        self.commit(&npc).await?;
+        self.commit(&mut npc).await?;
         Ok(npc)
     }
 
@@ -120,7 +123,7 @@ impl<P: Persistence> ObjectFactory<P> {
             .allocate_named("item", &slug, display_name, owner)
             .await?;
         Self::fill_item_defaults(&mut item, true);
-        self.commit(&item).await?;
+        self.commit(&mut item).await?;
         Ok(item)
     }
 
@@ -163,7 +166,7 @@ impl<P: Persistence> ObjectFactory<P> {
             .await?;
         self.attach_prototype(&mut container, prototype).await?;
         container.apply_container_role(&spec);
-        self.commit(&container).await?;
+        self.commit(&mut container).await?;
         Ok(container)
     }
 
@@ -182,7 +185,7 @@ impl<P: Persistence> ObjectFactory<P> {
         self.attach_prototype(&mut key, prototype).await?;
         key.apply_key_role(&KeySpec::new(lock_id));
         Self::fill_item_defaults(&mut key, true);
-        self.commit(&key).await?;
+        self.commit(&mut key).await?;
         Ok(key)
     }
 
@@ -201,7 +204,7 @@ impl<P: Persistence> ObjectFactory<P> {
         self.attach_prototype(&mut item, prototype).await?;
         item.apply_wearable_role(&spec);
         Self::fill_item_defaults(&mut item, false);
-        self.commit(&item).await?;
+        self.commit(&mut item).await?;
         Ok(item)
     }
 
@@ -223,7 +226,7 @@ impl<P: Persistence> ObjectFactory<P> {
             count: count.max(1),
             max_stack: 99,
         });
-        self.commit(&item).await?;
+        self.commit(&mut item).await?;
         Ok(item)
     }
 
@@ -243,7 +246,7 @@ impl<P: Persistence> ObjectFactory<P> {
                 .await?;
             self.attach_prototype(&mut item, prototype.clone()).await?;
             Self::fill_item_defaults(&mut item, true);
-            self.commit(&item).await?;
+            self.commit(&mut item).await?;
             items.push(item);
         }
         Ok(items)
@@ -293,6 +296,9 @@ impl<P: Persistence> ObjectFactory<P> {
             "allowed_types",
             "is_breakable",
             "break_text",
+            "harvestable",
+            "hidden_until_discovered",
+            "discovery_stealth",
         ] {
             if let Some(prop) = prototype.get_property(key) {
                 target.add_property(prop.clone());
@@ -352,7 +358,7 @@ impl<P: Persistence> ObjectFactory<P> {
         if let Some(parent_id) = parent {
             place.location = Some(parent_id);
         }
-        self.commit(&place).await?;
+        self.commit(&mut place).await?;
         Ok(place)
     }
 
@@ -392,7 +398,7 @@ impl<P: Persistence> ObjectFactory<P> {
         if !aliases.is_empty() {
             obj.aliases = aliases.to_vec();
         }
-        self.commit(&obj).await?;
+        self.commit(&mut obj).await?;
         Ok(obj)
     }
 
@@ -430,9 +436,13 @@ impl<P: Persistence> ObjectFactory<P> {
             event_handlers: HashMap::new(),
             is_deleted: false,
             deleted_at: None,
+            revision: 0,
+            updated_at: None,
         };
 
-        self.persistence.save_object(&object).await?;
+        let meta = self.persistence.save_object(&object).await?;
+        let mut object = object;
+        meta.apply_to(&mut object);
         Ok(object)
     }
 
@@ -458,8 +468,9 @@ impl<P: Persistence> ObjectFactory<P> {
     }
 
     /// Stage 5: persist the finalized object.
-    async fn commit(&self, object: &Object) -> anyhow::Result<()> {
-        self.persistence.save_object(object).await?;
+    async fn commit(&self, object: &mut Object) -> anyhow::Result<()> {
+        let meta = self.persistence.save_object(object).await?;
+        meta.apply_to(object);
         Ok(())
     }
 }

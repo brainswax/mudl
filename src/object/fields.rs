@@ -8,6 +8,7 @@ pub const STATE_PROPERTY_KEYS: &[&str] = &[
     "carried_slot",
     "health",
     "active_effects",
+    "condition_ticks",
     "stat_mods",
 ];
 

@@ -129,7 +129,7 @@ pub fn narrate_no_location_builder(hint: &str) -> String {
 /// Player-facing line when a scatter exit ejects them into the main world.
 pub fn narrate_scatter_exit(destination_name: &str) -> String {
     format!(
-        "The haunted wood spits you out. You stumble into {destination_name}, disoriented but unharmed."
+        "The wilds spit you out. You stumble into {destination_name}, disoriented but unharmed."
     )
 }
 
@@ -279,6 +279,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -303,6 +305,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         }

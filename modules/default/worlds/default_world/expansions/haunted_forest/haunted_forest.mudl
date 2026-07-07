@@ -1,18 +1,38 @@
 # Haunted Forest — self-contained expansion pack for Project MUDL.
 #
-# Drop this file (or fetch by URL) into any compatible world. From world.mudl:
-#   @import expansions/haunted_forest.mudl
-#   @import https://example.com/mudl/expansions/haunted_forest.mudl
+# Docs: haunted_forest/README.md (teaser · install · expect · extensions)
 #
-# Host world integration (map hooks the expansion expects):
-#   - forest-path with exit `in: haunted-entry`
-#   - the-void (West Clearing) for the mossy boulder clue
-#   - scene-chest (travel chest) to hold the whisper charm
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl
+# @import expansions/haunted_forest/haunted_forest.mudl
+#
+# Host hooks: forest-path (in → haunted-entry), the-void, scene-chest — see README.
 
 @expansion haunted_forest
   name=Haunted Forest
   version=1
   integrates=forest-path,the-void,scene-chest
+@end
+
+# --- Haunted forest conditions ---
+
+@condition forest_dread
+  condition=curse
+  cure_tag=curse
+  damage_on_tick=2
+  tick_on=on_enter
+  duration=8
+  mod_stat_wisdom=-2
+  mod_skill_survival=-1
+@end
+
+@condition iron_blessing
+  condition=blessing
+  cure_tag=blessing
+  heal_on_tick=5
+  tick_on=on_enter
+  duration=6
+  mod_stat_wisdom=1
+  mod_encumbrance=0.94
 @end
 
 # --- Prototypes ---
@@ -91,6 +111,7 @@
   breakable=true
   break_text=You smash the clay pot. The silver motes scatter and the wood grows quiet.
   @trigger on_break emote shatters into pale dust.
+  @trigger on_break grant-effect actor forest_dread
   weight=2.0
   volume=2.0
   pocketable=false
@@ -209,6 +230,23 @@
   prototype=hidden-supply-cache
   location=haunted-moss
   @trigger on_discovered narrate You kneel to inspect the bundle more closely.
+  @trigger on_discovered spawn item trail-rations
+  @trigger on_discovered when condition curse then cure-tag actor curse
+  @trigger on_discovered when health below 70 then heal actor 8
+@end
+
+# --- Timed schedules (weather, ambient respawn) ---
+
+@schedule haunted-mist-weather
+  target=haunted-mist
+  interval=2
+  event=on_weather
+@end
+
+@schedule haunted-moon-respawn
+  target=haunted-moon
+  interval=4
+  event=on_respawn
 @end
 
 # --- Resource spawners (renewable harvest nodes) ---
@@ -352,6 +390,9 @@ type: area
 base_name: haunted-entry
 name: Tangled Threshold
 description: The trees close like a held breath. Mist beads on your sleeves. Pale motes drift without wind. Every path looks equally inviting and equally wrong.
+@trigger on_enter when skill survival at_least 2 then narrate The threshold feels almost familiar.
+@trigger on_enter when effect iron_lantern_aura then narrate Iron light rides your sleeve — the wood hesitates.
+@trigger on_enter when chance 25 then spawn mist-wisp
 exits:
   north: haunted-moon
   east: haunted-wither
@@ -363,6 +404,8 @@ base_name: haunted-moon
 name: Moonlit Glade
 description: A silvered clearing where the canopy breaks. The air is colder than it should be under this much light.
 @trigger on_enter narrate Silver mist clings to the branches.
+@trigger on_respawn narrate Silver motes gather in the cold air.
+@trigger on_respawn spawn mist-wisp
 exits:
   south: haunted-entry
   east: haunted-ember
@@ -372,6 +415,9 @@ type: area
 base_name: haunted-ember
 name: Ember Copse
 description: Charred stumps ring a hollow where coals once slept. The air tastes of old smoke and turned earth.
+@trigger on_enter when condition curse then narrate The coals' memory is older than your fear.
+@trigger on_enter grant-effect actor iron_blessing
+@trigger on_enter when health below 50 then heal actor 6
 exits:
   west: haunted-moon
   south: haunted-mirror
@@ -381,6 +427,9 @@ type: area
 base_name: haunted-mirror
 name: Mirror Mire
 description: Black water repeats the trees upside down. Every step sounds like two people walking, but only your boots leave ripples.
+@trigger on_enter narrate The reflection mouths a word you almost understand.
+@trigger on_enter when skill survival at_least 3 then teleport haunted-ash
+@trigger on_enter when condition curse then damage actor 4
 exits:
   north: haunted-ember
   west: haunted-ash
@@ -399,7 +448,8 @@ type: area
 base_name: haunted-heart
 name: Pale Heart of the Wood
 description: The haunted forest kneels here. A ring of roots frames a patch of sky that looks almost ordinary. Something final has been waiting.
-@trigger on_enter heal 5
+@trigger on_enter when health below 60 then heal 10
+@trigger on_enter when health below 60 then grant-effect actor iron_blessing
 @trigger on_enter narrate The wood loosens its grip — you feel steadier on your feet.
 exits:
   south: haunted-ash
@@ -421,6 +471,9 @@ type: area
 base_name: haunted-mist
 name: Breathless Mist
 description: White mist swallows the trail.
+@trigger on_weather narrate The mist thickens, swallowing familiar landmarks.
+@trigger on_enter when not effect iron_lantern_aura then grant-effect actor forest_dread
+@trigger on_enter when effect iron_lantern_aura then narrate The lantern's warmth keeps the whispers at arm's length.
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -429,6 +482,8 @@ type: area
 base_name: haunted-moss
 name: Moss Choke
 description: Soft moss climbs every trunk and blurs every landmark.
+@trigger on_enter narrate Moss muffles sound until your own breathing sounds borrowed.
+@trigger on_enter when skill stealth below 3 then grant-effect actor forest_dread
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -437,6 +492,9 @@ type: area
 base_name: haunted-thicket
 name: Bramble Thicket
 description: Thorns catch cloth and skin alike.
+@trigger on_enter grant-effect actor forest_dread
+@trigger on_enter when effect iron_lantern_aura then narrate Thorns shy away from the lantern's edge.
+@trigger on_enter damage actor 3
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -445,6 +503,9 @@ type: area
 base_name: haunted-pool
 name: Drowned Glare
 description: The pool's reflection shows a path that is not there.
+@trigger on_enter narrate The water shows you leaving. You are not sure when that happened.
+@trigger on_enter when skill survival at_least 4 then teleport haunted-heart
+@trigger on_enter when skill survival at_least 4 then narrate The reflection offers a shortcut. You accept before it changes its mind.
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -453,6 +514,9 @@ type: area
 base_name: haunted-bones
 name: Bone Snarl
 description: Bleached roots tangle like old teeth.
+@trigger on_enter damage actor 4
+@trigger on_enter when chance 35 then spawn pale-lurker
+@trigger on_enter when condition curse then damage actor 3
 exits:
   out: haunted-entry
 loop_to: haunted-entry
@@ -461,6 +525,10 @@ type: area
 base_name: haunted-shrine
 name: Forgotten Shrine
 description: A stone bowl holds rainwater and fallen needles.
+@trigger on_enter when condition curse then cure-tag actor curse
+@trigger on_enter when health below 70 then heal actor 8
+@trigger on_enter spawn item trail-rations
+@trigger on_enter narrate Needles circle the bowl like a patient clock.
 exits:
   out: haunted-entry
 loop_to: haunted-entry
