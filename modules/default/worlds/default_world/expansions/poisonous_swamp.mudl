@@ -6,6 +6,7 @@
 # Host world integration (map hooks the expansion expects):
 #   - forest-path with exit `down: swamp-entry` (and return `up: forest-path`)
 #   - the-void optional — scatter exit from swamp-heart can land here
+#   - swamp-dry with exit `in: spider-entry` when Giant Spider Den expansion is loaded
 
 @expansion poisonous_swamp
   name=Poisonous Swamp
@@ -502,6 +503,9 @@ exits:
   north: swamp-sweet
   west: swamp-heart
   east: swamp-shrine
+  in: spider-entry
+exit_returns:
+  in: out
 
 type: area
 base_name: swamp-heart

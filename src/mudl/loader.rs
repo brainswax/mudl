@@ -640,6 +640,21 @@ mod tests {
             .npc_defs
             .iter()
             .any(|n| n.base_name == "bog-warden"));
+        assert!(
+            world
+                .world_defs
+                .iter()
+                .any(|d| d.base_name == "spider-entry"),
+            "giant spider den expansion should load via @import"
+        );
+        assert!(world
+            .item_instances
+            .iter()
+            .any(|i| i.base_name == "swamp-spider-fissure"));
+        assert!(world
+            .npc_defs
+            .iter()
+            .any(|n| n.base_name == "brood-queen"));
     }
 
     #[test]

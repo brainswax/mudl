@@ -1746,6 +1746,238 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn giant_spider_den_full_adventure() {
+        use crate::creature::attack_creature;
+        use crate::inventory::{
+            break_item, open_container, read_item, take_item, unlock_container,
+        };
+        use crate::world::exits::{apply_scatter_exit, pick_scatter_destination};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        validate_world_places(&objects).expect("spider den map validates");
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            objects,
+            Some(start.clone()),
+        );
+
+        // Reach Dry Mound via swamp puzzle route.
+        session.go("north").unwrap();
+        session.go("down").unwrap();
+        session.go("north").unwrap();
+        session.go("east").unwrap();
+        session.go("south").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Dry Mound"
+        );
+
+        let plaque = read_item(&session.inventory_context(), "plaque").unwrap();
+        assert!(plaque.contains("SILK"));
+
+        let entry_msg = session.go("in").unwrap();
+        assert!(
+            entry_msg.contains("Webbed Threshold") || entry_msg.contains("wet silk")
+        );
+
+        let wrong_turn = session.go("east").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Webbed Threshold",
+            "gloom crawl loops silently to the threshold"
+        );
+        assert!(
+            !wrong_turn.to_lowercase().contains("gloom"),
+            "dead-end names should not appear on silent loop"
+        );
+
+        session.go("north").unwrap();
+        let silk_read = read_item(&session.inventory_context(), "marker").unwrap();
+        assert!(silk_read.contains("SILK"));
+
+        let cocoon_break = break_item(&mut session.inventory_context(), "cocoon").unwrap();
+        assert!(
+            cocoon_break.contains("slash") || cocoon_break.contains("collapse"),
+            "cocoon break: {cocoon_break}"
+        );
+
+        session.go("east").unwrap();
+        let egg_read = read_item(&session.inventory_context(), "marker").unwrap();
+        assert!(egg_read.contains("EGG"));
+
+        let sac_break = break_item(&mut session.inventory_context(), "egg sac").unwrap();
+        assert!(
+            sac_break.contains("tear") || sac_break.contains("rupture"),
+            "egg sac break: {sac_break}"
+        );
+        assert!(
+            sac_break.contains("notice") || sac_break.contains("fang key"),
+            "egg sac should drop brood fang key: {sac_break}"
+        );
+
+        {
+            let mut ctx = session.inventory_context();
+            take_item(&mut ctx, "fang key").unwrap();
+        }
+
+        session.go("south").unwrap();
+        {
+            let mut ctx = session.inventory_context();
+            unlock_container(&mut ctx, "brood gate", None).unwrap();
+        }
+        let west_msg = session.go("west").unwrap();
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Crown of the Brood",
+            "unlocked gate should allow passage west: {west_msg}"
+        );
+
+        let queen_id = ObjectId::new("npc:brood-queen-001");
+        session
+            .objects_mut()
+            .get_mut(&queen_id)
+            .unwrap()
+            .set_property_int("health", 1);
+
+        let combat = {
+            let ctx = session.inventory_context();
+            attack_creature(
+                ctx.player_id,
+                ctx.room_id,
+                ctx.objects,
+                ctx.anatomy,
+                ctx.dirty,
+                "brood queen",
+            )
+            .unwrap()
+        };
+        assert!(
+            combat.lines.iter().any(|l| l.contains("corpse") || l.contains("collapses")),
+            "brood queen should be defeatable: {:?}",
+            combat.lines
+        );
+        assert!(
+            combat.lines.iter().any(|l| l.contains("web slackens")),
+            "brood queen on_kill should narrate: {:?}",
+            combat.lines
+        );
+
+        let crown_location = session.current_location().unwrap().clone();
+        let hoard_id = session
+            .objects()
+            .values()
+            .find(|o| {
+                o.name == "Brood Treasure Hoard"
+                    && o.is_container()
+                    && !o.is_deleted
+                    && o.location.as_ref() == Some(&crown_location)
+            })
+            .map(|o| o.id.clone())
+            .expect("brood hoard at crown");
+
+        let reward_msg = {
+            let mut ctx = session.inventory_context();
+            open_container(&mut ctx, "hoard").unwrap()
+        };
+        assert!(
+            reward_msg.contains("find"),
+            "opening brood hoard should spawn loot: {reward_msg}"
+        );
+
+        let reward_names = [
+            "Mithril Shard Vest",
+            "Spider-Silk Cloak",
+            "Fang of the Brood",
+            "Phial of Starlight",
+            "Boots of Carrying",
+            "Vitality Band",
+        ];
+        let hoard = session.objects().get(&hoard_id).unwrap();
+        let spawned: Vec<_> = hoard
+            .container_contents()
+            .iter()
+            .filter_map(|id| session.objects().get(id))
+            .collect();
+        assert!(
+            spawned
+                .iter()
+                .any(|item| reward_names.contains(&item.name.as_str())),
+            "brood hoard should hold high-value loot"
+        );
+
+        let crown = session
+            .object(session.current_location().unwrap())
+            .unwrap()
+            .clone();
+        let scatter_dest = pick_scatter_destination(&crown, &player_id, session.objects())
+            .expect("scatter destination");
+        let escape_targets = ["Forest Path", "West Clearing", "Dry Mound"];
+        assert!(
+            session
+                .objects()
+                .get(&scatter_dest)
+                .map(|o| escape_targets.contains(&o.name.as_str()))
+                .unwrap_or(false),
+            "scatter lands in main world or swamp"
+        );
+
+        let exit_msg = session.go("out").unwrap();
+        let landing = session.current_location().unwrap().clone();
+        let landing_name = session.object(&landing).unwrap().name.as_str();
+        assert!(
+            escape_targets.contains(&landing_name),
+            "out exit should leave the den, got {landing_name}"
+        );
+        if landing != scatter_dest {
+            assert!(
+                exit_msg.contains("spit you out") || exit_msg.contains("head out"),
+                "unexpected exit message: {exit_msg}"
+            );
+        }
+
+        let crown_exits = crown.get_exits();
+        let map_target = crown_exits.get("out").unwrap();
+        assert_eq!(
+            apply_scatter_exit(&crown, "out", map_target, &player_id, session.objects()),
+            scatter_dest
+        );
+
+        let _ = start;
+    }
+
+    #[tokio::test]
     async fn bootstrap_equipment_modifiers_on_starting_gear() {
         use crate::creature::creature_effective_stat;
 
