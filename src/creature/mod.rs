@@ -21,8 +21,8 @@ pub use behavior::{
 };
 pub use combat::{
     attack_creature, compute_combat_damage, damage_creature, heal_creature,
-    parse_vital_amount_args, AttackOutcome, CreatureCombatError, VitalAmountRequest,
-    DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
+    parse_vital_amount_args, resolve_combat_hit, AttackOutcome, CombatHit, CreatureCombatError,
+    VitalAmountRequest, CRITICAL_DAMAGE_BONUS, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
 };
 pub use effects::{
     active_effects, apply_effect, collect_active_effect_modifiers, effect_encumbrance_factor,

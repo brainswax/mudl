@@ -30,6 +30,17 @@ pub const DEFAULT_DAMAGE_AMOUNT: i64 = 10;
 /// Default healing when a wizard omits the amount.
 pub const DEFAULT_HEAL_AMOUNT: i64 = 10;
 
+/// Extra damage on a clean strike from combat skill (non-surprise).
+pub const CRITICAL_DAMAGE_BONUS: i64 = 2;
+
+/// Resolved damage for one melee strike — includes awareness and skill crits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CombatHit {
+    pub damage: i64,
+    pub surprise: bool,
+    pub critical: bool,
+}
+
 /// Errors from damage/heal commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreatureCombatError {
@@ -195,6 +206,65 @@ pub fn compute_combat_damage(
     damage
 }
 
+fn combat_exchange_seed(
+    attacker_id: &ObjectId,
+    defender_id: &ObjectId,
+    room_id: &ObjectId,
+) -> u64 {
+    let mut hash = 0u64;
+    for part in [attacker_id.as_str(), defender_id.as_str(), room_id.as_str()] {
+        for byte in part.as_bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(u64::from(*byte));
+        }
+    }
+    hash
+}
+
+/// Resolve one strike with light variance, surprise bonus, and critical hits.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_combat_hit(
+    attacker: &Object,
+    defender: &Object,
+    attacker_id: &ObjectId,
+    defender_id: &ObjectId,
+    room_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+    surprise: bool,
+) -> CombatHit {
+    let base = compute_combat_damage(attacker, defender, objects, anatomy, false);
+    let seed = combat_exchange_seed(attacker_id, defender_id, room_id);
+    let variance = i64::from((seed % 3) as u32).saturating_sub(1);
+    let combat = creature_effective_skill(attacker, "combat", objects, anatomy);
+    let skill_crit = !surprise && combat >= 4 && seed % 15 == 7;
+    let critical = surprise || skill_crit;
+    let mut damage = base.saturating_add(variance);
+    if surprise {
+        damage = damage.saturating_add(SURPRISE_DAMAGE_BONUS);
+    } else if skill_crit {
+        damage = damage.saturating_add(CRITICAL_DAMAGE_BONUS);
+    }
+    CombatHit {
+        damage: damage.max(1),
+        surprise,
+        critical,
+    }
+}
+
+fn resolve_template_damage_hit(base: i64, surprise: bool, seed: u64) -> CombatHit {
+    let variance = i64::from((seed % 3) as u32).saturating_sub(1);
+    let critical = surprise;
+    let mut damage = base.saturating_add(variance);
+    if surprise {
+        damage = damage.saturating_add(SURPRISE_DAMAGE_BONUS);
+    }
+    CombatHit {
+        damage: damage.max(1),
+        surprise,
+        critical,
+    }
+}
+
 fn wielded_weapon_label(attacker: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
     for (slot, item_id) in attacker.body_slots() {
         if !slot.contains("hand") {
@@ -216,12 +286,18 @@ fn wielded_weapon_label(attacker: &Object, objects: &HashMap<ObjectId, Object>) 
     None
 }
 
-fn npc_retaliation_damage(
+#[allow(clippy::too_many_arguments)]
+fn npc_retaliation_hit(
     attacker: &Object,
     defender: &Object,
+    attacker_id: &ObjectId,
+    defender_id: &ObjectId,
+    room_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
-) -> i64 {
+    surprise: bool,
+) -> CombatHit {
+    let seed = combat_exchange_seed(attacker_id, defender_id, room_id);
     let behaviors = read_creature_behaviors(attacker);
     if let Some(damage) = behaviors
         .iter()
@@ -229,9 +305,18 @@ fn npc_retaliation_damage(
         .filter_map(|e| e.attack_damage)
         .max()
     {
-        return damage.max(1);
+        return resolve_template_damage_hit(damage.max(1), surprise, seed);
     }
-    compute_combat_damage(attacker, defender, objects, anatomy, false)
+    resolve_combat_hit(
+        attacker,
+        defender,
+        attacker_id,
+        defender_id,
+        room_id,
+        objects,
+        anatomy,
+        surprise,
+    )
 }
 
 fn next_corpse_index(objects: &HashMap<ObjectId, Object>) -> u32 {
@@ -341,6 +426,7 @@ fn handle_npc_death(
 ) {
     let victim = objects.get(victim_id).cloned().unwrap();
     let display = victim.name.to_lowercase();
+    let had_gear = !victim.carried_body_items().is_empty();
 
     create_creature_corpse(&victim, room_id, owner, objects, outcome);
     strip_creature_gear(victim_id, objects, outcome);
@@ -358,6 +444,12 @@ fn handle_npc_death(
     }
 
     outcome.push_line(format!("The {display} crumples, leaving a corpse."));
+    if had_gear {
+        outcome.push_line("What they were carrying is left on the corpse.".to_string());
+    }
+    if killer_id != victim_id {
+        outcome.push_line("You catch your breath.".to_string());
+    }
 }
 
 fn handle_player_death(
@@ -406,45 +498,95 @@ fn handle_player_death(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn format_attack_line(
-    attacker_name: &str,
-    target_name: &str,
-    weapon: Option<&str>,
-    damage: i64,
-    after: i64,
-    max: i64,
-    addressing_self_as_attacker: bool,
-    surprise: bool,
-) -> String {
-    let target = target_name.to_lowercase();
-    if addressing_self_as_attacker {
-        let opener = if surprise {
-            format!("You catch {target} off guard and strike")
-        } else {
-            "You strike".to_string()
-        };
-        if let Some(weapon) = weapon {
-            return format!(
-                "{opener} {target} with your {weapon} for {damage} damage ({after}/{max} health)."
-            );
-        }
-        return format!("{opener} {target} for {damage} damage ({after}/{max} health).");
+fn player_strike_opener(hit: CombatHit) -> &'static str {
+    if hit.surprise {
+        "You catch them off guard with a punishing hit"
+    } else if hit.critical {
+        "You land a clean critical blow"
+    } else {
+        "You strike"
     }
-    let attacker = attacker_name.to_lowercase();
-    if surprise {
-        return format!(
-            "{attacker} catches you off guard and strikes for {damage} damage ({after}/{max} health remaining)."
-        );
-    }
-    format!("{attacker} strikes you for {damage} damage ({after}/{max} health remaining).")
 }
 
-fn format_retaliation_line(attacker_name: &str, damage: i64, after: i64, max: i64) -> String {
+fn npc_strike_opener(hit: CombatHit, initiative: bool) -> &'static str {
+    if hit.surprise {
+        "catches you off guard and strikes"
+    } else if hit.critical {
+        "lands a heavy blow"
+    } else if initiative {
+        "is quicker and strikes"
+    } else {
+        "strikes back"
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn format_player_strike_line(
+    target_name: &str,
+    weapon: Option<&str>,
+    hit: CombatHit,
+    after: i64,
+    max: i64,
+) -> String {
+    let target = target_name.to_lowercase();
+    let opener = player_strike_opener(hit);
+    if let Some(weapon) = weapon {
+        if hit.critical && !hit.surprise {
+            return format!(
+                "{opener}, driving your {weapon} into {target} for {damage} damage ({after}/{max} health).",
+                damage = hit.damage
+            );
+        }
+        return format!(
+            "{opener} {target} with your {weapon} for {damage} damage ({after}/{max} health).",
+            damage = hit.damage
+        );
+    }
     format!(
-        "{} lashes out for {damage} damage ({after}/{max} health remaining).",
-        attacker_name
+        "{opener} {target} for {damage} damage ({after}/{max} health).",
+        damage = hit.damage
     )
+}
+
+fn format_npc_strike_line(
+    attacker_name: &str,
+    hit: CombatHit,
+    initiative: bool,
+    after: i64,
+    max: i64,
+) -> String {
+    let attacker = attacker_name.to_lowercase();
+    let verb = npc_strike_opener(hit, initiative);
+    format!(
+        "The {attacker} {verb} for {damage} damage ({after}/{max} health remaining).",
+        damage = hit.damage
+    )
+}
+
+fn format_defender_wound_state(name: &str, after: i64, max: i64) -> Option<String> {
+    if after == 0 || max <= 0 {
+        return None;
+    }
+    let pct = after * 100 / max;
+    let display = name.to_lowercase();
+    if pct < 25 {
+        Some(format!("The {display} can barely stay on their feet."))
+    } else if pct < 50 {
+        Some(format!("The {display} is bleeding badly."))
+    } else {
+        None
+    }
+}
+
+fn format_player_stagger(after: i64, max: i64) -> Option<String> {
+    if after == 0 || max <= 0 {
+        return None;
+    }
+    if after * 100 / max < 25 {
+        Some("You stagger from the blow.".to_string())
+    } else {
+        None
+    }
 }
 
 /// Player `attack <creature>` — turn-based exchange with NPC counter-attacks.
@@ -506,40 +648,40 @@ pub fn attack_creature(
     };
 
     let weapon = wielded_weapon_label(&actor, objects);
+    let npc_initiative = order == StrikeOrder::TargetFirst
+        && !npc_surprise
+        && is_creature_aware(&target);
 
     if order == StrikeOrder::TargetFirst
         && target.object_type() == "npc"
         && (is_creature_aware(&target) || npc_surprise)
     {
         let npc = objects.get(&target_id).cloned().unwrap();
-        let base_retaliate = npc_retaliation_damage(&npc, &actor, objects, anatomy);
-        let retaliate = if npc_surprise {
-            base_retaliate.saturating_add(SURPRISE_DAMAGE_BONUS)
-        } else {
-            base_retaliate
-        };
+        let hit = npc_retaliation_hit(
+            &npc,
+            &actor,
+            &target_id,
+            actor_id,
+            room_id,
+            objects,
+            anatomy,
+            npc_surprise,
+        );
         let player_max = creature_effective_max_health(&actor, objects, anatomy);
         let player = objects.get_mut(actor_id).unwrap();
-        let after = apply_damage(player, retaliate);
+        let after = apply_damage(player, hit.damage);
         set_player_aware(player, true);
         outcome.mark_dirty(actor_id);
         mark_dirty(&mut dirty, actor_id);
-        if npc_surprise {
-            outcome.push_line(format_attack_line(
-                &npc.name,
-                &actor.name,
-                None,
-                retaliate,
-                after,
-                player_max,
-                false,
-                true,
-            ));
-        } else {
-            outcome.push_line(format!(
-                "{} acts first and strikes you for {retaliate} damage ({after}/{player_max} health remaining).",
-                npc.name
-            ));
+        outcome.push_line(format_npc_strike_line(
+            &npc.name,
+            hit,
+            npc_initiative,
+            after,
+            player_max,
+        ));
+        if let Some(line) = format_player_stagger(after, player_max) {
+            outcome.push_line(line);
         }
         if after == 0 {
             handle_player_death(
@@ -554,31 +696,37 @@ pub fn attack_creature(
                 mark_dirty(&mut dirty, id);
             }
             return Ok(outcome);
-        } else if after * 100 / player_max.max(1) < 25 {
-            outcome.push_line("You stagger from the blow.".to_string());
         }
     }
 
-    let player_damage =
-        compute_combat_damage(&actor, &target, objects, anatomy, player_surprise);
+    let player_hit = resolve_combat_hit(
+        &actor,
+        &target,
+        actor_id,
+        &target_id,
+        room_id,
+        objects,
+        anatomy,
+        player_surprise,
+    );
     let target_max = creature_effective_max_health(&target, objects, anatomy);
     {
         let target_mut = objects.get_mut(&target_id).unwrap();
-        let after = apply_damage(target_mut, player_damage);
+        let after = apply_damage(target_mut, player_hit.damage);
         set_creature_aware(target_mut, true);
         set_creature_discovered(target_mut, true);
         outcome.mark_dirty(&target_id);
         mark_dirty(&mut dirty, &target_id);
-        outcome.push_line(format_attack_line(
-            &actor.name,
+        outcome.push_line(format_player_strike_line(
             &target.name,
             weapon.as_deref(),
-            player_damage,
+            player_hit,
             after,
             target_max,
-            true,
-            player_surprise,
         ));
+        if let Some(line) = format_defender_wound_state(&target.name, after, target_max) {
+            outcome.push_line(line);
+        }
         if let Some(actor_mut) = objects.get_mut(actor_id) {
             let xp = if after == 0 { 5 } else { 1 };
             if let Some(msg) = award_skill_xp(actor_mut, "combat", xp) {
@@ -612,15 +760,27 @@ pub fn attack_creature(
     {
         let npc = objects.get(&target_id).cloned().unwrap();
         if !creature_is_defeated(&npc) && is_creature_aware(&npc) && !npc_surprise {
-            let retaliate = npc_retaliation_damage(&npc, &actor, objects, anatomy);
+            let hit = npc_retaliation_hit(
+                &npc,
+                &actor,
+                &target_id,
+                actor_id,
+                room_id,
+                objects,
+                anatomy,
+                false,
+            );
             let player_max = creature_effective_max_health(&actor, objects, anatomy);
             let player = objects.get_mut(actor_id).unwrap();
-            let after = apply_damage(player, retaliate);
+            let after = apply_damage(player, hit.damage);
             outcome.mark_dirty(actor_id);
             mark_dirty(&mut dirty, actor_id);
-            outcome.push_line(format_retaliation_line(
-                &npc.name, retaliate, after, player_max,
+            outcome.push_line(format_npc_strike_line(
+                &npc.name, hit, false, after, player_max,
             ));
+            if let Some(line) = format_player_stagger(after, player_max) {
+                outcome.push_line(line);
+            }
             if after == 0 {
                 handle_player_death(
                     actor_id,
@@ -630,8 +790,6 @@ pub fn attack_creature(
                     anatomy,
                     &mut outcome,
                 );
-            } else if after * 100 / player_max.max(1) < 25 {
-                outcome.push_line("You stagger from the blow.".to_string());
             }
         }
     }
@@ -873,17 +1031,59 @@ mod tests {
     #[test]
     fn surprise_damage_bonus_on_unaware_target() {
         let anatomy = AnatomyRegistry::default();
+        let room = ObjectId::new("area:room-001");
         let attacker = creature("player:hero-001", "Hero");
         let mut defender = creature("npc:lurker-001", "Pale Lurker");
         defender.set_property_bool("creature_aware", false);
         let objects = HashMap::from([
-            (attacker.id.clone(), attacker),
+            (attacker.id.clone(), attacker.clone()),
             (defender.id.clone(), defender.clone()),
         ]);
-        let attacker_ref = objects.get(&ObjectId::new("player:hero-001")).unwrap();
-        let normal = compute_combat_damage(attacker_ref, &defender, &objects, &anatomy, false);
-        let surprise = compute_combat_damage(attacker_ref, &defender, &objects, &anatomy, true);
-        assert_eq!(surprise, normal + SURPRISE_DAMAGE_BONUS);
+        let normal = resolve_combat_hit(
+            &attacker,
+            &defender,
+            &attacker.id,
+            &defender.id,
+            &room,
+            &objects,
+            &anatomy,
+            false,
+        );
+        let surprise = resolve_combat_hit(
+            &attacker,
+            &defender,
+            &attacker.id,
+            &defender.id,
+            &room,
+            &objects,
+            &anatomy,
+            true,
+        );
+        assert!(surprise.critical);
+        assert!(surprise.damage >= normal.damage + SURPRISE_DAMAGE_BONUS - 1);
+    }
+
+    #[test]
+    fn resolve_combat_hit_variance_is_bounded() {
+        let anatomy = AnatomyRegistry::default();
+        let room = ObjectId::new("area:room-001");
+        let attacker = creature("player:hero-001", "Hero");
+        let defender = creature("npc:watcher-001", "Path Watcher");
+        let objects = HashMap::from([
+            (attacker.id.clone(), attacker.clone()),
+            (defender.id.clone(), defender.clone()),
+        ]);
+        let hit = resolve_combat_hit(
+            &attacker,
+            &defender,
+            &attacker.id,
+            &defender.id,
+            &room,
+            &objects,
+            &anatomy,
+            false,
+        );
+        assert!(hit.damage >= 1);
     }
 
     #[test]
@@ -979,8 +1179,14 @@ mod tests {
             "path watcher",
         )
         .unwrap();
-        assert!(outcome.lines.iter().any(|l| l.contains("You strike")));
-        assert!(outcome.lines.iter().any(|l| l.contains("lashes out")));
+        assert!(outcome
+            .lines
+            .iter()
+            .any(|l| l.contains("You strike") || l.contains("strike")));
+        assert!(outcome
+            .lines
+            .iter()
+            .any(|l| l.contains("strikes back") || l.contains("strikes")));
         assert!(creature_health(objects.get(&watcher.id).unwrap()) < 100);
         assert!(creature_health(objects.get(&actor).unwrap()) < 100);
     }
