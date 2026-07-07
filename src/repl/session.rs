@@ -93,6 +93,11 @@ impl Session {
         })
     }
 
+    /// Attach a new connection to an existing shared world (M5 IRC session registry).
+    pub fn attach(world: SharedWorld, player: PlayerSession) -> Self {
+        Self { world, player }
+    }
+
     /// Build from an in-memory graph (tests and tooling).
     #[cfg(test)]
     pub fn test_session(
@@ -707,6 +712,59 @@ mod tests {
             Some("room:void-001")
         );
         assert_eq!(session.player.actor_id().as_str(), "player:hero-001");
+    }
+
+    #[tokio::test]
+    async fn two_connections_share_one_world() {
+        let (_persistence, mut first) = sample_session().await;
+        let hero2 = ObjectId::new("player:hero-002");
+        let void_id = ObjectId::new("room:void-001");
+
+        first.mutate_player(|world, _| {
+            let mut hero2_obj = bare("player:hero-002", "Hero Two");
+            hero2_obj.set_property_string("body_plan", "human");
+            hero2_obj.location = Some(void_id.clone());
+            world.upsert_object(hero2_obj);
+        });
+
+        let shared = first.shared_world().clone();
+        let player2 = first.with_world(|world, _| {
+            PlayerSession::connect(hero2.clone(), Some(void_id.clone()), world)
+        });
+        let session2 = Session::attach(shared, player2);
+        let mut session1 = first;
+
+        session1.go("north").unwrap();
+        assert_eq!(
+            session1.current_location().map(|id| id.as_str()),
+            Some("room:north-001")
+        );
+        assert_eq!(
+            session2.with_world(|world, _| {
+                world
+                    .object(session1.player_id())
+                    .and_then(|p| p.location.as_ref().map(|id| id.as_str().to_string()))
+            }),
+            Some("room:north-001".to_string())
+        );
+        assert_eq!(
+            session2.current_location().map(|id| id.as_str()),
+            Some("room:void-001")
+        );
+    }
+
+    #[tokio::test]
+    async fn set_current_location_syncs_actor_object() {
+        let (_persistence, mut session) = sample_session().await;
+        let north = ObjectId::new("room:north-001");
+        session.set_current_location(north.clone());
+        assert_eq!(session.current_location(), Some(&north));
+        assert_eq!(
+            session
+                .object(session.player_id())
+                .and_then(|p| p.location.clone()),
+            Some(north)
+        );
     }
 
     #[tokio::test]
