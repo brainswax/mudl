@@ -335,8 +335,9 @@ attack path watcher
 Player command: `attack <creature>` — turn-based melee in the current room.
 
 - **Damage** — derived from effective `strength` and `combat` skill (stats + equipment + effects), mitigated by target `constitution` and `dexterity`. Wielded gear with stat mods is named in the attack line. Successful hits award combat skill XP.
-- **Awareness** — templates with `awareness_check=true` (default for `react=attack`) contest player `stealth` vs creature `perception` on room entry. Unaware mobs skip attack/warn reactions and emotes; you may see `The pale lurker hasn't noticed you.`
-- **Surprise** — attacking an unaware creature adds bonus damage and grants the first strike regardless of initiative.
+- **Awareness** — templates with `awareness_check=true` (default for `react=attack`) run bilateral contests on room entry: player `stealth` vs creature `perception`, and player `survival`/wisdom vs creature ambush stealth. Unaware mobs skip attack/warn reactions; you may see `The pale lurker hasn't noticed you.` or `You spot the pale lurker before it sees you.`
+- **Ambush** — if a lurking creature spots you first but you don't spot it, you may see `A pale lurker ambushes you!` and take surprise damage on its on-enter attack.
+- **Surprise** — attacking an unaware creature adds bonus damage and grants the first strike (`You catch the pale lurker off guard and strike`). If you are unaware, the creature strikes first with bonus damage.
 - **Initiative** — each exchange compares `dexterity`, optional `speed`, and `combat` skill; the faster combatant acts first (NPC may strike before you when aware and quicker).
 - **Counter-attack** — aware NPCs with `react=attack` strike back after your blow (or first, if they win initiative), using `attack_damage` from their behavior template when set.
 - **NPC death** — creature is removed; a **corpse** container (`is_corpse`) appears in the room holding all worn/wielded gear. `on_kill` loot spawners attached to the NPC fire.

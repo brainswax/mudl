@@ -9,8 +9,8 @@ use crate::creature::equipment::{
 };
 use crate::creature::progression::award_skill_xp;
 use crate::creature::tactics::{
-    is_creature_aware, resolve_strike_order, set_creature_aware, StrikeOrder,
-    SURPRISE_DAMAGE_BONUS,
+    is_creature_aware, is_player_aware, resolve_strike_order, set_creature_aware,
+    set_player_aware, StrikeOrder, SURPRISE_DAMAGE_BONUS,
 };
 use crate::creature::vitality::{
     apply_damage, creature_health, creature_is_defeated, creature_max_health, heal,
@@ -419,7 +419,7 @@ fn format_attack_line(
     let target = target_name.to_lowercase();
     if addressing_self_as_attacker {
         let opener = if surprise {
-            format!("You catch {target} unaware and strike")
+            format!("You catch {target} off guard and strike")
         } else {
             "You strike".to_string()
         };
@@ -431,6 +431,11 @@ fn format_attack_line(
         return format!("{opener} {target} for {damage} damage ({after}/{max} health).");
     }
     let attacker = attacker_name.to_lowercase();
+    if surprise {
+        return format!(
+            "{attacker} catches you off guard and strikes for {damage} damage ({after}/{max} health remaining)."
+        );
+    }
     format!("{attacker} strikes you for {damage} damage ({after}/{max} health remaining).")
 }
 
@@ -486,9 +491,12 @@ pub fn attack_creature(
     let mut outcome = AttackOutcome::default();
     let owner = actor.owner.clone();
 
-    let surprise = !is_creature_aware(&target);
-    let order = if surprise {
+    let player_surprise = !is_creature_aware(&target);
+    let npc_surprise = !is_player_aware(&actor);
+    let order = if player_surprise {
         StrikeOrder::ActorFirst
+    } else if npc_surprise {
+        StrikeOrder::TargetFirst
     } else {
         resolve_strike_order(&actor, &target, objects, anatomy)
     };
@@ -497,19 +505,38 @@ pub fn attack_creature(
 
     if order == StrikeOrder::TargetFirst
         && target.object_type() == "npc"
-        && is_creature_aware(&target)
+        && (is_creature_aware(&target) || npc_surprise)
     {
         let npc = objects.get(&target_id).cloned().unwrap();
-        let retaliate = npc_retaliation_damage(&npc, &actor, objects, anatomy);
+        let base_retaliate = npc_retaliation_damage(&npc, &actor, objects, anatomy);
+        let retaliate = if npc_surprise {
+            base_retaliate.saturating_add(SURPRISE_DAMAGE_BONUS)
+        } else {
+            base_retaliate
+        };
         let player_max = creature_effective_max_health(&actor, objects, anatomy);
         let player = objects.get_mut(actor_id).unwrap();
         let after = apply_damage(player, retaliate);
+        set_player_aware(player, true);
         outcome.mark_dirty(actor_id);
         mark_dirty(&mut dirty, actor_id);
-        outcome.push_line(format!(
-            "{} acts first and strikes you for {retaliate} damage ({after}/{player_max} health remaining).",
-            npc.name
-        ));
+        if npc_surprise {
+            outcome.push_line(format_attack_line(
+                &npc.name,
+                &actor.name,
+                None,
+                retaliate,
+                after,
+                player_max,
+                false,
+                true,
+            ));
+        } else {
+            outcome.push_line(format!(
+                "{} acts first and strikes you for {retaliate} damage ({after}/{player_max} health remaining).",
+                npc.name
+            ));
+        }
         if after == 0 {
             handle_player_death(
                 actor_id,
@@ -529,7 +556,7 @@ pub fn attack_creature(
     }
 
     let player_damage =
-        compute_combat_damage(&actor, &target, objects, anatomy, surprise);
+        compute_combat_damage(&actor, &target, objects, anatomy, player_surprise);
     let target_max = creature_effective_max_health(&target, objects, anatomy);
     {
         let target_mut = objects.get_mut(&target_id).unwrap();
@@ -545,7 +572,7 @@ pub fn attack_creature(
             after,
             target_max,
             true,
-            surprise,
+            player_surprise,
         ));
         if let Some(actor_mut) = objects.get_mut(actor_id) {
             let xp = if after == 0 { 5 } else { 1 };
@@ -579,7 +606,7 @@ pub fn attack_creature(
         && target.object_type() == "npc"
     {
         let npc = objects.get(&target_id).cloned().unwrap();
-        if !creature_is_defeated(&npc) && is_creature_aware(&npc) {
+        if !creature_is_defeated(&npc) && is_creature_aware(&npc) && !npc_surprise {
             let retaliate = npc_retaliation_damage(&npc, &actor, objects, anatomy);
             let player_max = creature_effective_max_health(&actor, objects, anatomy);
             let player = objects.get_mut(actor_id).unwrap();
@@ -1081,6 +1108,53 @@ mod tests {
             objects.get(&vest_id).unwrap().location.as_ref(),
             Some(&corpse.id)
         );
+    }
+
+    #[test]
+    fn unaware_player_takes_npc_surprise_first_strike() {
+        let actor = ObjectId::new("player:admin-001");
+        let room = ObjectId::new("area:room-001");
+        let mut player = creature("player:admin-001", "Admin");
+        player.location = Some(room.clone());
+        player.set_property_bool("player_aware", false);
+        let mut watcher = creature("npc:watcher-001", "Path Watcher");
+        watcher.location = Some(room.clone());
+        watcher.set_property_bool("creature_aware", true);
+        watcher.add_property(creature_behaviors_to_property(&[CreatureBehaviorEntry {
+            entry_type: "template".to_string(),
+            template_name: Some("aggressive".to_string()),
+            react: Some(CreatureReact::Attack),
+            event: Some("on_enter".to_string()),
+            action: None,
+            text: None,
+            wander_interval: None,
+            attack_damage: Some(8),
+            awareness_check: None,
+            perception: None,
+        }]));
+        let mut objects = HashMap::from([
+            (player.id.clone(), player),
+            (watcher.id.clone(), watcher),
+        ]);
+        let anatomy = AnatomyRegistry::default();
+
+        let outcome = attack_creature(
+            &actor,
+            Some(&room),
+            &mut objects,
+            &anatomy,
+            None,
+            "path watcher",
+        )
+        .unwrap();
+        assert!(outcome
+            .lines
+            .iter()
+            .any(|l| l.contains("catches you off guard")));
+        assert!(outcome.lines.iter().any(|l| l.contains("off guard and strike")));
+        assert!(crate::creature::tactics::is_player_aware(
+            objects.get(&actor).unwrap()
+        ));
     }
 
     #[test]

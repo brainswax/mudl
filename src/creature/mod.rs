@@ -33,9 +33,10 @@ pub use equipment::{
     item_has_equipment_modifiers, EquipmentModifiers,
 };
 pub use tactics::{
-    apply_tactics_from_behaviors, initiative_score, is_creature_aware, player_stealth_score,
-    resolve_strike_order, roll_awareness_on_enter, set_creature_aware, StrikeOrder,
-    SURPRISE_DAMAGE_BONUS,
+    apply_tactics_from_behaviors, initiative_score, is_creature_aware, is_player_aware,
+    player_perception_score, player_stealth_score, reset_player_awareness_on_enter,
+    resolve_encounter_awareness_on_enter, resolve_strike_order, roll_awareness_on_enter,
+    set_creature_aware, set_player_aware, EncounterAwareness, StrikeOrder, SURPRISE_DAMAGE_BONUS,
 };
 pub use spawner::{
     apply_spawner_def, count_active_spawns, despawn_creatures_from_spawner,

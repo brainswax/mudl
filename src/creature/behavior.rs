@@ -3,7 +3,9 @@
 use std::collections::HashMap;
 
 use crate::creature::tactics::{
-    is_creature_aware, roll_awareness_on_enter, set_creature_aware, uses_awareness_check,
+    is_creature_aware, is_player_aware, resolve_encounter_awareness_on_enter,
+    reset_player_awareness_on_enter, set_creature_aware, set_player_aware,
+    uses_awareness_check, SURPRISE_DAMAGE_BONUS,
 };
 use crate::mudl::AnatomyRegistry;
 use crate::creature::vitality::{apply_damage, creature_health};
@@ -542,6 +544,12 @@ pub fn run_creature_behaviors(
     anatomy: &AnatomyRegistry,
 ) -> BehaviorOutcome {
     let mut outcome = BehaviorOutcome::default();
+    if event == "on_enter" {
+        if let Some(player) = objects.get_mut(player_id) {
+            reset_player_awareness_on_enter(player);
+            outcome.mark_dirty(player_id);
+        }
+    }
     let npc_ids: Vec<ObjectId> = npcs_in_room(room_id, player_id, objects)
         .into_iter()
         .map(|npc| npc.id.clone())
@@ -564,7 +572,7 @@ pub fn run_creature_behaviors(
 
         let mut aware = is_creature_aware(&npc_snapshot);
         if event == "on_enter" && uses_awareness_check(&npc_snapshot) {
-            if let Some((noticed, line)) = roll_awareness_on_enter(
+            if let Some(encounter) = resolve_encounter_awareness_on_enter(
                 &npc_id,
                 player_id,
                 room_id,
@@ -572,11 +580,19 @@ pub fn run_creature_behaviors(
                 objects,
                 anatomy,
             ) {
-                outcome.push_line(line);
-                aware = noticed;
+                for line in encounter.lines {
+                    outcome.push_line(line);
+                }
+                aware = encounter.creature_aware;
                 if let Some(npc) = objects.get_mut(&npc_id) {
-                    set_creature_aware(npc, noticed);
+                    set_creature_aware(npc, encounter.creature_aware);
                     outcome.mark_dirty(&npc_id);
+                }
+                if !encounter.player_aware {
+                    if let Some(player) = objects.get_mut(player_id) {
+                        set_player_aware(player, false);
+                        outcome.mark_dirty(player_id);
+                    }
                 }
             }
         }
@@ -624,20 +640,37 @@ pub fn run_creature_behaviors(
         }
 
         if reacts.contains(&CreatureReact::Attack) && aware {
-            let damage = entries
+            let base_damage = entries
                 .iter()
                 .filter_map(|e| e.attack_damage)
                 .max()
                 .unwrap_or(8)
                 .max(1);
+            let ambush = event == "on_enter"
+                && objects
+                    .get(player_id)
+                    .is_some_and(|player| !is_player_aware(player));
+            let damage = if ambush {
+                base_damage.saturating_add(SURPRISE_DAMAGE_BONUS)
+            } else {
+                base_damage
+            };
             if let Some(player) = objects.get_mut(player_id) {
                 if player.has_creature_role() && creature_health(player) > 0 {
                     let after = apply_damage(player, damage);
+                    set_player_aware(player, true);
                     outcome.mark_dirty(player_id);
-                    outcome.push_line(format!(
-                        "{} attacks you for {damage} damage ({after} health remaining).",
-                        npc_snapshot.name
-                    ));
+                    if ambush {
+                        outcome.push_line(format!(
+                            "{} strikes from hiding for {damage} damage ({after} health remaining).",
+                            npc_snapshot.name
+                        ));
+                    } else {
+                        outcome.push_line(format!(
+                            "{} attacks you for {damage} damage ({after} health remaining).",
+                            npc_snapshot.name
+                        ));
+                    }
                 }
             }
         } else if reacts.contains(&CreatureReact::Warn) && aware {
@@ -857,12 +890,55 @@ mod tests {
 
         let outcome =
             run_creature_behaviors("on_enter", &room, &player_id, &mut objects, &anatomy);
+        assert!(outcome.lines.iter().any(|l| {
+            l.contains("hasn't noticed you") || l.contains("before it sees you")
+        }));
+        assert!(!outcome.lines.iter().any(|l| l.contains("attacks you")));
+        assert!(!outcome.lines.iter().any(|l| l.contains("ambushes you")));
+        assert_eq!(creature_health(objects.get(&player_id).unwrap()), 100);
+    }
+
+    #[test]
+    fn ambush_lurker_surprise_damages_player_on_enter() {
+        let room = ObjectId::new("area:haunted-moon-001");
+        let player_id = ObjectId::new("player:hero-001");
+        let player = npc("player:hero-001", "Hero", &room);
+
+        let templates = HashMap::from([(
+            "lurker".to_string(),
+            BehaviorTemplateDef {
+                base_name: "lurker".to_string(),
+                react: CreatureReact::Attack,
+                attack_damage: 10,
+                awareness_check: Some(true),
+                perception: Some(14),
+                ..BehaviorTemplateDef::default()
+            },
+        )]);
+        let entries = build_creature_behavior_entries(&[], &["lurker".to_string()], &templates);
+        let mut lurker = npc("npc:lurker-001", "Pale Lurker", &room);
+        lurker.set_int_map(
+            "stats",
+            HashMap::from([("dexterity".to_string(), 16), ("wisdom".to_string(), 10)]),
+        );
+        lurker.set_int_map("skills", HashMap::from([("survival".to_string(), 8)]));
+        lurker.add_property(creature_behaviors_to_property(&entries));
+        apply_tactics_from_behaviors(&mut lurker, &entries, &templates);
+
+        let anatomy = AnatomyRegistry::default();
+        let mut objects = HashMap::from([(player.id.clone(), player), (lurker.id.clone(), lurker)]);
+
+        let outcome =
+            run_creature_behaviors("on_enter", &room, &player_id, &mut objects, &anatomy);
+        assert!(outcome.lines.iter().any(|l| l.contains("ambushes you")));
         assert!(outcome
             .lines
             .iter()
-            .any(|l| l.contains("hasn't noticed you")));
-        assert!(!outcome.lines.iter().any(|l| l.contains("attacks you")));
-        assert_eq!(creature_health(objects.get(&player_id).unwrap()), 100);
+            .any(|l| l.contains("strikes from hiding")));
+        assert_eq!(creature_health(objects.get(&player_id).unwrap()), 87);
+        assert!(crate::creature::tactics::is_player_aware(
+            objects.get(&player_id).unwrap()
+        ));
     }
 
     #[test]
