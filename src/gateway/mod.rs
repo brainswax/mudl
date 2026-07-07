@@ -1,18 +1,23 @@
-//! Transport-facing gateway: IRC nick registry and RBAC enforcement (M5).
+//! Transport-facing gateway: IRC nick registry, session lifecycle, and RBAC (M5).
 
+mod persistence;
 mod rbac;
 mod registry;
+mod session_manager;
 
+pub use persistence::{hydrate_actor, persist_connection_state};
 pub use rbac::{
     actor_has_tier, actor_tier, authorize_meta_command, authorize_plain_command,
     required_tier_for_meta_verb, required_tier_for_plain_command, tier_denied_message, ActorTier,
     AuthError,
 };
 pub use registry::{normalize_nick, ConnectionRegistry, RegistryError};
+pub use session_manager::{LoginError, LogoutError, SessionManager};
 
 use std::collections::HashMap;
 
 use crate::object::ObjectId;
+use crate::persistence::Persistence;
 use crate::repl::PlayerSession;
 use crate::world::SharedWorld;
 
@@ -82,6 +87,23 @@ impl Gateway {
     pub fn disconnect(&mut self, nick: &str) -> Result<(), RegistryError> {
         let actor_id = self.registry.unbind(nick)?;
         self.players.remove(&actor_id);
+        Ok(())
+    }
+
+    /// Drop a connection and flush the player's actor row plus world dirty objects.
+    pub async fn disconnect_persisting<P: Persistence>(
+        &mut self,
+        nick: &str,
+        persistence: &P,
+    ) -> Result<(), RegistryError> {
+        let actor_id = self.registry.unbind(nick)?;
+        let player = self
+            .players
+            .remove(&actor_id)
+            .ok_or_else(|| RegistryError::NickNotBound(normalize_nick(nick)))?;
+        persist_connection_state(&self.world, persistence, &player)
+            .await
+            .map_err(|_| RegistryError::NickNotBound(normalize_nick(nick)))?;
         Ok(())
     }
 

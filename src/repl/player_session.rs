@@ -4,8 +4,16 @@ use crate::display::{
     resolve_object, DisplayContext, DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
 use crate::inventory::InventoryContext;
-use crate::object::ObjectId;
+use crate::object::{Object, ObjectId};
 use crate::world::{resolve_player_location, WorldMutation, WorldState};
+
+/// Player object property storing serialized [`PlayerPrefs`].
+pub const SESSION_PREFS_KEY: &str = "session_prefs";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredPlayerPrefs {
+    brief_look: bool,
+}
 
 /// Per-connection UI and transport preferences (not stored on the actor [`Object`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +34,35 @@ impl PlayerPrefs {
     pub fn brief_look() -> Self {
         Self {
             look_flags: DisplayFlags::BRIEF,
+        }
+    }
+
+    pub fn from_actor(actor: &Object) -> Self {
+        actor
+            .get_property(SESSION_PREFS_KEY)
+            .and_then(|prop| {
+                if let crate::object::Value::String(raw) = &prop.value {
+                    serde_json::from_str::<StoredPlayerPrefs>(raw).ok()
+                } else {
+                    None
+                }
+            })
+            .map(|stored| Self {
+                look_flags: if stored.brief_look {
+                    DisplayFlags::BRIEF
+                } else {
+                    DisplayFlags::empty()
+                },
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn write_to_actor(&self, actor: &mut Object) {
+        let stored = StoredPlayerPrefs {
+            brief_look: self.look_flags.contains(DisplayFlags::BRIEF),
+        };
+        if let Ok(raw) = serde_json::to_string(&stored) {
+            actor.set_property_string(SESSION_PREFS_KEY, raw);
         }
     }
 }
@@ -50,10 +87,14 @@ impl PlayerSession {
     ) -> Self {
         let current_location =
             resolve_player_location(&actor_id, world.objects(), bootstrap_location);
+        let prefs = world
+            .object(&actor_id)
+            .map(PlayerPrefs::from_actor)
+            .unwrap_or_default();
         Self {
             actor_id,
             current_location,
-            prefs: PlayerPrefs::default(),
+            prefs,
         }
     }
 
@@ -140,6 +181,14 @@ impl PlayerSession {
             .with_objects(world.objects().clone())
             .with_anatomy(world.anatomy().clone())
             .with_flags(self.prefs.look_flags)
+    }
+
+    /// Write location cache and prefs onto the actor object before persistence.
+    pub fn persist_to_actor(&self, actor: &mut Object) {
+        self.prefs.write_to_actor(actor);
+        if let Some(loc) = self.current_location.as_ref() {
+            actor.location = Some(loc.clone());
+        }
     }
 
     /// Mutable inventory command context wired to world dirty tracking.

@@ -64,6 +64,11 @@ impl ConnectionRegistry {
     pub fn is_empty(&self) -> bool {
         self.by_nick.is_empty()
     }
+
+    /// Whether this actor is already bound to a connected nick.
+    pub fn is_actor_bound(&self, actor_id: &ObjectId) -> bool {
+        self.by_nick.values().any(|id| id == actor_id)
+    }
 }
 
 #[cfg(test)]
@@ -85,5 +90,14 @@ mod tests {
             .bind("alice", ObjectId::new("player:a-001"))
             .unwrap();
         assert!(registry.bind("alice", ObjectId::new("player:b-001")).is_err());
+    }
+
+    #[test]
+    fn registry_tracks_actor_binding() {
+        let mut registry = ConnectionRegistry::default();
+        let actor = ObjectId::new("player:a-001");
+        registry.bind("alice", actor.clone()).unwrap();
+        assert!(registry.is_actor_bound(&actor));
+        assert!(!registry.is_actor_bound(&ObjectId::new("player:b-001")));
     }
 }
