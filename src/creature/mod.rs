@@ -1,12 +1,19 @@
 //! Creature systems — vitality, effects, and basic NPC behaviors (Milestone 3).
 
 pub mod ai;
+pub mod behavior;
 pub mod combat;
 pub mod effects;
 pub mod spawner;
 pub mod vitality;
 
 pub use ai::{npc_behaviors, npcs_in_room, run_on_enter_behaviors, NpcAction, NpcBehavior};
+pub use behavior::{
+    add_behavior_template, add_script_behavior, behavior_templates_to_property,
+    build_creature_behavior_entries, creature_behaviors_to_property, format_creature_behavior_list,
+    read_creature_behaviors, resolve_behavior_templates, run_creature_behaviors,
+    run_on_enter_creature_behaviors, BehaviorOutcome, CreatureBehaviorEntry,
+};
 pub use effects::{
     active_effects, apply_effect, collect_active_effect_modifiers, effect_encumbrance_factor,
     effect_max_weight_bonus, refresh_effect_derived_properties, remove_effect, EffectModifiers,

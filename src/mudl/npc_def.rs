@@ -18,6 +18,8 @@ pub struct NpcDef {
     pub creature: String,
     pub location: String,
     pub behaviors: Vec<NpcBehaviorDef>,
+    /// `@use-behavior` template names applied at bootstrap.
+    pub use_behaviors: Vec<String>,
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -62,7 +64,17 @@ pub fn parse_npc_file(content: &str) -> Vec<NpcDef> {
                 creature: "human".to_string(),
                 location: String::new(),
                 behaviors: Vec::new(),
+                use_behaviors: Vec::new(),
             });
+            continue;
+        }
+        if let Some(name) = line.strip_prefix("@use-behavior ") {
+            if let Some(npc) = &mut current {
+                let template = name.trim().to_string();
+                if !template.is_empty() && !npc.use_behaviors.contains(&template) {
+                    npc.use_behaviors.push(template);
+                }
+            }
             continue;
         }
         if let Some(rest) = line.strip_prefix("@behavior ") {

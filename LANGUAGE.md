@@ -222,6 +222,39 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
 - `@effect` defines reusable conditions; creatures track `active_effects` at runtime.
 - `@slot` may set `effect=` for slot-tagged body-plan conditions (future wound hooks).
 
+**Behavior templates** (reusable, composable personalities):
+
+```mudl
+@behavior-template guard
+  react=warn
+  on_enter=say Halt! Who goes there?
+@end
+
+@behavior-template aggressive
+  react=attack
+  on_enter=say You should not have come here.
+  attack_damage=12
+@end
+
+@behavior-template skittish
+  react=flee
+  on_enter=emote scrambles away from you.
+@end
+
+@behavior-template wanderer
+  react=wander
+  wander_interval=3
+  on_enter=emote paces the area restlessly.
+@end
+```
+
+- `react` — how the creature responds when a player enters: `ignore`/`passive`, `warn`/`guard`, `attack`/`aggressive`, `flee`/`skittish`, `wander`/`roam`.
+- `on_enter` — optional scripted line (`say`, `emote`, `say_to`) fired alongside the react.
+- `attack_damage` — damage dealt on `attack` react (default 8).
+- `wander_interval` — emote every N player entries for `wander` react (default 3).
+
+Creatures support **multiple simultaneous behaviors** — combine `@use-behavior` templates with inline `@behavior` scripts for unique personalities.
+
 **NPCs and behaviors**:
 
 ```mudl
@@ -229,11 +262,14 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
   name=Path Watcher
   creature=human
   location=forest-path
+  @use-behavior guard
   @behavior on_enter say The trees seem to lean closer when you pass.
 @end
 ```
 
-Supported behavior actions: `say`, `say_to`, `emote`. `on_enter` runs when a player enters the NPC's room.
+Supported script actions: `say`, `say_to`, `emote`. `on_enter` runs when a player enters the NPC's room.
+
+Builders can attach templates at runtime: `@addbehavior <creature> <template>`, `@listbehaviors <creature>`.
 
 **Creature spawners** (locations only spawn randomly when a spawner is attached):
 
@@ -241,6 +277,7 @@ Supported behavior actions: `say`, `say_to`, `emote`. `on_enter` runs when a pla
 @spawn-template mist-wisp
   name=Mist Wisp
   creature=human
+  @use-behavior wanderer
   @behavior on_enter emote drifts through the air.
 @end
 

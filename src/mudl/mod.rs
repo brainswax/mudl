@@ -1,4 +1,5 @@
 pub mod anatomy;
+pub mod behavior_def;
 pub mod item_def;
 pub mod loader;
 pub mod npc_def;
@@ -10,6 +11,9 @@ pub mod world_def;
 pub use anatomy::{
     parse_anatomy_file, slot_display_name, AnatomyRegistry, BodyPlan, BodySlotDef, CreatureDef,
     EffectDef, PlayerTemplate, SlotType,
+};
+pub use behavior_def::{
+    parse_behavior_file, BehaviorTemplateDef, CreatureReact,
 };
 pub use npc_def::{behaviors_to_values, parse_npc_file, NpcBehaviorDef, NpcDef};
 pub use loot_spawner_def::{

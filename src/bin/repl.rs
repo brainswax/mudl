@@ -21,8 +21,8 @@ use mudl::display::{
     TargetResolution,
 };
 use mudl::creature::{
-    damage_creature, heal_creature, parse_vital_amount_args, DEFAULT_DAMAGE_AMOUNT,
-    DEFAULT_HEAL_AMOUNT,
+    add_behavior_template, damage_creature, format_creature_behavior_list, heal_creature,
+    parse_vital_amount_args, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
 };
 use mudl::inventory::{
     break_item, close_container, describe_inventory, drop_item, lock_container, open_container,
@@ -404,6 +404,12 @@ async fn main() -> Result<()> {
                             "  @heal <creature> [amount]   - wizard: heal a creature"
                         );
                         println!(
+                            "  @addbehavior <creature> <template> - wizard: attach behavior template"
+                        );
+                        println!(
+                            "  @listbehaviors <creature>   - wizard: list creature behaviors"
+                        );
+                        println!(
                             "  @undelete <id>              - wizard: restore soft-deleted object"
                         );
                         println!(
@@ -616,6 +622,81 @@ async fn main() -> Result<()> {
                                 }
                             }
                             Err(e) => println!("{e}"),
+                        }
+                    }
+                    "@addbehavior" => {
+                        if parts.len() < 3 {
+                            println!("Usage: @addbehavior <creature> <template>");
+                            continue;
+                        }
+                        let creature_name = parts[1];
+                        let template_name = parts[2];
+                        let world = match loaded_universe.active_world() {
+                            Ok(world) => world,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
+                            }
+                        };
+                        let template = world
+                            .behavior_template_defs
+                            .iter()
+                            .find(|t| t.base_name == template_name);
+                        let Some(template) = template else {
+                            println!("Unknown behavior template '{template_name}'.");
+                            continue;
+                        };
+                        match session.resolve_target(creature_name, ResolveScope::General) {
+                            TargetResolution::Found(id) => {
+                                let Some(creature) = session.object_mut(&id) else {
+                                    println!("{}", narrate_wizard_not_found());
+                                    continue;
+                                };
+                                if !creature.has_creature_role() {
+                                    println!("{} is not a creature.", creature.name);
+                                    continue;
+                                }
+                                if add_behavior_template(creature, template) {
+                                    println!(
+                                        "Attached behavior template '{template_name}' to {}.",
+                                        creature.name
+                                    );
+                                    if let Err(e) =
+                                        persist_session(&mut session, &persistence).await
+                                    {
+                                        error!(error = %e, "persist after addbehavior failed");
+                                    }
+                                } else {
+                                    println!(
+                                        "{} already has behavior template '{template_name}'.",
+                                        creature.name
+                                    );
+                                }
+                            }
+                            TargetResolution::NotFound => {
+                                println!("{}", narrate_wizard_not_found());
+                            }
+                            TargetResolution::Ambiguous(msg) => println!("{msg}"),
+                        }
+                    }
+                    "@listbehaviors" => {
+                        if parts.len() < 2 {
+                            println!("Usage: @listbehaviors <creature>");
+                            continue;
+                        }
+                        let creature_name = parts[1];
+                        match session.resolve_target(creature_name, ResolveScope::General) {
+                            TargetResolution::Found(id) => {
+                                if let Some(creature) = session.object(&id) {
+                                    println!("{}", format_creature_behavior_list(creature));
+                                } else {
+                                    println!("{}", narrate_wizard_not_found());
+                                }
+                            }
+                            TargetResolution::NotFound => {
+                                println!("{}", narrate_wizard_not_found());
+                            }
+                            TargetResolution::Ambiguous(msg) => println!("{msg}"),
                         }
                     }
                     "@delete" => {

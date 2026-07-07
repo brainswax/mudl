@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use super::anatomy::{parse_anatomy_file, AnatomyRegistry};
+use super::behavior_def::parse_behavior_file;
 use super::item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
 use super::npc_def::parse_npc_file;
 use super::loot_spawner_def::parse_loot_spawner_file;
@@ -43,6 +44,7 @@ pub struct LoadedWorld {
     pub spawner_defs: Vec<SpawnerDef>,
     pub loot_template_defs: Vec<LootTemplateDef>,
     pub loot_spawner_defs: Vec<LootSpawnerDef>,
+    pub behavior_template_defs: Vec<super::behavior_def::BehaviorTemplateDef>,
     pub starting_location: Option<String>,
 }
 
@@ -207,6 +209,7 @@ fn load_world(
     let mut spawner_defs = Vec::new();
     let mut loot_template_defs = Vec::new();
     let mut loot_spawner_defs = Vec::new();
+    let mut behavior_template_defs = Vec::new();
     let mut resolved_start = starting_location;
 
     for source in &sources {
@@ -224,6 +227,7 @@ fn load_world(
         let (loot_templates, loot_spawners) = parse_loot_spawner_file(&file_content);
         loot_template_defs.extend(loot_templates);
         loot_spawner_defs.extend(loot_spawners);
+        behavior_template_defs.extend(parse_behavior_file(&file_content));
         if start.is_some() {
             resolved_start = start;
         }
@@ -251,6 +255,7 @@ fn load_world(
         spawner_defs,
         loot_template_defs,
         loot_spawner_defs,
+        behavior_template_defs,
         starting_location: resolved_start,
     })
 }

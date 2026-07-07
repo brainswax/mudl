@@ -32,6 +32,7 @@ pub struct SpawnTemplateDef {
     pub name: Option<String>,
     pub creature: String,
     pub behaviors: Vec<NpcBehaviorDef>,
+    pub use_behaviors: Vec<String>,
 }
 
 /// Weighted reference to a spawn template inside a spawner.
@@ -112,7 +113,18 @@ pub fn parse_spawner_file(content: &str) -> (Vec<SpawnTemplateDef>, Vec<SpawnerD
                 name: None,
                 creature: "human".to_string(),
                 behaviors: Vec::new(),
+                use_behaviors: Vec::new(),
             });
+            continue;
+        }
+
+        if let Some(name) = line.strip_prefix("@use-behavior ") {
+            if let Some(template) = &mut current_template {
+                let behavior = name.trim().to_string();
+                if !behavior.is_empty() && !template.use_behaviors.contains(&behavior) {
+                    template.use_behaviors.push(behavior);
+                }
+            }
             continue;
         }
 

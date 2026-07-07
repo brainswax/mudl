@@ -4,6 +4,7 @@
 @end
 @include map.mudl
 @import expansions/haunted_forest.mudl
+@include behaviors.mudl
 @include creatures.mudl
 @include npcs.mudl
 @include players.mudl

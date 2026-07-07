@@ -369,9 +369,16 @@ impl Session {
                 .with_flags(DisplayFlags::BRIEF);
             lines.push(format_room_look_player(room, &ctx));
         }
-        for behavior_line in
-            crate::creature::run_on_enter_behaviors(&target_id, &self.player_id, &self.objects)
-        {
+        let behavior_outcome = crate::creature::run_creature_behaviors(
+            "on_enter",
+            &target_id,
+            &self.player_id,
+            &mut self.objects,
+        );
+        for id in behavior_outcome.dirty {
+            self.dirty.mark(&id);
+        }
+        for behavior_line in behavior_outcome.lines {
             lines.push(behavior_line);
         }
         Ok(lines.join("\n"))

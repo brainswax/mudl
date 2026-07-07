@@ -2,11 +2,14 @@
 
 use std::collections::HashMap;
 
-use crate::creature::init_creature_vitality;
+use crate::creature::{
+    build_creature_behavior_entries, creature_behaviors_to_property,
+    resolve_behavior_templates, init_creature_vitality,
+};
 use crate::creature::vitality::DEFAULT_MAX_HEALTH;
 use crate::mudl::{
-    behaviors_to_values, AnatomyRegistry, NpcBehaviorDef, SpawnTemplateDef, SpawnerDef,
-    SpawnerEntryDef, SpawnerTrigger,
+    AnatomyRegistry, NpcBehaviorDef, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef,
+    SpawnerTrigger,
 };
 use crate::mudl::{PlayerTemplate};
 use crate::object::{generate_object_id, Object, ObjectId, PermissionFlags, Property, Value};
@@ -321,6 +324,11 @@ pub fn spawn_templates_to_property(templates: &[SpawnTemplateDef]) -> Property {
                     ]))
                 })
                 .collect();
+            let use_behaviors: Vec<Value> = template
+                .use_behaviors
+                .iter()
+                .map(|name| Value::String(name.clone()))
+                .collect();
             Value::Map(HashMap::from([
                 (
                     "base_name".to_string(),
@@ -340,6 +348,7 @@ pub fn spawn_templates_to_property(templates: &[SpawnTemplateDef]) -> Property {
                     Value::String(template.creature.clone()),
                 ),
                 ("behaviors".to_string(), Value::List(behaviors)),
+                ("use_behaviors".to_string(), Value::List(use_behaviors)),
             ]))
         })
         .collect();
@@ -411,11 +420,32 @@ fn resolve_spawn_template<'a>(
                         }
                     })
                     .unwrap_or_default();
+                let use_behaviors: Vec<String> = map
+                    .get("use_behaviors")
+                    .and_then(|v| {
+                        if let Value::List(list) = v {
+                            Some(
+                                list.iter()
+                                    .filter_map(|item| {
+                                        if let Value::String(s) = item {
+                                            Some(s.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect(),
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
                 Some(SpawnTemplateDef {
                     base_name: base.to_string(),
                     name,
                     creature,
                     behaviors,
+                    use_behaviors,
                 })
             })
         } else {
@@ -499,13 +529,14 @@ pub fn spawn_creature(
     });
     npc.set_property_string("spawn_template", &template.base_name);
 
-    if !template.behaviors.is_empty() {
-        npc.add_property(Property {
-            name: "npc_behaviors".to_string(),
-            value: Value::List(behaviors_to_values(&template.behaviors)),
-            permissions: PermissionFlags::EVERYONE,
-            behavior: None,
-        });
+    let behavior_templates = resolve_behavior_templates(spawner);
+    let behavior_entries = build_creature_behavior_entries(
+        &template.behaviors,
+        &template.use_behaviors,
+        &behavior_templates,
+    );
+    if !behavior_entries.is_empty() {
+        npc.add_property(creature_behaviors_to_property(&behavior_entries));
     }
 
     npc
@@ -667,6 +698,7 @@ mod tests {
                     action: "emote".to_string(),
                     text: "drifts.".to_string(),
                 }],
+                use_behaviors: vec![],
             },
         )])
     }

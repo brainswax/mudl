@@ -101,23 +101,15 @@ pub fn npcs_in_room<'a>(
 }
 
 /// Run `on_enter` behaviors for NPCs in `room_id` and return player-facing lines.
+///
+/// Prefer [`crate::creature::run_on_enter_creature_behaviors`] when mutation (attack/flee) is needed.
 pub fn run_on_enter_behaviors(
     room_id: &ObjectId,
     player_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
 ) -> Vec<String> {
-    let mut lines = Vec::new();
-    for npc in npcs_in_room(room_id, player_id, objects) {
-        for behavior in npc_behaviors(npc) {
-            if behavior.event != "on_enter" {
-                continue;
-            }
-            if let Some(line) = format_behavior_line(npc, &behavior.action) {
-                lines.push(line);
-            }
-        }
-    }
-    lines
+    let mut objects = objects.clone();
+    crate::creature::run_on_enter_creature_behaviors(room_id, player_id, &mut objects).lines
 }
 
 fn format_behavior_line(npc: &Object, action: &NpcAction) -> Option<String> {
@@ -148,6 +140,11 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         };
+        npc.init_creature_role(&crate::mudl::PlayerTemplate {
+            name: "watcher".to_string(),
+            creature: "human".to_string(),
+            gender: "neutral".to_string(),
+        });
         npc.add_property(Property {
             name: "npc_behaviors".to_string(),
             value: Value::List(vec![Value::Map(HashMap::from([

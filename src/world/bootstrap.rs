@@ -225,7 +225,9 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
     world: &LoadedWorld,
     target_ids: &HashMap<String, ObjectId>,
 ) -> anyhow::Result<()> {
-    use crate::creature::{apply_spawner_def, spawn_templates_to_property};
+    use crate::creature::{
+        apply_spawner_def, behavior_templates_to_property, spawn_templates_to_property,
+    };
     use std::collections::HashMap as StdHashMap;
 
     let template_map: StdHashMap<_, _> = world
@@ -285,6 +287,7 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
             spawner.set_property_object_ref("spawner_target", target_id);
         }
         spawner.add_property(spawn_templates_to_property(&world.spawn_template_defs));
+        spawner.add_property(behavior_templates_to_property(&world.behavior_template_defs));
         factory.persistence().save_object(&spawner).await?;
     }
     Ok(())
@@ -356,8 +359,19 @@ pub async fn bootstrap_world_npcs<P: Persistence>(
             anyhow::bail!("NPC '{}' missing location", def.base_name);
         }
         let location = area_ids.get(&def.location).cloned();
+        let behavior_templates: std::collections::HashMap<_, _> = world
+            .behavior_template_defs
+            .iter()
+            .map(|t| (t.base_name.clone(), t.clone()))
+            .collect();
         factory
-            .create_npc(def, owner.clone(), &world.anatomy, location)
+            .create_npc(
+                def,
+                owner.clone(),
+                &world.anatomy,
+                location,
+                &behavior_templates,
+            )
             .await?;
     }
     Ok(())
@@ -1256,10 +1270,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bootstrap_attaches_behavior_templates_to_npcs() {
+        use crate::creature::read_creature_behaviors;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let owner = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        bootstrap_world(&factory, owner, &world).await.unwrap();
+
+        let npc = factory
+            .load_object(&ObjectId::new("npc:path-watcher-001"))
+            .await
+            .unwrap()
+            .expect("path watcher");
+        let entries = read_creature_behaviors(&npc);
+        assert!(
+            entries.iter().any(|e| e.template_name.as_deref() == Some("guard")),
+            "path watcher should have guard behavior template"
+        );
+        assert!(
+            entries.iter().any(|e| {
+                e.entry_type == "script"
+                    && e.text.as_deref()
+                        == Some("The trees seem to lean closer when you pass.")
+            }),
+            "path watcher should keep inline on_enter script"
+        );
+    }
+
+    #[tokio::test]
     async fn milestone3_creature_systems_initial() {
         use crate::creature::{
             apply_effect, creature_health, creature_is_defeated, creature_skill, creature_stat,
-            damage_creature, heal_creature, run_on_enter_behaviors,
+            damage_creature, run_creature_behaviors,
         };
         use crate::display::{
             creature::format_examine_creature_player, format_examine_self, Describable,
@@ -1304,9 +1349,19 @@ mod tests {
         assert!(npc_examine.contains("Strength 10"));
 
         let forest_path = ObjectId::new("area:forest-path-001");
-        let behavior_lines = run_on_enter_behaviors(&forest_path, &player_id, &objects);
-        assert_eq!(behavior_lines.len(), 1);
-        assert!(behavior_lines[0].contains("trees seem to lean closer"));
+        let mut behavior_objects = objects.clone();
+        let outcome = run_creature_behaviors(
+            "on_enter",
+            &forest_path,
+            &player_id,
+            &mut behavior_objects,
+        );
+        assert!(outcome.lines.len() >= 2, "guard + script should both fire");
+        assert!(outcome
+            .lines
+            .iter()
+            .any(|l| l.contains("trees seem to lean closer")));
+        assert!(outcome.lines.iter().any(|l| l.contains("Halt")));
 
         let mut session = Session::test_session(
             player_id.clone(),
@@ -1561,6 +1616,7 @@ mod tests {
         );
     }
 
+    #[tokio::test]
     async fn creature_spawner_attached_to_haunted_moon() {
         use crate::creature::spawners_in_room;
 

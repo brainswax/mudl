@@ -1,0 +1,28 @@
+# Reusable creature behavior templates — composable AI personalities.
+# Attach with @use-behavior <name> on @npc or @spawn-template blocks.
+
+@behavior-template passive
+  react=ignore
+@end
+
+@behavior-template guard
+  react=warn
+  on_enter=say Halt! Who goes there?
+@end
+
+@behavior-template aggressive
+  react=attack
+  on_enter=say You should not have come here.
+  attack_damage=12
+@end
+
+@behavior-template skittish
+  react=flee
+  on_enter=emote scrambles away from you.
+@end
+
+@behavior-template wanderer
+  react=wander
+  on_enter=emote paces the area restlessly.
+  wander_interval=3
+@end

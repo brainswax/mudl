@@ -12,7 +12,11 @@
 use std::collections::HashMap;
 
 use crate::creature::init_creature_vitality;
-use crate::mudl::{behaviors_to_values, AnatomyRegistry, MudlRoleProps, NpcDef, PlayerTemplate};
+use crate::creature::build_creature_behavior_entries;
+use crate::creature::creature_behaviors_to_property;
+use crate::mudl::{
+    AnatomyRegistry, BehaviorTemplateDef, MudlRoleProps, NpcDef, PlayerTemplate,
+};
 use crate::object::{
     constrain_id_base, generate_object_id, id_base_from_display_name,
     roles::{ContainerSpec, KeySpec, StackableSpec, WearableSpec},
@@ -66,6 +70,7 @@ impl<P: Persistence> ObjectFactory<P> {
         owner: ObjectId,
         anatomy: &AnatomyRegistry,
         location: Option<ObjectId>,
+        behavior_templates: &HashMap<String, BehaviorTemplateDef>,
     ) -> anyhow::Result<Object> {
         let npc_id = ObjectId::new(format!("npc:{}-001", def.base_name));
         if let Some(existing) = self.persistence.load_object(&npc_id).await? {
@@ -99,13 +104,13 @@ impl<P: Persistence> ObjectFactory<P> {
         if let Some(loc) = location {
             npc.location = Some(loc);
         }
-        if !def.behaviors.is_empty() {
-            npc.add_property(Property {
-                name: "npc_behaviors".to_string(),
-                value: Value::List(behaviors_to_values(&def.behaviors)),
-                permissions: PermissionFlags::EVERYONE,
-                behavior: None,
-            });
+        let behavior_entries = build_creature_behavior_entries(
+            &def.behaviors,
+            &def.use_behaviors,
+            behavior_templates,
+        );
+        if !behavior_entries.is_empty() {
+            npc.add_property(creature_behaviors_to_property(&behavior_entries));
         }
         self.commit(&npc).await?;
         Ok(npc)
