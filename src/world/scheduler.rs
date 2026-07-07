@@ -278,6 +278,41 @@ mod tests {
     }
 
     #[test]
+    fn due_schedule_jobs_skips_inactive_host() {
+        let room_id = ObjectId::new("area:mist-001");
+        let mut room = sample_scope("area:mist-001");
+        register_schedule_job(
+            &mut room,
+            &ScheduleDef {
+                base_name: "mist-weather".to_string(),
+                target: "haunted-mist".to_string(),
+                interval: 1,
+                event: "on_weather".to_string(),
+            },
+            &ObjectId::new("area:gone-001"),
+        );
+        let objects = HashMap::from([(room_id.clone(), room)]);
+
+        assert!(due_schedule_jobs(&room_id, 1, &objects).is_empty());
+    }
+
+    #[test]
+    fn register_schedule_job_is_idempotent() {
+        let room_id = ObjectId::new("area:test-001");
+        let mut room = sample_scope("area:test-001");
+        let def = ScheduleDef {
+            base_name: "mist-weather".to_string(),
+            target: "haunted-mist".to_string(),
+            interval: 2,
+            event: "on_weather".to_string(),
+        };
+        register_schedule_job(&mut room, &def, &room_id);
+        register_schedule_job(&mut room, &def, &room_id);
+        let jobs = parse_jobs(&room);
+        assert_eq!(jobs.len(), 1);
+    }
+
+    #[test]
     fn due_schedule_jobs_respects_interval() {
         let room_id = ObjectId::new("area:mist-001");
         let mut room = sample_scope("area:mist-001");

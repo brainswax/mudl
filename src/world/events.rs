@@ -1,6 +1,7 @@
 //! Core event bus — `@trigger` scripts on places and objects fire through here.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use crate::mudl::{AnatomyRegistry, TriggerDef};
 use crate::object::{Behavior, LocationRef, Object, ObjectId, PermissionFlags};
@@ -28,7 +29,7 @@ pub struct EventContext {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventOutcome {
     pub lines: Vec<String>,
-    pub dirty: Vec<ObjectId>,
+    pub dirty: HashSet<ObjectId>,
     /// When true, remaining handlers and phases for this dispatch are skipped.
     pub cancelled: bool,
     /// Non-fatal script/subscriber failures collected for logging and builder diagnostics.
@@ -41,9 +42,7 @@ impl EventOutcome {
     }
 
     pub fn mark_dirty(&mut self, id: &ObjectId) {
-        if !self.dirty.iter().any(|d| d == id) {
-            self.dirty.push(id.clone());
-        }
+        self.dirty.insert(id.clone());
     }
 
     pub fn record_error(&mut self, message: impl Into<String>) {
@@ -59,18 +58,63 @@ impl EventOutcome {
     }
 
     pub fn append(&mut self, other: EventOutcome) {
-        for line in other.lines {
-            self.push_line(line);
-        }
-        for id in other.dirty {
-            self.mark_dirty(&id);
-        }
-        for error in other.errors {
-            self.record_error(error);
-        }
+        self.lines.extend(other.lines);
+        self.dirty.extend(other.dirty);
+        self.errors.extend(other.errors);
         if other.cancelled {
             self.cancelled = true;
         }
+    }
+}
+
+/// Maximum nested `execute_event` depth (discovery → on_discovered → …).
+const MAX_DISPATCH_DEPTH: usize = 32;
+
+struct DispatchFrame {
+    host_id: ObjectId,
+    event_name: String,
+}
+
+thread_local! {
+    static DISPATCH_STACK: RefCell<Vec<DispatchFrame>> = RefCell::new(Vec::new());
+}
+
+struct DispatchGuard;
+
+impl DispatchGuard {
+    fn enter(host_id: &ObjectId, event_name: &str) -> Result<Self, EventOutcome> {
+        DISPATCH_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            if stack.len() >= MAX_DISPATCH_DEPTH {
+                let mut outcome = EventOutcome::default();
+                outcome.record_error(format!(
+                    "event '{event_name}' on {host_id}: dispatch depth exceeded ({MAX_DISPATCH_DEPTH})"
+                ));
+                return Err(outcome);
+            }
+            if stack.iter().any(|frame| {
+                frame.host_id == *host_id && frame.event_name == event_name
+            }) {
+                let mut outcome = EventOutcome::default();
+                outcome.record_error(format!(
+                    "event '{event_name}' on {host_id}: cycle detected (already in flight)"
+                ));
+                return Err(outcome);
+            }
+            stack.push(DispatchFrame {
+                host_id: host_id.clone(),
+                event_name: event_name.to_string(),
+            });
+            Ok(Self)
+        })
+    }
+}
+
+impl Drop for DispatchGuard {
+    fn drop(&mut self) {
+        DISPATCH_STACK.with(|stack| {
+            stack.borrow_mut().pop();
+        });
     }
 }
 
@@ -118,6 +162,11 @@ pub fn execute_event(
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: Option<&AnatomyRegistry>,
 ) -> EventOutcome {
+    let _guard = match DispatchGuard::enter(&ctx.host_id, event_name) {
+        Ok(guard) => guard,
+        Err(outcome) => return outcome,
+    };
+
     if !objects
         .get(&ctx.host_id)
         .is_some_and(|host| host.is_active())
@@ -545,6 +594,130 @@ mod tests {
         );
         assert_eq!(outcome.errors.len(), 1);
         assert!(outcome.errors[0].contains("inactive"));
+    }
+
+    #[test]
+    fn dispatch_guard_rejects_reentrant_cycle() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:test-001");
+        let room = Object {
+            id: room_id.clone(),
+            name: "Test Room".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let mut objects = HashMap::from([(room_id.clone(), room)]);
+
+        DISPATCH_STACK.with(|stack| {
+            stack.borrow_mut().push(DispatchFrame {
+                host_id: room_id.clone(),
+                event_name: "on_enter".to_string(),
+            });
+        });
+
+        let outcome = execute_event(
+            "on_enter",
+            &EventContext {
+                actor_id: player_id,
+                host_id: room_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        DISPATCH_STACK.with(|stack| stack.borrow_mut().clear());
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("cycle"));
+    }
+
+    #[test]
+    fn dispatch_guard_rejects_excessive_depth() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:test-001");
+        let room = Object {
+            id: room_id.clone(),
+            name: "Test Room".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let mut objects = HashMap::from([(room_id.clone(), room)]);
+
+        DISPATCH_STACK.with(|stack| {
+            let mut stack = stack.borrow_mut();
+            for i in 0..MAX_DISPATCH_DEPTH {
+                stack.push(DispatchFrame {
+                    host_id: ObjectId::new(format!("area:depth-{i:03}")),
+                    event_name: "on_enter".to_string(),
+                });
+            }
+        });
+
+        let outcome = execute_event(
+            "on_enter",
+            &EventContext {
+                actor_id: player_id,
+                host_id: room_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        DISPATCH_STACK.with(|stack| stack.borrow_mut().clear());
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("depth exceeded"));
+    }
+
+    #[test]
+    fn missing_event_handlers_is_silent_success() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:quiet-001");
+        let room = Object {
+            id: room_id.clone(),
+            name: "Quiet Room".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let mut objects = HashMap::from([(room_id.clone(), room)]);
+        let outcome = execute_event(
+            "on_open",
+            &EventContext {
+                actor_id: player_id,
+                host_id: room_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert!(outcome.lines.is_empty());
+        assert!(outcome.errors.is_empty());
+        assert!(!outcome.cancelled);
     }
 
     #[test]

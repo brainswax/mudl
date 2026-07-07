@@ -918,7 +918,7 @@ pub fn execute_script(
             outcome.cancel();
         }
         ScriptAction::Raw(text) if !text.is_empty() => {
-            outcome.push_line(text.clone());
+            outcome.record_error(format!("unrecognized script: {text}"));
         }
         ScriptAction::Raw(_) => {}
     }
@@ -1062,6 +1062,28 @@ mod tests {
             gender: "neutral".to_string(),
         });
         player
+    }
+
+    #[test]
+    fn unrecognized_script_records_error() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:test-001");
+        let host = player("player:hero-001", &room_id);
+        let mut objects = HashMap::from([(player_id.clone(), host.clone())]);
+        let outcome = execute_script(
+            &host,
+            &ScriptAction::Raw("frobnicate the moon".to_string()),
+            &EventContext {
+                actor_id: player_id,
+                host_id: ObjectId::new("player:hero-001"),
+                room_id: Some(room_id),
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("unrecognized script"));
     }
 
     #[test]

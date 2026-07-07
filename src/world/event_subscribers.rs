@@ -94,18 +94,19 @@ pub fn dispatch_event_subscribers(
     };
 
     if event_name == events::ON_ENTER {
-        let anatomy = anatomy.cloned().unwrap_or_default();
-        append_subscriber("creature_spawner", &mut outcome, || {
-            dispatch_creature_spawners_for_event(
-                event_name,
-                &ctx.host_id,
-                &ctx.actor_id,
-                &owner,
-                &anatomy,
-                objects,
-                scheduler_tick,
-            )
-        });
+        if let Some(anatomy) = anatomy {
+            append_subscriber("creature_spawner", &mut outcome, || {
+                dispatch_creature_spawners_for_event(
+                    event_name,
+                    &ctx.host_id,
+                    &ctx.actor_id,
+                    &owner,
+                    anatomy,
+                    objects,
+                    scheduler_tick,
+                )
+            });
+        }
         if !outcome.is_cancelled() {
             for spawner in spawners_in_room(&ctx.host_id, objects) {
                 outcome.mark_dirty(&spawner.id);

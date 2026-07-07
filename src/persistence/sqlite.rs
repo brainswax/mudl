@@ -575,4 +575,66 @@ mod tests {
             .values()
             .any(|id| !after.contains_key(id)));
     }
+
+    #[tokio::test]
+    async fn condition_and_scheduler_state_roundtrips() {
+        use std::collections::HashMap;
+
+        use crate::mudl::ScheduleDef;
+        use crate::world::scheduler::{advance_tick, register_schedule_job};
+        use crate::world::session::{hydrate_world, persist_all};
+
+        let persistence = memory_persistence().await;
+        let room_id = ObjectId::new("area:beach-001");
+        let player_id = ObjectId::new("player:hero-001");
+
+        let mut room = sample_object("area:beach-001", "Beach");
+        register_schedule_job(
+            &mut room,
+            &ScheduleDef {
+                base_name: "tide-weather".to_string(),
+                target: "beach-001".to_string(),
+                interval: 3,
+                event: "on_weather".to_string(),
+            },
+            &room_id,
+        );
+
+        let mut player = sample_object("player:hero-001", "Hero");
+        player.location = Some(room_id.clone());
+        player.set_string_list("active_effects", vec!["tipsy".to_string()]);
+        player.set_int_map(
+            "condition_ticks",
+            HashMap::from([("tipsy".to_string(), 6)]),
+        );
+
+        let mut objects = HashMap::from([
+            (room_id.clone(), room),
+            (player_id.clone(), player),
+        ]);
+        advance_tick(&room_id, "on_enter", &mut objects);
+
+        persist_all(&persistence, &objects).await.unwrap();
+        let after = hydrate_world(&persistence).await.unwrap();
+
+        let reloaded_player = after.get(&player_id).unwrap();
+        assert_eq!(
+            reloaded_player.get_string_list("active_effects"),
+            vec!["tipsy"]
+        );
+        assert_eq!(
+            reloaded_player
+                .get_int_map("condition_ticks")
+                .get("tipsy")
+                .copied(),
+            Some(6)
+        );
+
+        let reloaded_room = after.get(&room_id).unwrap();
+        assert_eq!(
+            reloaded_room.get_int_property("scheduler_tick_on_enter"),
+            Some(1)
+        );
+        assert!(reloaded_room.get_property("scheduler_jobs").is_some());
+    }
 }

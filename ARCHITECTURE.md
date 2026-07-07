@@ -119,7 +119,7 @@ M3 adds living creatures with MUDL-defined personalities, weighted spawns, and t
 
 **Hybrid (MUDL inputs, Rust formulas):** damage mitigation, surprise/crit thresholds, initiative contests, XP curves. Documented in `LANGUAGE.md`; candidates for `@formula` or data tables later.
 
-## Milestone 4 — In Progress (events & triggers)
+## Milestone 4 — Events & triggers (production-ready)
 
 M4 introduces a builder-facing **`@trigger`** system on places, objects, NPCs, and spawn-templates.
 
@@ -134,9 +134,20 @@ M4 introduces a builder-facing **`@trigger`** system on places, objects, NPCs, a
 
 ```
 portal prep → on_leave (place) → move player → execute_event(on_enter)
-  → subscribers: scheduler tick, creature/loot/resource spawners, place @trigger
-  → creature behaviors (on_enter) → room look → equipment regen
+  → subscribers: scheduler tick, due @schedule jobs, creature/loot/resource spawners
+  → host @trigger scripts (registration order; `stop` halts remainder)
+  → creature behaviors (on_enter) → room look → equipment regen → condition ticks
 ```
+
+**Dispatch robustness** (`world/events.rs`):
+
+- Re-entrant depth cap (32 frames) and cycle detection (same host + event in flight).
+- Inactive/missing hosts record an error and skip dispatch; missing handlers are a silent no-op.
+- `EventOutcome::errors` collects subscriber/script failures; player lines stay separate.
+- `EventOutcome::dirty` is a `HashSet` — O(1) dedupe for persistence marking.
+- Scheduled jobs call `execute_host_event` only (no subscriber re-entry).
+- Session model is single-threaded per REPL; dispatch guard uses thread-local stack (not `Send` across tasks).
+- Conditions (`active_effects`, `condition_ticks`) and scheduler state persist as normal object properties.
 
 ## Hard-coded vs MUDL-driven
 
@@ -271,7 +282,7 @@ Creatures now use a **single script surface** with split storage:
 
 ### 4. Event & Timer System (M4)
 - **`@trigger`** scripts stored in `Object.event_handlers`; executed by `world/event_script.rs`.
-- **`execute_event`** dispatch order: subscribers (scheduler → spawners) then host handlers; `stop`/`cancel` halts remaining handlers; errors collected in `EventOutcome::errors`.
+- **`execute_event`** dispatch order: subscribers (scheduler → spawners) then host handlers; `stop`/`cancel` halts remaining handlers; errors collected in `EventOutcome::errors`; depth/cycle guard on re-entrant dispatch.
 - **`EventScheduler`** (`world/scheduler.rs`) — room-scoped ticks, named property counters, and `@schedule` jobs that fire host triggers on interval.
 - **`@resource-spawner`** — renewable harvest nodes on `on_harvest` / `on_enter` / `timer`; player command `harvest <object>`.
 

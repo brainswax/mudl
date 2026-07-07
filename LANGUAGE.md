@@ -107,6 +107,8 @@ Named triggers that run scripted lines when something happens in the world. Buil
 
 Optional subject prefix on conditions and targeted actions: `actor`, `host`, `target`.
 
+**Validation & errors:** `@trigger add` validates event names (`on_*`) and script verbs via `validate_event_name` / `validate_script_code`. At runtime, unrecognized script text is recorded in `EventOutcome::errors` (not shown to players). Inactive hosts skip dispatch with an error entry. Re-entrant event cycles and excessive nesting are rejected. Use `@trigger test` for a narrative dry-run without side effects.
+
 `on_kill` fires on the **victim** (killer as actor) and on the **killer** when the killer has handlers (victim as actor). `on_discovered` runs after perception reveals a hidden creature or object — via `@trigger` on the host (template `on_discovered=` lines are converted automatically at bootstrap). `on_harvest` fires when a player harvests a `harvestable=true` object; attached `@resource-spawner` blocks may drop renewable materials into the room.
 
 ```mudl
