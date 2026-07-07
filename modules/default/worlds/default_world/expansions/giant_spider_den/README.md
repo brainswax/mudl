@@ -16,7 +16,7 @@ Then `go in`.
 
 ## Detailed description
 
-**Module:** `@expansion giant_spider_den` · entry `spider-entry` · portal `in` / return `out`
+**Module:** `@expansion giant_spider_den` (Giant Spider Den) · entry `spider-entry` · portal `in` / return `out` · auto-hooks `swamp-dry`, `forest-path`, `the-void`
 
 **Areas**
 
@@ -35,7 +35,7 @@ Then `go in`.
 
 **Hidden:** Silk cache at `spider-silk` (`hidden_until_discovered`).
 
-**Puzzles:** Warning plaque and bone peg markers teach a thread vocabulary (SILK, EGG, FANG, CROWN). Gate and thread order are for in-game signage — not listed here.
+**Puzzles:** Warning plaque and bone peg markers use a thread vocabulary (SILK, EGG, FANG, CROWN). Sequence is learned in play.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `attack`, `open`, `unlock`, `wield`.
 

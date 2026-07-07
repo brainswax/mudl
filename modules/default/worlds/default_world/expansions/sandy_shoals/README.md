@@ -16,13 +16,13 @@ Then `go south`.
 
 ## Detailed description
 
-**Module:** `@expansion beach_resort` · entry `beach-trail` · portal `south` / return `north`
+**Module:** `@expansion beach_resort` (Sandy Shoals Resort) · entry `beach-trail` · portal `south` / return `north` · auto-hooks `the-void`, `forest-path`
 
 **Areas**
 
 | base_name | Role |
 |-----------|------|
-| `beach-trail` | Entry path; south → `beach-gate`; `north` → host when integrated |
+| `beach-trail` | Entry path; south → `beach-gate`; `north` (`exit_returns`: `south`) |
 | `beach-gate` | Resort hub; east/south/west/northeast to shore, cabanas, pier, dunes |
 | `beach-shore` | Open shore; east → `beach-sunbeds` |
 | `beach-sunbeds` | Sunbed veranda; south → `beach-bar` |
@@ -35,9 +35,9 @@ Then `go south`.
 
 **Features:** `@effect` tipsy, beach_buzz, three_sheets, sun_kissed, resort_serenity, tidepool_clarity. Stackable cocktails (`on_take` drunk stacks). NPCs: tiki bartender, hammock attendant, pier hermit — greet only. Harvestable shell clusters and tidepool ledges; pearl coffer with resort gear. Message in a bottle at shell shrine. Weather schedules on shore and tidepool; bar respawn garnish narrative.
 
-**Hidden:** Buried bottle at `beach-shore`; tidepool cache at `beach-tidepool` (`hidden_until_discovered`). NPC lines shift when the player is unsteady.
+**Hidden:** Buried bottle at `beach-shore`; tidepool cache at `beach-tidepool` (`hidden_until_discovered`).
 
-**Puzzles:** Resort trail sign and driftwood markers teach a taste vocabulary (SALT, SUN, SIP, SAND). Route order is discoverable in play — not charted here.
+**Puzzles:** Resort trail sign and driftwood markers use a taste vocabulary (SALT, SUN, SIP, SAND). Sequence is learned in play.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `open`, `inventory`.
 

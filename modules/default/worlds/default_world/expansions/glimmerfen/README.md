@@ -16,13 +16,13 @@ Then `go through`.
 
 ## Detailed description
 
-**Module:** `@expansion fey_glade` · entry `fey-threshold` · portal `through` / return `through`
+**Module:** `@expansion fey_glade` (Glimmerfen) · entry `fey-threshold` · portal `through` / return `through` · auto-hooks `forest-path`, `beach-shore`, `the-void`, `beach-trail`
 
 **Areas**
 
 | base_name | Role |
 |-----------|------|
-| `fey-threshold` | Entry; north/east/south/west to main route and wrong turns; `through` / `mist` host exits when integrated |
+| `fey-threshold` | Entry; north/east/south/west to route and wrong turns |
 | `fey-dewglade` | Main route — dew theme; east → `fey-songbower` |
 | `fey-songbower` | Main route — song theme; south → `fey-glowfen` |
 | `fey-glowfen` | Main route — glow theme; west → `fey-rootbridge` |
@@ -32,11 +32,11 @@ Then `go through`.
 
 **Tone:** Restorative. No attack behaviors; ambient fey spawns emote and wander.
 
-**Features:** `@effect` dewdrop_vigor, songpeace, glowcap_luminance, rootwise, fey_grace, wonderstruck, pixie_dust. Harvest moonpetals, singing reeds, glowcaps, starroots. Luminous willow heals on approach; grace coffer with weighted elven gear. NPCs: fairy guide (`fey-threshold`), gnome gardener (`fey-dewglade`), elder elf sage (`fey-grace`). Weather/respawn schedules on mist and songbower.
+**Features:** `@effect` dewdrop_vigor, songpeace, glowcap_luminance, rootwise, fey_grace, wonderstruck, pixie_dust. Harvest moonpetals, singing reeds, glowcaps, starroots. Luminous willow heals on approach; grace coffer with weighted elven gear. NPCs: fairy guide (`fey-threshold`), gnome gardener (`fey-dewglade`), elder elf sage (`fey-grace`). Weather and respawn schedules on mist and songbower.
 
 **Hidden:** Gnome cache at `fey-rootbridge`; fairy nest at `fey-dewglade` (`hidden_until_discovered`).
 
-**Puzzles:** Crossing plaque and way markers teach a hush vocabulary (DEW, SONG, GLOW, ROOT, GRACE). Marker sequence and grace path are in the stones — not documented here.
+**Puzzles:** Crossing plaque and way markers use a hush vocabulary (DEW, SONG, GLOW, ROOT, GRACE). Sequence is learned in play.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `inventory`, `wear`.
 

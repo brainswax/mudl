@@ -16,16 +16,16 @@ Then `go down`.
 
 ## Detailed description
 
-**Module:** `@expansion poisonous_swamp` · entry `swamp-entry` · portal `down` / return `up`
+**Module:** `@expansion poisonous_swamp` (Poisonous Swamp) · entry `swamp-entry` · portal `down` / return `up` · auto-hooks `forest-path`, `the-void`
 
 **Areas**
 
 | base_name | Role |
 |-----------|------|
-| `swamp-entry` | Entry; north/east/south/west to route and wrong turns; `up` returns to host when integrated |
+| `swamp-entry` | Entry; north/east/south/west to route and wrong turns; `up` (`exit_returns`: `down`) |
 | `swamp-bitter` | Main route — bitter fen; east → `swamp-sweet` |
 | `swamp-sweet` | Main route — sweet reeds; south → `swamp-dry` |
-| `swamp-dry` | Dry rise; west → `swamp-heart`; `in` exit (`exit_returns`: `out`) |
+| `swamp-dry` | Dry rise; west → `swamp-heart`; `in` (`exit_returns`: `out`) |
 | `swamp-heart` | Finale; `up` scatters (`scatter_to`: `forest-path`, `the-void`) |
 | `swamp-gas`, `swamp-quicksand`, `swamp-wisps`, `swamp-snare`, `swamp-drown`, `swamp-shrine` | Wrong turns → `loop_to: swamp-entry` |
 
@@ -35,7 +35,7 @@ Then `go down`.
 
 **Hidden:** Antidote cache at `swamp-sweet` (`hidden_until_discovered`).
 
-**Puzzles:** Warning post and bog markers teach a taste vocabulary (BITTER, SWEET, DRY, DEEP). Safe routes and stake logic are in-game only.
+**Puzzles:** Warning post and bog markers use a taste vocabulary (BITTER, SWEET, DRY, DEEP). Sequence is learned in play.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `attack`, `wear`.
 

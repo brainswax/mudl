@@ -16,7 +16,7 @@ Then `go in`.
 
 ## Detailed description
 
-**Module:** `@expansion haunted_forest` · entry `haunted-entry` · portal `in` / return `out`
+**Module:** `@expansion haunted_forest` (Haunted Forest) · entry `haunted-entry` · portal `in` / return `out` · auto-hooks `forest-path`, `the-void`, `scene-chest`
 
 **Areas**
 
@@ -36,7 +36,7 @@ Then `go in`.
 
 **Hidden:** Supply cache at `haunted-moss` (`hidden_until_discovered`).
 
-**Puzzles:** Mossy boulder, mailbox gear, and way markers reward careful reading; symbol order matters in play. No route charted here.
+**Puzzles:** Mossy boulder, mailbox gear, and way markers use a woodland vocabulary; symbol order matters. Sequence is learned in play.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `attack`, `open`, `unlock`.
 
