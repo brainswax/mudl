@@ -100,7 +100,15 @@ async fn run_look_command(
             } else {
                 DisplayMode::Player
             };
-            let mut ctx = session.display_context(mode);
+            let is_room_look =
+                !builder && session.objects().get(&id).is_some_and(|obj| obj.is_location());
+            if is_room_look {
+                let discovery = session.perceive_hidden_creatures_on_look();
+                for line in discovery.lines {
+                    println!("{line}");
+                }
+            }
+            let mut ctx = session.display_context(mode.clone());
             if !builder {
                 ctx = ctx.with_flags(DisplayFlags::BRIEF);
             }

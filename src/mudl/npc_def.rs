@@ -2,12 +2,16 @@
 
 use std::collections::HashMap;
 
+use super::CreatureReact;
+
 /// A single scripted behavior on an NPC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NpcBehaviorDef {
     pub event: String,
     pub action: String,
     pub text: String,
+    /// When set, this entry is a react directive (`@behavior on_discovered react flee`).
+    pub react: Option<CreatureReact>,
 }
 
 /// An NPC instance defined in MUDL and spawned at bootstrap.
@@ -31,6 +35,26 @@ fn parse_behavior_line(rest: &str) -> Option<NpcBehaviorDef> {
     let event = parts.next()?.to_string();
     let action = parts.next()?.to_string();
     let text = parts.collect::<Vec<_>>().join(" ").trim().to_string();
+    if action == "react" && !text.is_empty() {
+        return Some(NpcBehaviorDef {
+            event,
+            action: String::new(),
+            text: String::new(),
+            react: Some(CreatureReact::parse(&text)),
+        });
+    }
+    if text.is_empty() && matches!(event.as_str(), "on_discovered" | "on_enter") {
+        let react = CreatureReact::parse(&action);
+        if react != CreatureReact::Ignore || action.eq_ignore_ascii_case("ignore") {
+            return Some(NpcBehaviorDef {
+                event,
+                action: String::new(),
+                text: String::new(),
+                react: Some(react),
+            });
+        }
+        return None;
+    }
     if text.is_empty() {
         return None;
     }
@@ -38,6 +62,7 @@ fn parse_behavior_line(rest: &str) -> Option<NpcBehaviorDef> {
         event,
         action,
         text,
+        react: None,
     })
 }
 
@@ -105,7 +130,7 @@ pub fn behaviors_to_values(behaviors: &[NpcBehaviorDef]) -> Vec<crate::object::V
     behaviors
         .iter()
         .map(|behavior| {
-            crate::object::Value::Map(HashMap::from([
+            let mut map = HashMap::from([
                 (
                     "event".to_string(),
                     crate::object::Value::String(behavior.event.clone()),
@@ -118,7 +143,14 @@ pub fn behaviors_to_values(behaviors: &[NpcBehaviorDef]) -> Vec<crate::object::V
                     "text".to_string(),
                     crate::object::Value::String(behavior.text.clone()),
                 ),
-            ]))
+            ]);
+            if let Some(react) = behavior.react {
+                map.insert(
+                    "react".to_string(),
+                    crate::object::Value::String(react.as_str().to_string()),
+                );
+            }
+            crate::object::Value::Map(map)
         })
         .collect()
 }

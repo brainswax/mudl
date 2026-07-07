@@ -16,7 +16,8 @@ pub use behavior::{
     add_behavior_template, add_script_behavior, behavior_templates_to_property,
     build_creature_behavior_entries, creature_behaviors_to_property, format_creature_behavior_list,
     read_creature_behaviors, resolve_behavior_templates, run_creature_behaviors,
-    run_on_enter_creature_behaviors, BehaviorOutcome, CreatureBehaviorEntry,
+    run_on_enter_creature_behaviors, run_perception_discovery_on_look, BehaviorOutcome,
+    CreatureBehaviorEntry,
 };
 pub use combat::{
     attack_creature, compute_combat_damage, damage_creature, heal_creature,
@@ -33,10 +34,12 @@ pub use equipment::{
     item_has_equipment_modifiers, EquipmentModifiers,
 };
 pub use tactics::{
-    apply_tactics_from_behaviors, initiative_score, is_creature_aware, is_player_aware,
+    apply_tactics_from_behaviors, creature_visible_to_player, initiative_score,
+    is_creature_aware, is_creature_discovered, is_creature_hidden_from_player, is_player_aware,
     player_perception_score, player_stealth_score, reset_player_awareness_on_enter,
     resolve_encounter_awareness_on_enter, resolve_strike_order, roll_awareness_on_enter,
-    set_creature_aware, set_player_aware, EncounterAwareness, StrikeOrder, SURPRISE_DAMAGE_BONUS,
+    set_creature_aware, set_creature_discovered, set_player_aware, EncounterAwareness, StrikeOrder,
+    SURPRISE_DAMAGE_BONUS,
 };
 pub use spawner::{
     apply_spawner_def, count_active_spawns, despawn_creatures_from_spawner,

@@ -23,6 +23,7 @@
   awareness_check=true
   perception=12
   attack_damage=10
+  on_discovered=emote tenses, caught in your gaze.
 @end
 
 @behavior-template skittish

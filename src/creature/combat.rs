@@ -9,8 +9,9 @@ use crate::creature::equipment::{
 };
 use crate::creature::progression::award_skill_xp;
 use crate::creature::tactics::{
-    is_creature_aware, is_player_aware, resolve_strike_order, set_creature_aware,
-    set_player_aware, StrikeOrder, SURPRISE_DAMAGE_BONUS,
+    is_creature_aware, is_creature_hidden_from_player, is_player_aware, resolve_strike_order,
+    set_creature_aware, set_creature_discovered, set_player_aware, StrikeOrder,
+    SURPRISE_DAMAGE_BONUS,
 };
 use crate::creature::vitality::{
     apply_damage, creature_health, creature_is_defeated, creature_max_health, heal,
@@ -487,6 +488,9 @@ pub fn attack_creature(
     if target.location.as_ref() != Some(room_id) {
         return Err(CreatureCombatError::NotFound(target_name.to_string()));
     }
+    if is_creature_hidden_from_player(&target) {
+        return Err(CreatureCombatError::NotFound(target_display));
+    }
 
     let mut outcome = AttackOutcome::default();
     let owner = actor.owner.clone();
@@ -562,6 +566,7 @@ pub fn attack_creature(
         let target_mut = objects.get_mut(&target_id).unwrap();
         let after = apply_damage(target_mut, player_damage);
         set_creature_aware(target_mut, true);
+        set_creature_discovered(target_mut, true);
         outcome.mark_dirty(&target_id);
         mark_dirty(&mut dirty, &target_id);
         outcome.push_line(format_attack_line(
@@ -1108,6 +1113,34 @@ mod tests {
             objects.get(&vest_id).unwrap().location.as_ref(),
             Some(&corpse.id)
         );
+    }
+
+    #[test]
+    fn attack_hidden_creature_fails_until_discovered() {
+        let actor = ObjectId::new("player:admin-001");
+        let room = ObjectId::new("area:room-001");
+        let mut player = creature("player:admin-001", "Admin");
+        player.location = Some(room.clone());
+        let mut lurker = creature("npc:lurker-001", "Pale Lurker");
+        lurker.location = Some(room.clone());
+        lurker.set_property_bool("uses_awareness_check", true);
+        lurker.set_property_bool("player_discovered", false);
+        let mut objects = HashMap::from([
+            (player.id.clone(), player),
+            (lurker.id.clone(), lurker),
+        ]);
+        let anatomy = AnatomyRegistry::default();
+
+        let err = attack_creature(
+            &actor,
+            Some(&room),
+            &mut objects,
+            &anatomy,
+            None,
+            "pale lurker",
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("don't see"));
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub enum CreatureReact {
     Attack,
     Flee,
     Wander,
+    Greet,
 }
 
 impl CreatureReact {
@@ -18,6 +19,7 @@ impl CreatureReact {
             "attack" | "aggressive" => Self::Attack,
             "flee" | "coward" | "passive_flee" => Self::Flee,
             "wander" | "roam" => Self::Wander,
+            "greet" | "hello" | "welcome" => Self::Greet,
             "passive" | "ignore" | "calm" => Self::Ignore,
             _ => Self::Ignore,
         }
@@ -30,6 +32,7 @@ impl CreatureReact {
             Self::Attack => "attack",
             Self::Flee => "flee",
             Self::Wander => "wander",
+            Self::Greet => "greet",
         }
     }
 }
@@ -50,6 +53,11 @@ pub struct BehaviorTemplateDef {
     pub awareness_check: Option<bool>,
     /// Bonus perception for awareness contests (stealth vs notice).
     pub perception: Option<i64>,
+    /// Optional scripted line when a player discovers a hidden creature (`say`, `emote`, etc.).
+    pub on_discovered_action: Option<String>,
+    pub on_discovered_text: Option<String>,
+    /// Optional react override when discovered (defaults to script-only if unset).
+    pub on_discovered_react: Option<CreatureReact>,
 }
 
 impl Default for BehaviorTemplateDef {
@@ -63,6 +71,9 @@ impl Default for BehaviorTemplateDef {
             attack_damage: 8,
             awareness_check: None,
             perception: None,
+            on_discovered_action: None,
+            on_discovered_text: None,
+            on_discovered_react: None,
         }
     }
 }
@@ -121,6 +132,14 @@ pub fn parse_behavior_file(content: &str) -> Vec<BehaviorTemplateDef> {
                         let (action, text) = parse_on_enter_script(value);
                         template.on_enter_action = action;
                         template.on_enter_text = text;
+                    }
+                    "on_discovered" => {
+                        let (action, text) = parse_on_enter_script(value);
+                        template.on_discovered_action = action;
+                        template.on_discovered_text = text;
+                    }
+                    "on_discovered_react" | "discovered_react" => {
+                        template.on_discovered_react = Some(CreatureReact::parse(value));
                     }
                     "wander_interval" | "interval" => {
                         template.wander_interval = value.parse().unwrap_or(3).max(1);

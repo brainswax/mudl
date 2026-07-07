@@ -72,6 +72,13 @@ pub fn npc_behaviors(npc: &Object) -> Vec<NpcBehavior> {
                                 event,
                                 action,
                                 text,
+                                react: map.get("react").and_then(|v| {
+                                    if let crate::object::Value::String(s) = v {
+                                        Some(crate::mudl::CreatureReact::parse(s))
+                                    } else {
+                                        None
+                                    }
+                                }),
                             })
                         })
                         .collect(),

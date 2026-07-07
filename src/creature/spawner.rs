@@ -400,6 +400,10 @@ fn resolve_spawn_template(template_name: &str, spawner: &Object) -> Option<Spawn
                                             event: bmap.get("event")?.as_string()?,
                                             action: bmap.get("action")?.as_string()?,
                                             text: bmap.get("text")?.as_string()?,
+                                            react: bmap.get("react").and_then(|v| {
+                                                v.as_string()
+                                                    .map(|s| crate::mudl::CreatureReact::parse(&s))
+                                            }),
                                         })
                                     })
                                     .collect(),
@@ -684,6 +688,7 @@ mod tests {
                     event: "on_enter".to_string(),
                     action: "emote".to_string(),
                     text: "drifts.".to_string(),
+                    react: None,
                 }],
                 use_behaviors: vec![],
             },

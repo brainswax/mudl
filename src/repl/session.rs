@@ -214,6 +214,23 @@ impl Session {
             .with_anatomy(self.anatomy.clone())
     }
 
+    /// Perception checks when the player looks around the current room.
+    pub fn perceive_hidden_creatures_on_look(&mut self) -> crate::creature::BehaviorOutcome {
+        let Some(room_id) = self.current_location.clone() else {
+            return crate::creature::BehaviorOutcome::default();
+        };
+        let outcome = crate::creature::run_perception_discovery_on_look(
+            &room_id,
+            &self.player_id,
+            &mut self.objects,
+            &self.anatomy,
+        );
+        for id in &outcome.dirty {
+            self.dirty.mark(id);
+        }
+        outcome
+    }
+
     /// Mutable inventory command context wired to session dirty tracking.
     pub fn inventory_context(&mut self) -> InventoryContext<'_> {
         InventoryContext {
@@ -361,13 +378,6 @@ impl Session {
             self.dirty.mark(&spawner.id);
         }
 
-        if let Some(room) = self.objects.get(&target_id) {
-            let ctx = DisplayContext::new(self.player_id.clone(), DisplayMode::Player)
-                .with_objects(self.objects.clone())
-                .with_anatomy(self.anatomy.clone())
-                .with_flags(DisplayFlags::BRIEF);
-            lines.push(format_room_look_player(room, &ctx));
-        }
         let behavior_outcome = crate::creature::run_creature_behaviors(
             "on_enter",
             &target_id,
@@ -380,6 +390,13 @@ impl Session {
         }
         for behavior_line in behavior_outcome.lines {
             lines.push(behavior_line);
+        }
+        if let Some(room) = self.objects.get(&target_id) {
+            let ctx = DisplayContext::new(self.player_id.clone(), DisplayMode::Player)
+                .with_objects(self.objects.clone())
+                .with_anatomy(self.anatomy.clone())
+                .with_flags(DisplayFlags::BRIEF);
+            lines.push(format_room_look_player(room, &ctx));
         }
         if let Some(mut player) = self.objects.get(&self.player_id).cloned() {
             if let Some(regen) = crate::creature::apply_equipment_regen_on_enter(

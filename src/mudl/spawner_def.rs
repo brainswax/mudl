@@ -76,6 +76,7 @@ fn parse_behavior_line(rest: &str) -> Option<NpcBehaviorDef> {
         event,
         action,
         text,
+        react: None,
     })
 }
 

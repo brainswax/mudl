@@ -3,9 +3,10 @@
 use std::collections::HashMap;
 
 use crate::creature::tactics::{
-    is_creature_aware, is_player_aware, resolve_encounter_awareness_on_enter,
-    reset_player_awareness_on_enter, set_creature_aware, set_player_aware,
-    uses_awareness_check, SURPRISE_DAMAGE_BONUS,
+    is_creature_aware, is_creature_hidden_from_player, is_player_aware,
+    player_notices_creature, resolve_encounter_awareness_on_enter,
+    reset_creature_discovery_on_enter, reset_player_awareness_on_enter, set_creature_aware,
+    set_creature_discovered, set_player_aware, uses_awareness_check, SURPRISE_DAMAGE_BONUS,
 };
 use crate::mudl::AnatomyRegistry;
 use crate::creature::vitality::{apply_damage, creature_health};
@@ -151,6 +152,9 @@ pub fn build_creature_behavior_entries(
             continue;
         };
         entries.push(template_to_entry(template));
+        if let Some(entry) = template_to_discovered_entry(template) {
+            entries.push(entry);
+        }
     }
     for script in scripts {
         entries.push(script_to_entry(script));
@@ -173,7 +177,41 @@ fn template_to_entry(template: &BehaviorTemplateDef) -> CreatureBehaviorEntry {
     }
 }
 
+fn template_to_discovered_entry(template: &BehaviorTemplateDef) -> Option<CreatureBehaviorEntry> {
+    let has_script = template.on_discovered_action.is_some() || template.on_discovered_text.is_some();
+    let has_react = template.on_discovered_react.is_some();
+    if !has_script && !has_react {
+        return None;
+    }
+    Some(CreatureBehaviorEntry {
+        entry_type: "template".to_string(),
+        template_name: Some(template.base_name.clone()),
+        react: template.on_discovered_react,
+        event: Some("on_discovered".to_string()),
+        action: template.on_discovered_action.clone(),
+        text: template.on_discovered_text.clone(),
+        wander_interval: None,
+        attack_damage: Some(template.attack_damage),
+        awareness_check: None,
+        perception: None,
+    })
+}
+
 fn script_to_entry(script: &NpcBehaviorDef) -> CreatureBehaviorEntry {
+    if let Some(react) = script.react {
+        return CreatureBehaviorEntry {
+            entry_type: "script".to_string(),
+            template_name: None,
+            react: Some(react),
+            event: Some(script.event.clone()),
+            action: None,
+            text: None,
+            wander_interval: None,
+            attack_damage: None,
+            awareness_check: None,
+            perception: None,
+        };
+    }
     CreatureBehaviorEntry {
         entry_type: "script".to_string(),
         template_name: None,
@@ -222,6 +260,24 @@ pub fn behavior_templates_to_property(templates: &[BehaviorTemplateDef]) -> Prop
             }
             if let Some(text) = &template.on_enter_text {
                 map.insert("on_enter_text".to_string(), Value::String(text.clone()));
+            }
+            if let Some(action) = &template.on_discovered_action {
+                map.insert(
+                    "on_discovered_action".to_string(),
+                    Value::String(action.clone()),
+                );
+            }
+            if let Some(text) = &template.on_discovered_text {
+                map.insert(
+                    "on_discovered_text".to_string(),
+                    Value::String(text.clone()),
+                );
+            }
+            if let Some(react) = template.on_discovered_react {
+                map.insert(
+                    "on_discovered_react".to_string(),
+                    Value::String(react.as_str().to_string()),
+                );
             }
             Value::Map(map)
         })
@@ -304,6 +360,33 @@ pub fn resolve_behavior_templates(host: &Object) -> HashMap<String, BehaviorTemp
                                         Value::Int(n) => Some(*n),
                                         _ => None,
                                     }),
+                                    on_discovered_action: map
+                                        .get("on_discovered_action")
+                                        .and_then(|v| {
+                                            if let Value::String(s) = v {
+                                                Some(s.clone())
+                                            } else {
+                                                None
+                                            }
+                                        }),
+                                    on_discovered_text: map.get("on_discovered_text").and_then(
+                                        |v| {
+                                            if let Value::String(s) = v {
+                                                Some(s.clone())
+                                            } else {
+                                                None
+                                            }
+                                        },
+                                    ),
+                                    on_discovered_react: map
+                                        .get("on_discovered_react")
+                                        .and_then(|v| {
+                                            if let Value::String(s) = v {
+                                                Some(CreatureReact::parse(s))
+                                            } else {
+                                                None
+                                            }
+                                        }),
                                 },
                             ))
                         })
@@ -372,6 +455,24 @@ fn legacy_npc_behaviors(obj: &Object) -> Vec<CreatureBehaviorEntry> {
                                 Value::String(s) => Some(s.clone()),
                                 _ => None,
                             })?;
+                            let react = map.get("react").and_then(|v| match v {
+                                Value::String(s) => Some(CreatureReact::parse(s)),
+                                _ => None,
+                            });
+                            if let Some(react) = react {
+                                return Some(CreatureBehaviorEntry {
+                                    entry_type: "script".to_string(),
+                                    template_name: None,
+                                    react: Some(react),
+                                    event: Some(event),
+                                    action: None,
+                                    text: None,
+                                    wander_interval: None,
+                                    attack_damage: None,
+                                    awareness_check: None,
+                                    perception: None,
+                                });
+                            }
                             let action = map.get("action").and_then(|v| match v {
                                 Value::String(s) => Some(s.clone()),
                                 _ => None,
@@ -412,6 +513,9 @@ pub fn add_behavior_template(creature: &mut Object, template: &BehaviorTemplateD
         return false;
     }
     entries.push(template_to_entry(template));
+    if let Some(entry) = template_to_discovered_entry(template) {
+        entries.push(entry);
+    }
     creature.add_property(creature_behaviors_to_property(&entries));
     true
 }
@@ -535,7 +639,92 @@ fn flee_npc(
     }
 }
 
-/// Run composable creature behaviors for an event (e.g. `on_enter`).
+fn perception_look_count(player: &Object) -> u64 {
+    player
+        .get_int_property("perception_look_count")
+        .unwrap_or(0)
+        .max(0) as u64
+}
+
+/// Perception checks when the player looks around — may reveal lurking creatures.
+pub fn run_perception_discovery_on_look(
+    room_id: &ObjectId,
+    player_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+) -> BehaviorOutcome {
+    let hidden: Vec<ObjectId> = npcs_in_room(room_id, player_id, objects)
+        .into_iter()
+        .filter(|npc| is_creature_hidden_from_player(npc))
+        .map(|npc| npc.id.clone())
+        .collect();
+    if hidden.is_empty() {
+        return BehaviorOutcome::default();
+    }
+
+    let mut outcome = BehaviorOutcome::default();
+    let look_tick = {
+        let tick = objects
+            .get(player_id)
+            .map(perception_look_count)
+            .unwrap_or(0)
+            + 1;
+        if let Some(player) = objects.get_mut(player_id) {
+            player.set_property_int("perception_look_count", tick as i64);
+            outcome.mark_dirty(player_id);
+        }
+        tick
+    };
+    let player_snapshot = match objects.get(player_id) {
+        Some(player) => player.clone(),
+        None => return outcome,
+    };
+
+    for npc_id in hidden {
+        let npc = match objects.get(&npc_id) {
+            Some(npc) => npc.clone(),
+            None => continue,
+        };
+        let seed = mix_seed(&[
+            player_id.as_str(),
+            npc_id.as_str(),
+            room_id.as_str(),
+            "look",
+            &look_tick.to_string(),
+        ]);
+        if !player_notices_creature(&player_snapshot, &npc, objects, anatomy, seed) {
+            continue;
+        }
+        if let Some(npc_mut) = objects.get_mut(&npc_id) {
+            set_creature_discovered(npc_mut, true);
+            outcome.mark_dirty(&npc_id);
+        }
+        if let Some(player) = objects.get_mut(player_id) {
+            set_player_aware(player, true);
+            outcome.mark_dirty(player_id);
+        }
+        let display = npc.name.to_lowercase();
+        outcome.push_line(format!("You notice a {display} here."));
+        let discovered = run_creature_behaviors_filtered(
+            "on_discovered",
+            room_id,
+            player_id,
+            objects,
+            anatomy,
+            Some(&npc_id),
+        );
+        for line in discovered.lines {
+            outcome.push_line(line);
+        }
+        for id in discovered.dirty {
+            outcome.mark_dirty(&id);
+        }
+    }
+
+    outcome
+}
+
+/// Run composable creature behaviors for an event (e.g. `on_enter`, `on_discovered`).
 pub fn run_creature_behaviors(
     event: &str,
     room_id: &ObjectId,
@@ -543,8 +732,19 @@ pub fn run_creature_behaviors(
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
 ) -> BehaviorOutcome {
+    run_creature_behaviors_filtered(event, room_id, player_id, objects, anatomy, None)
+}
+
+fn run_creature_behaviors_filtered(
+    event: &str,
+    room_id: &ObjectId,
+    player_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+    only_npc: Option<&ObjectId>,
+) -> BehaviorOutcome {
     let mut outcome = BehaviorOutcome::default();
-    if event == "on_enter" {
+    if event == "on_enter" && only_npc.is_none() {
         if let Some(player) = objects.get_mut(player_id) {
             reset_player_awareness_on_enter(player);
             outcome.mark_dirty(player_id);
@@ -552,6 +752,7 @@ pub fn run_creature_behaviors(
     }
     let npc_ids: Vec<ObjectId> = npcs_in_room(room_id, player_id, objects)
         .into_iter()
+        .filter(|npc| only_npc.is_none() || only_npc == Some(&npc.id))
         .map(|npc| npc.id.clone())
         .collect();
 
@@ -560,9 +761,17 @@ pub fn run_creature_behaviors(
             continue;
         };
         let tick = behavior_enter_count(&npc_snapshot) + 1;
-        if let Some(npc) = objects.get_mut(&npc_id) {
-            set_behavior_enter_count(npc, tick);
-            outcome.mark_dirty(&npc_id);
+        if event == "on_enter" {
+            if let Some(npc) = objects.get_mut(&npc_id) {
+                set_behavior_enter_count(npc, tick);
+                outcome.mark_dirty(&npc_id);
+            }
+            if uses_awareness_check(&npc_snapshot) {
+                if let Some(npc) = objects.get_mut(&npc_id) {
+                    reset_creature_discovery_on_enter(npc);
+                    outcome.mark_dirty(&npc_id);
+                }
+            }
         }
 
         let entries: Vec<CreatureBehaviorEntry> = read_creature_behaviors(&npc_snapshot)
@@ -586,6 +795,9 @@ pub fn run_creature_behaviors(
                 aware = encounter.creature_aware;
                 if let Some(npc) = objects.get_mut(&npc_id) {
                     set_creature_aware(npc, encounter.creature_aware);
+                    if encounter.player_aware {
+                        set_creature_discovered(npc, true);
+                    }
                     outcome.mark_dirty(&npc_id);
                 }
                 if !encounter.player_aware {
@@ -600,7 +812,10 @@ pub fn run_creature_behaviors(
         let npc_snapshot = objects.get(&npc_id).cloned().unwrap_or(npc_snapshot);
 
         for entry in &entries {
-            if !aware && uses_awareness_check(&npc_snapshot) {
+            if event == "on_enter" && !aware && uses_awareness_check(&npc_snapshot) {
+                continue;
+            }
+            if entry.react.is_some() && entry.action.is_none() && entry.text.is_none() {
                 continue;
             }
             if entry.entry_type == "script" {
@@ -626,20 +841,22 @@ pub fn run_creature_behaviors(
         }
 
         if reacts.contains(&CreatureReact::Flee) {
-            outcome.push_line(format!(
-                "{} {}",
-                npc_snapshot.name,
+            let flee_text = if event == "on_discovered" {
+                "bolts away as you spot it."
+            } else {
                 entries
                     .iter()
                     .find(|e| e.react == Some(CreatureReact::Flee))
                     .and_then(|e| e.text.as_deref())
                     .unwrap_or("flees from your approach.")
-            ));
+            };
+            outcome.push_line(format!("{} {flee_text}", npc_snapshot.name));
             flee_npc(&npc_id, room_id, objects, &mut outcome);
             continue;
         }
 
-        if reacts.contains(&CreatureReact::Attack) && aware {
+        let can_attack = aware || event == "on_discovered";
+        if reacts.contains(&CreatureReact::Attack) && can_attack {
             let base_damage = entries
                 .iter()
                 .filter_map(|e| e.attack_damage)
@@ -660,6 +877,10 @@ pub fn run_creature_behaviors(
                     let after = apply_damage(player, damage);
                     set_player_aware(player, true);
                     outcome.mark_dirty(player_id);
+                    if let Some(npc) = objects.get_mut(&npc_id) {
+                        set_creature_discovered(npc, true);
+                        outcome.mark_dirty(&npc_id);
+                    }
                     if ambush {
                         outcome.push_line(format!(
                             "{} strikes from hiding for {damage} damage ({after} health remaining).",
@@ -682,9 +903,17 @@ pub fn run_creature_behaviors(
             if !already_spoke {
                 outcome.push_line(format!("{} eyes you warily.", npc_snapshot.name));
             }
+        } else if reacts.contains(&CreatureReact::Greet) {
+            let already_spoke = entries.iter().any(|e| {
+                matches!(e.action.as_deref(), Some("say" | "emote" | "say_to"))
+                    && e.text.as_deref().is_some_and(|t| !t.is_empty())
+            });
+            if !already_spoke {
+                outcome.push_line(format!("{} greets you.", npc_snapshot.name));
+            }
         }
 
-        if reacts.contains(&CreatureReact::Wander) {
+        if event == "on_enter" && reacts.contains(&CreatureReact::Wander) {
             let interval = entries
                 .iter()
                 .filter_map(|e| e.wander_interval)
@@ -777,6 +1006,7 @@ mod tests {
                 event: "on_enter".to_string(),
                 action: "emote".to_string(),
                 text: "narrows its eyes.".to_string(),
+                react: None,
             }],
             &["guard".to_string()],
             &templates,
@@ -938,6 +1168,95 @@ mod tests {
         assert_eq!(creature_health(objects.get(&player_id).unwrap()), 87);
         assert!(crate::creature::tactics::is_player_aware(
             objects.get(&player_id).unwrap()
+        ));
+    }
+
+    #[test]
+    fn hidden_lurker_omitted_from_room_look_until_discovered() {
+        let room = ObjectId::new("area:haunted-moon-001");
+        let player_id = ObjectId::new("player:hero-001");
+        let player = npc("player:hero-001", "Hero", &room);
+
+        let templates = HashMap::from([(
+            "lurker".to_string(),
+            BehaviorTemplateDef {
+                base_name: "lurker".to_string(),
+                react: CreatureReact::Attack,
+                awareness_check: Some(true),
+                perception: Some(12),
+                ..BehaviorTemplateDef::default()
+            },
+        )]);
+        let entries = build_creature_behavior_entries(&[], &["lurker".to_string()], &templates);
+        let mut lurker = npc("npc:lurker-001", "Pale Lurker", &room);
+        lurker.add_property(creature_behaviors_to_property(&entries));
+        apply_tactics_from_behaviors(&mut lurker, &entries, &templates);
+
+        let objects = HashMap::from([(player.id.clone(), player), (lurker.id.clone(), lurker)]);
+        let room_obj = Object {
+            id: room.clone(),
+            name: "Haunted Moon".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: ObjectId::new("player:admin-001"),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let mut objects = objects;
+        objects.insert(room.clone(), room_obj.clone());
+
+        let ctx = crate::display::DisplayContext::new(player_id.clone(), crate::display::DisplayMode::Player)
+            .with_objects(objects.clone());
+        let look = crate::display::format_room_look_player(&room_obj, &ctx);
+        assert!(!look.contains("Pale Lurker"));
+        assert!(!look.contains("pale lurker"));
+    }
+
+    #[test]
+    fn perception_on_look_reveals_lurker_and_fires_on_discovered() {
+        let room = ObjectId::new("area:haunted-moon-001");
+        let player_id = ObjectId::new("player:hero-001");
+        let mut player = npc("player:hero-001", "Hero", &room);
+        player.set_int_map(
+            "skills",
+            HashMap::from([("survival".to_string(), 10)]),
+        );
+        player.set_int_map(
+            "stats",
+            HashMap::from([("wisdom".to_string(), 16), ("dexterity".to_string(), 14)]),
+        );
+
+        let templates = HashMap::from([(
+            "lurker".to_string(),
+            BehaviorTemplateDef {
+                base_name: "lurker".to_string(),
+                react: CreatureReact::Attack,
+                awareness_check: Some(true),
+                perception: Some(4),
+                on_discovered_action: Some("emote".to_string()),
+                on_discovered_text: Some("freezes mid-lunge.".to_string()),
+                ..BehaviorTemplateDef::default()
+            },
+        )]);
+        let entries = build_creature_behavior_entries(&[], &["lurker".to_string()], &templates);
+        let mut lurker = npc("npc:lurker-001", "Pale Lurker", &room);
+        lurker.add_property(creature_behaviors_to_property(&entries));
+        apply_tactics_from_behaviors(&mut lurker, &entries, &templates);
+
+        let anatomy = AnatomyRegistry::default();
+        let mut objects = HashMap::from([(player.id.clone(), player), (lurker.id.clone(), lurker)]);
+
+        let outcome =
+            run_perception_discovery_on_look(&room, &player_id, &mut objects, &anatomy);
+        assert!(outcome.lines.iter().any(|l| l.contains("You notice")));
+        assert!(outcome.lines.iter().any(|l| l.contains("freezes mid-lunge")));
+        assert!(crate::creature::tactics::is_creature_discovered(
+            objects.get(&ObjectId::new("npc:lurker-001")).unwrap()
         ));
     }
 

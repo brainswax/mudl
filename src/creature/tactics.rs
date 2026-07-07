@@ -274,6 +274,46 @@ pub fn apply_tactics_from_behaviors(
         creature.properties.remove("perception_bonus");
     }
     set_creature_aware(creature, !uses_check);
+    if uses_check {
+        set_creature_discovered(creature, false);
+    } else {
+        creature.properties.remove("player_discovered");
+    }
+}
+
+/// Whether the player has spotted a lurking creature (visible in look / combat).
+pub fn is_creature_discovered(creature: &Object) -> bool {
+    if !uses_awareness_check(creature) {
+        return true;
+    }
+    creature
+        .get_bool_property("player_discovered")
+        .unwrap_or(false)
+}
+
+pub fn set_creature_discovered(creature: &mut Object, discovered: bool) {
+    creature.set_property_bool("player_discovered", discovered);
+}
+
+/// Reset discovery when the player re-enters the creature's room.
+pub fn reset_creature_discovery_on_enter(creature: &mut Object) {
+    if uses_awareness_check(creature) {
+        set_creature_discovered(creature, false);
+    }
+}
+
+/// Lurking creatures undiscovered by the player are hidden from room look and targeting.
+pub fn is_creature_hidden_from_player(creature: &Object) -> bool {
+    creature.is_active()
+        && creature.object_type() == "npc"
+        && creature.has_creature_role()
+        && uses_awareness_check(creature)
+        && !is_creature_discovered(creature)
+}
+
+/// Whether the creature can be seen or targeted by the player right now.
+pub fn creature_visible_to_player(creature: &Object) -> bool {
+    !is_creature_hidden_from_player(creature)
 }
 
 /// Run an awareness contest when the player enters the creature's room.
