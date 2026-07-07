@@ -28,23 +28,68 @@ pub fn is_direction_verb(verb: &str) -> bool {
     normalize_direction(verb).is_some()
 }
 
-/// Parse movement from a command line: `north`, `go north`, `enter`, etc.
-///
-/// Returns the canonical direction name when the line is a movement command.
-pub fn movement_direction_from_line(verb: &str, args: &[&str]) -> Option<&'static str> {
-    if verb == "go" {
-        return args.first().and_then(|arg| normalize_direction(arg));
+/// Normalize player movement input to a canonical compass direction, or pass through a custom exit label.
+pub fn movement_input(input: &str) -> String {
+    let trimmed = input.trim();
+    if let Some(canonical) = normalize_direction(trimmed) {
+        canonical.to_string()
+    } else {
+        trimmed.to_ascii_lowercase()
     }
-    normalize_direction(verb)
+}
+
+/// Parse movement from a command line: `north`, `go north`, `go around`, `enter`, etc.
+///
+/// Recognizes compass aliases and `go <label>`. Custom exit names are passed through lowercased
+/// for resolution against the current room's exit map.
+pub fn movement_direction_from_line(verb: &str, args: &[&str]) -> Option<String> {
+    if verb == "go" {
+        if args.is_empty() {
+            return None;
+        }
+        return Some(movement_input(&args.join(" ")));
+    }
+    normalize_direction(verb).map(|dir| dir.to_string())
+}
+
+/// Parse movement including standalone custom exit verbs (`around`, `rear`, …).
+///
+/// When `exits` is provided, a lone verb matching an exit key is treated as movement.
+pub fn movement_from_line(
+    verb: &str,
+    args: &[&str],
+    exits: Option<&HashMap<String, ObjectId>>,
+) -> Option<String> {
+    if let Some(dir) = movement_direction_from_line(verb, args) {
+        return Some(dir);
+    }
+    if !args.is_empty() {
+        return None;
+    }
+    let custom = verb.trim().to_ascii_lowercase();
+    if exits.is_some_and(|map| map.keys().any(|key| key.eq_ignore_ascii_case(&custom))) {
+        return Some(custom);
+    }
+    None
 }
 
 /// Resolve an exit direction against a room's exit map (case-insensitive keys, alias support).
 pub fn resolve_exit<'a>(
     exits: &'a HashMap<String, ObjectId>,
     direction: &str,
-) -> Option<(&'static str, &'a ObjectId)> {
-    let canonical = normalize_direction(direction)?;
-    exits.get(canonical).map(|target| (canonical, target))
+) -> Option<(&'a str, &'a ObjectId)> {
+    let input = direction.trim();
+    if let Some(canonical) = normalize_direction(input) {
+        if let Some(target) = exits.get(canonical) {
+            return Some((canonical, target));
+        }
+    }
+    for (key, target) in exits {
+        if key.eq_ignore_ascii_case(input) {
+            return Some((key.as_str(), target));
+        }
+    }
+    None
 }
 
 /// All exit direction labels for a location, sorted for display consistency.
@@ -70,22 +115,56 @@ mod tests {
     fn movement_direction_from_line_parses_go_and_standalone() {
         assert_eq!(
             movement_direction_from_line("go", &["north"]),
-            Some("north")
+            Some("north".to_string())
         );
-        assert_eq!(movement_direction_from_line("go", &["n"]), Some("north"));
-        assert_eq!(movement_direction_from_line("south", &[]), Some("south"));
-        assert_eq!(movement_direction_from_line("enter", &[]), Some("in"));
+        assert_eq!(
+            movement_direction_from_line("go", &["n"]),
+            Some("north".to_string())
+        );
+        assert_eq!(
+            movement_direction_from_line("go", &["around"]),
+            Some("around".to_string())
+        );
+        assert_eq!(
+            movement_direction_from_line("south", &[]),
+            Some("south".to_string())
+        );
+        assert_eq!(
+            movement_direction_from_line("enter", &[]),
+            Some("in".to_string())
+        );
         assert_eq!(movement_direction_from_line("look", &[]), None);
     }
 
     #[test]
-    fn resolve_exit_matches_canonical_direction() {
+    fn movement_from_line_recognizes_standalone_custom_exits() {
+        let mut exits = HashMap::new();
+        exits.insert("around".to_string(), ObjectId::new("area:cottage-front-001"));
+        assert_eq!(
+            movement_from_line("around", &[], Some(&exits)),
+            Some("around".to_string())
+        );
+        assert_eq!(movement_from_line("look", &[], Some(&exits)), None);
+        assert_eq!(
+            movement_from_line("go", &["around"], Some(&exits)),
+            Some("around".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_exit_matches_canonical_and_custom_directions() {
         let mut exits = HashMap::new();
         let north_id = ObjectId::new("area:forest-001");
+        let front_id = ObjectId::new("area:cottage-front-001");
         exits.insert("north".to_string(), north_id.clone());
+        exits.insert("around".to_string(), front_id.clone());
         assert_eq!(
             resolve_exit(&exits, "n").map(|(d, id)| (d, id.clone())),
             Some(("north", north_id))
+        );
+        assert_eq!(
+            resolve_exit(&exits, "Around").map(|(d, id)| (d, id.clone())),
+            Some(("around", front_id))
         );
         assert!(resolve_exit(&exits, "east").is_none());
     }

@@ -31,7 +31,7 @@ use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
 use mudl::persistence::{Persistence, SqlitePersistence};
 use mudl::repl::Session;
-use mudl::world::movement_direction_from_line;
+use mudl::world::movement_from_line;
 use mudl::world::place_builder::DigRequest;
 use tracing::{error, info, warn};
 
@@ -328,11 +328,15 @@ async fn main() -> Result<()> {
                 let cmd = parts[0];
 
                 if cmd == "go" && parts.len() < 2 {
-                    println!("Usage: go <direction>  (or just: north, south, in, …)");
+                    println!("Usage: go <direction>  (or just: north, around, in, …)");
                     continue;
                 }
-                if let Some(dir) = movement_direction_from_line(cmd, &parts[1..]) {
-                    match session.go(dir) {
+                let room_exits = session
+                    .current_location()
+                    .and_then(|loc| session.object(loc))
+                    .map(|room| room.get_exits());
+                if let Some(dir) = movement_from_line(cmd, &parts[1..], room_exits.as_ref()) {
+                    match session.go(&dir) {
                         Ok(msg) => {
                             println!("{msg}");
                             if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -385,7 +389,9 @@ async fn main() -> Result<()> {
                         println!(
                             "  attack <creature>           - strike a creature (turn-based combat)"
                         );
-                        println!("  go <dir>  (or n/s/e/w/…)    - move; shows room description and exits");
+                        println!(
+                            "  go <dir>  (or n/s/e/w/around/…) - move; shows room description and exits"
+                        );
                         println!(
                             "  @set <target> <key> <value>  - wizard: set property/state/verb"
                         );

@@ -915,6 +915,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cottage_rear_custom_around_exit() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let cottage_rear_id = objects
+            .values()
+            .find(|o| o.name == "Behind the Cottage")
+            .map(|o| o.id.clone())
+            .expect("cottage rear");
+        let cottage_front_id = objects
+            .values()
+            .find(|o| o.name == "Front of Small Cottage")
+            .map(|o| o.id.clone())
+            .expect("cottage front");
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(start),
+        );
+        session.go("east").unwrap();
+        assert_eq!(session.current_location(), Some(&cottage_rear_id));
+
+        let msg = session.go("around").unwrap();
+        assert!(msg.contains("around"));
+        assert_eq!(session.current_location(), Some(&cottage_front_id));
+    }
+
+    #[tokio::test]
     async fn cottage_room_movement_and_persist_reload() {
         use crate::world::session::{hydrate_world, persist_all, resolve_player_location};
 

@@ -28,8 +28,8 @@ pub use move_manager::{
     resolve_location, MoveContext, MoveError, MoveEvent, MoveHooks, MoveResult,
 };
 pub use navigation::{
-    exit_directions, is_direction_verb, movement_direction_from_line, normalize_direction,
-    resolve_exit,
+    exit_directions, is_direction_verb, movement_direction_from_line, movement_from_line,
+    movement_input, normalize_direction, resolve_exit,
 };
 pub use place_builder::{
     apply_dig_result, dig_place, link_exit, link_places, unlink_exit, DigOptions, DigRequest,
