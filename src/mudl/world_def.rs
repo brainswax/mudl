@@ -74,6 +74,8 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
             || trimmed.starts_with("@npc")
             || trimmed.starts_with("@spawner")
             || trimmed.starts_with("@spawn-template")
+            || trimmed.starts_with("@loot-spawner")
+            || trimmed.starts_with("@loot-template")
             || trimmed.starts_with("@entry ")
             || trimmed.starts_with("@behavior")
             || trimmed.starts_with("@stat")

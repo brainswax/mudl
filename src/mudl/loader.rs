@@ -5,9 +5,10 @@ use std::path::{Component, Path, PathBuf};
 use super::anatomy::{parse_anatomy_file, AnatomyRegistry};
 use super::item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
 use super::npc_def::parse_npc_file;
+use super::loot_spawner_def::parse_loot_spawner_file;
 use super::spawner_def::parse_spawner_file;
 use super::world_def::{parse_world_file, WorldDef};
-use crate::mudl::{NpcDef, SpawnTemplateDef, SpawnerDef};
+use crate::mudl::{LootSpawnerDef, LootTemplateDef, NpcDef, SpawnTemplateDef, SpawnerDef};
 
 /// A loaded MUDL source — local file or remote URL fetched at load time.
 #[derive(Debug, Clone)]
@@ -40,6 +41,8 @@ pub struct LoadedWorld {
     pub npc_defs: Vec<NpcDef>,
     pub spawn_template_defs: Vec<SpawnTemplateDef>,
     pub spawner_defs: Vec<SpawnerDef>,
+    pub loot_template_defs: Vec<LootTemplateDef>,
+    pub loot_spawner_defs: Vec<LootSpawnerDef>,
     pub starting_location: Option<String>,
 }
 
@@ -202,6 +205,8 @@ fn load_world(
     let mut npc_defs = Vec::new();
     let mut spawn_template_defs = Vec::new();
     let mut spawner_defs = Vec::new();
+    let mut loot_template_defs = Vec::new();
+    let mut loot_spawner_defs = Vec::new();
     let mut resolved_start = starting_location;
 
     for source in &sources {
@@ -216,6 +221,9 @@ fn load_world(
         let (templates, spawners) = parse_spawner_file(&file_content);
         spawn_template_defs.extend(templates);
         spawner_defs.extend(spawners);
+        let (loot_templates, loot_spawners) = parse_loot_spawner_file(&file_content);
+        loot_template_defs.extend(loot_templates);
+        loot_spawner_defs.extend(loot_spawners);
         if start.is_some() {
             resolved_start = start;
         }
@@ -241,6 +249,8 @@ fn load_world(
         npc_defs,
         spawn_template_defs,
         spawner_defs,
+        loot_template_defs,
+        loot_spawner_defs,
         starting_location: resolved_start,
     })
 }

@@ -168,6 +168,22 @@
   @entry pale-lurker weight=2
 @end
 
+# --- Loot spawners (shrine offering on first visit) ---
+
+@loot-template shrine-rations
+  prototype=trail-rations
+  count=1
+@end
+
+@loot-spawner haunted-shrine-offering
+  target=haunted-shrine
+  trigger=on_enter
+  once=true
+  chance=1.0
+  max_active=1
+  @entry shrine-rations weight=1
+@end
+
 # --- Haunted forest areas ---
 
 type: area

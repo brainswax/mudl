@@ -103,7 +103,9 @@ fn visible_content_phrases(room: &Object, ctx: &DisplayContext) -> Vec<String> {
         .contents(&ctx.objects)
         .into_iter()
         .filter(|item| {
-            item.id != ctx.observer && !crate::creature::is_spawner_infrastructure(item)
+            item.id != ctx.observer
+                && !crate::creature::is_spawner_infrastructure(item)
+                && !crate::loot::is_loot_spawner_infrastructure(item)
         })
         .collect();
     items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));

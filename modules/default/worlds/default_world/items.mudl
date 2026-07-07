@@ -239,3 +239,19 @@
   door_destination=cottage-rear
 @end
 
+# --- Loot spawners (weighted drops on open / enter / kill / timer) ---
+
+@loot-template chest-bonus-rations
+  prototype=trail-rations
+  count=2
+@end
+
+@loot-spawner travel-chest-bonus
+  target=scene-chest
+  trigger=on_open
+  once=true
+  chance=1.0
+  max_active=1
+  @entry chest-bonus-rations weight=1
+@end
+

@@ -1129,6 +1129,31 @@ fn open_gate(
         format!("You open the {display}.")
     }];
     lines.extend(crate::world::gate_events::run_gate_event_handlers(gate, "on_open"));
+
+    let owner = ctx
+        .objects
+        .get(ctx.player_id)
+        .map(|player| player.owner.clone())
+        .unwrap_or_else(|| ctx.player_id.clone());
+    let loot_spawner_ids: Vec<ObjectId> = crate::loot::loot_spawners_for_target(gate_id, ctx.objects)
+        .into_iter()
+        .map(|spawner| spawner.id.clone())
+        .collect();
+    for loot in crate::loot::run_on_open_loot_spawners(
+        gate_id,
+        ctx.player_id,
+        &owner,
+        ctx.objects,
+    ) {
+        mark_dirty(ctx, &loot.item_id);
+        if let Some(message) = loot.message {
+            lines.push(message);
+        }
+    }
+    for spawner_id in loot_spawner_ids {
+        mark_dirty(ctx, &spawner_id);
+    }
+
     Ok(lines)
 }
 

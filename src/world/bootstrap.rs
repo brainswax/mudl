@@ -274,6 +274,60 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
     Ok(())
 }
 
+/// Spawn MUDL-defined loot spawners into persistence.
+pub async fn bootstrap_world_loot_spawners<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    owner: &ObjectId,
+    world: &LoadedWorld,
+    target_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    use crate::loot::{apply_loot_spawner_def, loot_templates_to_property};
+    use std::collections::HashMap as StdHashMap;
+
+    let template_map: StdHashMap<_, _> = world
+        .loot_template_defs
+        .iter()
+        .map(|t| (t.base_name.clone(), t.clone()))
+        .collect();
+
+    for def in &world.loot_spawner_defs {
+        if def.target.is_empty() {
+            anyhow::bail!("Loot spawner '{}' missing target", def.base_name);
+        }
+        let spawner_id = ObjectId::new(format!("loot-spawner:{}-001", def.base_name));
+        if factory.load_object(&spawner_id).await?.is_some() {
+            continue;
+        }
+        let target_id = target_ids.get(&def.target).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Loot spawner '{}' targets unknown location or object '{}'",
+                def.base_name,
+                def.target
+            )
+        })?;
+
+        let mut spawner = Object {
+            id: spawner_id,
+            name: format!("{} loot spawner", def.base_name),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        apply_loot_spawner_def(&mut spawner, def, &template_map)?;
+        spawner.set_property_object_ref("loot_spawner_target", target_id);
+        spawner.add_property(loot_templates_to_property(&world.loot_template_defs));
+        factory.persistence().save_object(&spawner).await?;
+    }
+    Ok(())
+}
+
 /// Spawn MUDL-defined NPCs into persistence.
 pub async fn bootstrap_world_npcs<P: Persistence>(
     factory: &ObjectFactory<P>,
@@ -406,8 +460,9 @@ pub async fn bootstrap_world<P: Persistence>(
         anyhow::anyhow!("Invalid world exit graph: {}", errors.join("; "))
     })?;
 
-    bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
+    let placements = bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
     bootstrap_world_spawners(factory, &owner, world, &name_to_id).await?;
+    bootstrap_world_loot_spawners(factory, &owner, world, &placements).await?;
     bootstrap_world_npcs(factory, &owner, world, &name_to_id).await?;
 
     if factory.load_object(&owner).await?.is_none() {
@@ -1196,6 +1251,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn loot_spawner_adds_bonus_to_travel_chest_on_open() {
+        use crate::loot::loot_spawners_for_target;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let chest_id = objects
+            .values()
+            .find(|o| o.id.as_str().contains("scene-chest"))
+            .map(|o| o.id.clone())
+            .expect("travel chest");
+
+        assert_eq!(
+            loot_spawners_for_target(&chest_id, &objects).len(),
+            1,
+            "travel chest should have a loot spawner attached"
+        );
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&start),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        open_container(&mut ctx, "mailbox").unwrap();
+        take_item(&mut ctx, "brass key").unwrap();
+        let before = ctx
+            .objects
+            .get(&chest_id)
+            .unwrap()
+            .container_contents()
+            .len();
+
+        let open_msg = open_container(&mut ctx, "chest").unwrap();
+        assert!(open_msg.contains("bonus rations") || open_msg.contains("find"));
+        let after = ctx
+            .objects
+            .get(&chest_id)
+            .unwrap()
+            .container_contents()
+            .len();
+        assert!(after > before, "opening chest should spawn bonus loot");
+
+        let again = open_container(&mut ctx, "chest").unwrap();
+        assert!(
+            !again.contains("find"),
+            "once=true loot spawner should not repeat"
+        );
+    }
+
     async fn creature_spawner_attached_to_haunted_moon() {
         use crate::creature::spawners_in_room;
 
