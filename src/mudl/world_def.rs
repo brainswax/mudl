@@ -318,11 +318,19 @@ mod tests {
         );
         let (defs, _) = parse_world_file(content);
         let moon = defs.iter().find(|d| d.base_name == "haunted-moon").unwrap();
-        assert_eq!(moon.triggers.len(), 1);
-        assert_eq!(moon.triggers[0].event, "on_enter");
+        assert_eq!(moon.triggers.len(), 3);
+        let on_enter = moon
+            .triggers
+            .iter()
+            .find(|t| t.event == "on_enter")
+            .expect("on_enter trigger");
         assert_eq!(
-            moon.triggers[0].code,
+            on_enter.code,
             "narrate Silver mist clings to the branches."
+        );
+        assert!(
+            moon.triggers.iter().any(|t| t.event == "on_respawn"),
+            "expected on_respawn schedule triggers"
         );
     }
 }

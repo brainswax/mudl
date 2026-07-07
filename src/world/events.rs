@@ -29,6 +29,10 @@ pub struct EventContext {
 pub struct EventOutcome {
     pub lines: Vec<String>,
     pub dirty: Vec<ObjectId>,
+    /// When true, remaining handlers and phases for this dispatch are skipped.
+    pub cancelled: bool,
+    /// Non-fatal script/subscriber failures collected for logging and builder diagnostics.
+    pub errors: Vec<String>,
 }
 
 impl EventOutcome {
@@ -42,12 +46,30 @@ impl EventOutcome {
         }
     }
 
+    pub fn record_error(&mut self, message: impl Into<String>) {
+        self.errors.push(message.into());
+    }
+
+    pub fn cancel(&mut self) {
+        self.cancelled = true;
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+
     pub fn append(&mut self, other: EventOutcome) {
         for line in other.lines {
             self.push_line(line);
         }
         for id in other.dirty {
             self.mark_dirty(&id);
+        }
+        for error in other.errors {
+            self.record_error(error);
+        }
+        if other.cancelled {
+            self.cancelled = true;
         }
     }
 }
@@ -87,17 +109,34 @@ pub fn run_event_handlers_on(host: &Object, event_name: &str) -> Vec<String> {
 
 /// Execute `event_name` with full script semantics (react, teleport, spawn, stat mods, …).
 ///
-/// Also dispatches registered subscribers (creature spawners, loot spawners) on the host.
+/// Dispatch order (production):
+/// 1. Subscribers — scheduler tick, due `@schedule` jobs, spawner modules
+/// 2. Host `@trigger` scripts — registration order; stops early when [`EventOutcome::cancelled`]
 pub fn execute_event(
     event_name: &str,
     ctx: &EventContext,
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: Option<&AnatomyRegistry>,
 ) -> EventOutcome {
+    if !objects
+        .get(&ctx.host_id)
+        .is_some_and(|host| host.is_active())
+    {
+        let mut outcome = EventOutcome::default();
+        outcome.record_error(format!(
+            "event '{event_name}' skipped: host {} is missing or inactive",
+            ctx.host_id
+        ));
+        return outcome;
+    }
+
     let mut outcome = EventOutcome::default();
     outcome.append(dispatch_event_subscribers(
         event_name, ctx, objects, anatomy,
     ));
+    if outcome.is_cancelled() {
+        return outcome;
+    }
     outcome.append(execute_host_event(
         event_name, ctx, objects, anatomy,
     ));
@@ -433,6 +472,79 @@ mod tests {
             outcome.lines
         );
         assert!(!outcome.dirty.is_empty());
+    }
+
+    #[test]
+    fn stop_cancels_remaining_host_handlers() {
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:test-001");
+        let mut room = Object {
+            id: room_id.clone(),
+            name: "Test Room".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        attach_triggers(
+            &mut room,
+            &[
+                TriggerDef {
+                    event: "on_enter".to_string(),
+                    code: "narrate First line.".to_string(),
+                },
+                TriggerDef {
+                    event: "on_enter".to_string(),
+                    code: "stop".to_string(),
+                },
+                TriggerDef {
+                    event: "on_enter".to_string(),
+                    code: "narrate Third line.".to_string(),
+                },
+            ],
+        );
+
+        let mut objects = HashMap::from([(room_id.clone(), room)]);
+        let outcome = execute_event(
+            "on_enter",
+            &EventContext {
+                actor_id: player_id,
+                host_id: room_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.lines.len(), 1);
+        assert_eq!(outcome.lines[0], "First line.");
+    }
+
+    #[test]
+    fn execute_event_records_inactive_host_error() {
+        let player_id = ObjectId::new("player:hero-001");
+        let host_id = ObjectId::new("item:gone-001");
+        let mut objects = HashMap::new();
+        let outcome = execute_event(
+            "on_open",
+            &EventContext {
+                actor_id: player_id,
+                host_id,
+                room_id: None,
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert_eq!(outcome.errors.len(), 1);
+        assert!(outcome.errors[0].contains("inactive"));
     }
 
     #[test]

@@ -54,7 +54,10 @@ pub use portal::{
     passable_portal_blocks_passage, passable_portal_for_direction, portal_for_direction,
     portal_kind_label, portal_passage_block, portal_permits_exit, portals_in_room, PortalBlock,
 };
-pub use scheduler::{advance_tick, current_tick, periodic_fires};
+pub use scheduler::{
+    advance_tick, current_tick, due_schedule_jobs, increment_counter, periodic_fires,
+    read_counter, register_schedule_job, reset_counter,
+};
 pub use possession::{
     body_slot_item, body_slot_item_valid, body_slots, carried_body_items,
     clear_creature_slots_for_item, clear_item_from_body_slots, grasp_action_phrase,

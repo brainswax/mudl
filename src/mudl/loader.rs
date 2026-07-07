@@ -7,12 +7,13 @@ use super::behavior_def::parse_behavior_file;
 use super::item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
 use super::loot_spawner_def::parse_loot_spawner_file;
 use super::resource_spawner_def::parse_resource_spawner_file;
+use super::schedule_def::parse_schedule_file;
 use super::npc_def::parse_npc_file;
 use super::spawner_def::parse_spawner_file;
 use super::world_def::{parse_world_file, WorldDef};
 use crate::mudl::{
     LootSpawnerDef, LootTemplateDef, NpcDef, ResourceSpawnerDef, ResourceTemplateDef,
-    SpawnTemplateDef, SpawnerDef,
+    ScheduleDef, SpawnTemplateDef, SpawnerDef,
 };
 
 /// A loaded MUDL source — local file or remote URL fetched at load time.
@@ -49,6 +50,7 @@ pub struct LoadedWorld {
     pub loot_spawner_defs: Vec<LootSpawnerDef>,
     pub resource_template_defs: Vec<ResourceTemplateDef>,
     pub resource_spawner_defs: Vec<ResourceSpawnerDef>,
+    pub schedule_defs: Vec<ScheduleDef>,
     pub behavior_template_defs: Vec<super::behavior_def::BehaviorTemplateDef>,
     pub starting_location: Option<String>,
 }
@@ -212,6 +214,7 @@ fn load_world(
     let mut loot_spawner_defs = Vec::new();
     let mut resource_template_defs = Vec::new();
     let mut resource_spawner_defs = Vec::new();
+    let mut schedule_defs = Vec::new();
     let mut behavior_template_defs = Vec::new();
     let mut resolved_start = starting_location;
 
@@ -233,6 +236,7 @@ fn load_world(
         let (resource_templates, resource_spawners) = parse_resource_spawner_file(&file_content);
         resource_template_defs.extend(resource_templates);
         resource_spawner_defs.extend(resource_spawners);
+        schedule_defs.extend(parse_schedule_file(&file_content));
         behavior_template_defs.extend(parse_behavior_file(&file_content));
         if start.is_some() {
             resolved_start = start;
@@ -263,6 +267,7 @@ fn load_world(
         loot_spawner_defs,
         resource_template_defs,
         resource_spawner_defs,
+        schedule_defs,
         behavior_template_defs,
         starting_location: resolved_start,
     })

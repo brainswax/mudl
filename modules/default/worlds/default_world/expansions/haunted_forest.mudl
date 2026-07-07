@@ -211,6 +211,20 @@
   @trigger on_discovered narrate You kneel to inspect the bundle more closely.
 @end
 
+# --- Timed schedules (weather, ambient respawn) ---
+
+@schedule haunted-mist-weather
+  target=haunted-mist
+  interval=2
+  event=on_weather
+@end
+
+@schedule haunted-moon-respawn
+  target=haunted-moon
+  interval=4
+  event=on_respawn
+@end
+
 # --- Resource spawners (renewable harvest nodes) ---
 
 @resource-template forest-moss
@@ -363,6 +377,8 @@ base_name: haunted-moon
 name: Moonlit Glade
 description: A silvered clearing where the canopy breaks. The air is colder than it should be under this much light.
 @trigger on_enter narrate Silver mist clings to the branches.
+@trigger on_respawn narrate Silver motes gather in the cold air.
+@trigger on_respawn spawn mist-wisp
 exits:
   south: haunted-entry
   east: haunted-ember
@@ -421,6 +437,7 @@ type: area
 base_name: haunted-mist
 name: Breathless Mist
 description: White mist swallows the trail.
+@trigger on_weather narrate The mist thickens, swallowing familiar landmarks.
 exits:
   out: haunted-entry
 loop_to: haunted-entry

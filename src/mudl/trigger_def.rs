@@ -36,6 +36,9 @@ pub mod events {
     pub const ON_UNLOCK: &str = "on_unlock";
     pub const ON_OPEN: &str = "on_open";
     pub const ON_HARVEST: &str = "on_harvest";
+    /// Custom timed events — typically fired by `@schedule` jobs.
+    pub const ON_WEATHER: &str = "on_weather";
+    pub const ON_RESPAWN: &str = "on_respawn";
 }
 
 #[cfg(test)]

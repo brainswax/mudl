@@ -25,6 +25,8 @@ pub enum ScriptAction {
     ModSkill(String, i64),
     Teleport(String),
     Spawn(String),
+    /// Halt remaining handlers for this event dispatch.
+    Stop,
     Raw(String),
 }
 
@@ -40,6 +42,7 @@ pub fn parse_script(code: &str) -> ScriptAction {
             "flee" => ScriptAction::React(CreatureReact::Flee),
             "greet" => ScriptAction::React(CreatureReact::Greet),
             "warn" => ScriptAction::React(CreatureReact::Warn),
+            "stop" | "cancel" | "halt" => ScriptAction::Stop,
             _ => ScriptAction::Raw(code.to_string()),
         };
     };
@@ -69,6 +72,7 @@ pub fn parse_script(code: &str) -> ScriptAction {
         }
         "teleport" | "send" => ScriptAction::Teleport(rest.to_string()),
         "spawn" => ScriptAction::Spawn(rest.to_string()),
+        "stop" | "cancel" | "halt" => ScriptAction::Stop,
         _ if !rest.is_empty() => ScriptAction::Raw(code.to_string()),
         _ => ScriptAction::Raw(verb),
     }
@@ -187,18 +191,30 @@ pub fn execute_script(
                     outcome.push_line(format!("The world lurches — you find yourself at {dest_name}."));
                     outcome.mark_dirty(&actor_id);
                 }
+            } else {
+                outcome.record_error(format!("teleport: unknown place '{place_base}'"));
             }
         }
         ScriptAction::Spawn(template_name) => {
             let Some(room_id) = room_id.clone() else {
+                outcome.record_error(format!(
+                    "spawn '{template_name}': no room context for host {}",
+                    host.name
+                ));
                 return outcome;
             };
             let Some(owner) = objects.get(&actor_id).map(|o| o.owner.clone()) else {
+                outcome.record_error(format!(
+                    "spawn '{template_name}': actor {} not found",
+                    actor_id
+                ));
                 return outcome;
             };
-            let anatomy = match anatomy {
-                Some(a) => a,
-                None => return outcome,
+            let Some(anatomy) = anatomy else {
+                outcome.record_error(format!(
+                    "spawn '{template_name}': anatomy registry required"
+                ));
+                return outcome;
             };
             if let Some((npc, message)) = spawn_creature_from_template(
                 template_name,
@@ -211,7 +227,14 @@ pub fn execute_script(
                 if let Some(msg) = message {
                     outcome.push_line(msg);
                 }
+            } else {
+                outcome.record_error(format!(
+                    "spawn '{template_name}': template not found in world"
+                ));
             }
+        }
+        ScriptAction::Stop => {
+            outcome.cancel();
         }
         ScriptAction::Raw(text) if !text.is_empty() => {
             outcome.push_line(text.clone());
@@ -322,6 +345,9 @@ pub fn execute_host_event(
 
     let mut outcome = EventOutcome::default();
     for code in handlers {
+        if outcome.is_cancelled() {
+            break;
+        }
         let action = parse_script(&code);
         let script_outcome = execute_script(&host, &action, ctx, objects, anatomy);
         outcome.append(script_outcome);

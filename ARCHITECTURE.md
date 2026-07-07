@@ -271,7 +271,8 @@ Creatures now use a **single script surface** with split storage:
 
 ### 4. Event & Timer System (M4)
 - **`@trigger`** scripts stored in `Object.event_handlers`; executed by `world/event_script.rs`.
-- **`EventScheduler`** (`world/scheduler.rs`) — room-scoped `scheduler_tick_on_enter` advances on each `on_enter`; creature `periodic`, loot `timer`, and resource `timer` spawners subscribe via `event_subscribers`.
+- **`execute_event`** dispatch order: subscribers (scheduler → spawners) then host handlers; `stop`/`cancel` halts remaining handlers; errors collected in `EventOutcome::errors`.
+- **`EventScheduler`** (`world/scheduler.rs`) — room-scoped ticks, named property counters, and `@schedule` jobs that fire host triggers on interval.
 - **`@resource-spawner`** — renewable harvest nodes on `on_harvest` / `on_enter` / `timer`; player command `harvest <object>`.
 
 ### 5. API Gateway / RBAC

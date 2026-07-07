@@ -440,6 +440,24 @@ Wizard vitals (testing): `@damage <creature> [amount]`, `@heal <creature> [amoun
 @end
 ```
 
+**Timed schedules** (`@schedule` — periodic host events on room-enter ticks):
+
+```mudl
+@schedule haunted-mist-weather
+  target=haunted-mist
+  interval=2
+  event=on_weather
+@end
+
+type: area
+base_name: haunted-mist
+@trigger on_weather narrate The mist thickens, swallowing familiar landmarks.
+```
+
+- `interval` / `every` — fire every Nth `on_enter` tick for that room (shared scheduler).
+- `event` — custom event name; matching `@trigger` scripts on the target run (no subscriber re-entry).
+- `stop` / `cancel` in a trigger script halts remaining handlers for that dispatch.
+
 **Resource spawners** (renewable harvest nodes for crafting materials):
 
 ```mudl

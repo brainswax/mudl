@@ -407,6 +407,41 @@ pub async fn bootstrap_world_resource_spawners<P: Persistence>(
     Ok(())
 }
 
+/// Register MUDL `@schedule` jobs on their target scopes.
+pub async fn bootstrap_world_schedules<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    world: &LoadedWorld,
+    target_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    use crate::world::scheduler::register_schedule_job;
+
+    for def in &world.schedule_defs {
+        if def.target.is_empty() {
+            anyhow::bail!("Schedule '{}' missing target", def.base_name);
+        }
+        if def.event.is_empty() {
+            anyhow::bail!("Schedule '{}' missing event", def.base_name);
+        }
+        let target_id = target_ids.get(&def.target).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Schedule '{}' targets unknown location or object '{}'",
+                def.base_name,
+                def.target
+            )
+        })?;
+        let Some(mut target) = factory.load_object(&target_id).await? else {
+            anyhow::bail!(
+                "Schedule '{}' target object {} not found",
+                def.base_name,
+                target_id
+            );
+        };
+        register_schedule_job(&mut target, def, &target_id);
+        factory.persistence().save_object(&target).await?;
+    }
+    Ok(())
+}
+
 /// Spawn MUDL-defined NPCs into persistence.
 pub async fn bootstrap_world_npcs<P: Persistence>(
     factory: &ObjectFactory<P>,
@@ -569,6 +604,7 @@ pub async fn bootstrap_world<P: Persistence>(
     }
     bootstrap_world_loot_spawners(factory, &owner, world, &loot_targets).await?;
     bootstrap_world_resource_spawners(factory, &owner, world, &loot_targets).await?;
+    bootstrap_world_schedules(factory, world, &loot_targets).await?;
 
     if factory.load_object(&owner).await?.is_none() {
         let mut player = factory
