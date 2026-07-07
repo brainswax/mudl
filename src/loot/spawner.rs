@@ -574,6 +574,46 @@ fn run_loot_spawners(
     results
 }
 
+/// Dispatch loot spawners subscribed to `event_name` on `host_id`.
+pub fn dispatch_loot_spawners_for_event(
+    event_name: &str,
+    host_id: &ObjectId,
+    actor_id: &ObjectId,
+    owner: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> crate::world::EventOutcome {
+    use crate::world::EventOutcome;
+
+    let mut outcome = EventOutcome::default();
+    let results = match event_name {
+        "on_enter" => {
+            let mut results = run_on_enter_loot_spawners(host_id, actor_id, owner, objects);
+            results.extend(run_timer_loot_spawners(host_id, actor_id, owner, objects));
+            results
+        }
+        "on_open" => run_on_open_loot_spawners(host_id, actor_id, owner, objects),
+        "on_break" => run_on_break_loot_spawners(host_id, actor_id, owner, objects),
+        "on_kill" => run_on_kill_loot_spawners(host_id, actor_id, owner, objects),
+        _ => Vec::new(),
+    };
+
+    let spawner_ids: Vec<ObjectId> = loot_spawners_for_target(host_id, objects)
+        .into_iter()
+        .map(|spawner| spawner.id.clone())
+        .collect();
+
+    for loot in results {
+        outcome.mark_dirty(&loot.item_id);
+        if let Some(message) = loot.message {
+            outcome.push_line(message);
+        }
+    }
+    for spawner_id in spawner_ids {
+        outcome.mark_dirty(&spawner_id);
+    }
+    outcome
+}
+
 /// Run `on_enter` loot spawners for a room.
 pub fn run_on_enter_loot_spawners(
     room_id: &ObjectId,
@@ -662,9 +702,7 @@ pub fn run_on_break_loot_spawners(
     )
 }
 
-/// Run `on_kill` loot spawners attached to a creature.
-///
-/// TODO: Wire into NPC death handling when combat drops land.
+/// Run `on_kill` loot spawners attached to a creature (dispatched via `execute_event`).
 pub fn run_on_kill_loot_spawners(
     victim_id: &ObjectId,
     killer_id: &ObjectId,

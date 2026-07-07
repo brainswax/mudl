@@ -1126,10 +1126,21 @@ fn unlock_gate(
         ));
     }
 
-    lines.extend(crate::world::gate_events::run_gate_event_handlers(
-        &gate,
-        "on_unlock",
-    ));
+    let unlock_outcome = execute_event(
+        crate::mudl::trigger_def::events::ON_UNLOCK,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: gate_id.clone(),
+            room_id: ctx.room_id.cloned(),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(unlock_outcome.lines);
+    for id in unlock_outcome.dirty {
+        mark_dirty(ctx, &id);
+    }
     Ok(lines)
 }
 
@@ -1163,29 +1174,20 @@ fn open_gate(
     } else {
         format!("You open the {display}.")
     }];
-    lines.extend(crate::world::gate_events::run_gate_event_handlers(
-        gate, "on_open",
-    ));
-
-    let owner = ctx
-        .objects
-        .get(ctx.player_id)
-        .map(|player| player.owner.clone())
-        .unwrap_or_else(|| ctx.player_id.clone());
-    let loot_spawner_ids: Vec<ObjectId> =
-        crate::loot::loot_spawners_for_target(gate_id, ctx.objects)
-            .into_iter()
-            .map(|spawner| spawner.id.clone())
-            .collect();
-    for loot in crate::loot::run_on_open_loot_spawners(gate_id, ctx.player_id, &owner, ctx.objects)
-    {
-        mark_dirty(ctx, &loot.item_id);
-        if let Some(message) = loot.message {
-            lines.push(message);
-        }
-    }
-    for spawner_id in loot_spawner_ids {
-        mark_dirty(ctx, &spawner_id);
+    let open_outcome = execute_event(
+        crate::mudl::trigger_def::events::ON_OPEN,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: gate_id.clone(),
+            room_id: ctx.room_id.cloned(),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(open_outcome.lines);
+    for id in open_outcome.dirty {
+        mark_dirty(ctx, &id);
     }
 
     Ok(lines)
@@ -1398,12 +1400,6 @@ pub fn break_item(
         return Err(InventoryError::NotBreakable(display));
     }
 
-    let owner = ctx
-        .objects
-        .get(ctx.player_id)
-        .map(|player| player.owner.clone())
-        .unwrap_or_else(|| ctx.player_id.clone());
-
     let mut lines = vec![item
         .break_text()
         .unwrap_or_else(|| format!("You break the {display}."))];
@@ -1431,21 +1427,8 @@ pub fn break_item(
         mark_dirty(ctx, &item_id);
     }
 
-    let loot_spawner_ids: Vec<ObjectId> =
-        crate::loot::loot_spawners_for_target(&item_id, ctx.objects)
-            .into_iter()
-            .map(|spawner| spawner.id.clone())
-            .collect();
-    for loot in
-        crate::loot::run_on_break_loot_spawners(&item_id, ctx.player_id, &owner, ctx.objects)
-    {
-        mark_dirty(ctx, &loot.item_id);
-        if let Some(message) = loot.message {
-            lines.push(message);
-        }
-    }
-    for spawner_id in loot_spawner_ids {
-        mark_dirty(ctx, &spawner_id);
+    for id in break_outcome.dirty {
+        mark_dirty(ctx, &id);
     }
 
     Ok(lines.join("\n"))

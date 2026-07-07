@@ -44,9 +44,10 @@ pub use tactics::{
 };
 pub use spawner::{
     apply_spawner_def, count_active_spawns, despawn_creatures_from_spawner,
-    destroy_spawners_for_target, is_spawner, is_spawner_infrastructure, pick_weighted_entry,
-    run_on_enter_spawners, spawn_creature, spawn_templates_to_property, spawner_entries,
-    spawner_room_id, spawners_for_target, spawners_in_room, SpawnResult,
+    destroy_spawners_for_target, dispatch_creature_spawners_for_event, is_spawner,
+    is_spawner_infrastructure, pick_weighted_entry, run_on_enter_spawners, spawn_creature,
+    spawn_templates_to_property, spawner_entries, spawner_room_id, spawners_for_target,
+    spawners_in_room, SpawnResult,
 };
 pub use progression::{award_skill_xp, SKILL_XP_PER_RANK};
 pub use stats::{

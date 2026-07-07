@@ -17,7 +17,7 @@ use crate::creature::vitality::{
     apply_damage, creature_health, creature_is_defeated, creature_max_health, heal,
 };
 use crate::display::{resolve_object, ResolveScope, TargetResolution};
-use crate::loot::run_on_kill_loot_spawners;
+
 use crate::world::execute_kill_events;
 use crate::mudl::{AnatomyRegistry, CreatureReact};
 use crate::object::{
@@ -440,13 +440,6 @@ fn handle_npc_death(
 
     create_creature_corpse(&victim, room_id, owner, objects, outcome);
     strip_creature_gear(victim_id, objects, outcome);
-
-    for loot in run_on_kill_loot_spawners(victim_id, killer_id, owner, objects) {
-        outcome.mark_dirty(&loot.item_id);
-        if let Some(message) = loot.message {
-            outcome.push_line(message);
-        }
-    }
 
     if let Some(npc) = objects.get_mut(victim_id) {
         npc.soft_delete();

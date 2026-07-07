@@ -75,7 +75,7 @@ Named triggers that run scripted lines when something happens in the world. Buil
 | `on_move` | The object changes location (take, drop, put, etc.) |
 | `on_break` | A breakable object is smashed |
 | `on_death` | A creature with handlers dies (NPCs/objects) |
-| `on_kill` | Reserved — use loot spawners for kill drops today |
+| `on_kill` | Creature death — `@trigger` scripts and attached loot spawners fire via `execute_event` |
 | `on_discovered` | Creature behaviors today; object triggers coming |
 | `on_unlock` / `on_open` | Doors and containers (same as gate handlers) |
 

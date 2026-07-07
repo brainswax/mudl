@@ -176,15 +176,15 @@ Creatures now use a **single script surface** with split storage:
 
 `bootstrap_creature_behavior_system()` converts template `on_enter=` / `on_discovered=` lines and inline `@behavior` say/emote scripts into `@trigger` handlers. `run_creature_behaviors()` calls `execute_host_event()` per creature before running template-driven reacts (flee, attack, wander).
 
-### 2. Three parallel trigger vocabularies
+### 2. Three parallel trigger vocabularies — **resolved (M4)**
 
 | System | Triggers | Dispatch |
 |--------|----------|----------|
-| `@trigger` / `event_handlers` | `on_enter`, `on_kill`, … | `execute_event` |
-| Creature spawners | `on_enter`, `periodic` | `run_on_enter_spawners` in `session.rs` |
-| Loot spawners | `on_enter`, `on_open`, `on_kill`, `on_break`, `timer` | Direct calls in session/inventory/combat |
+| `@trigger` / `event_handlers` | `on_enter`, `on_kill`, … | `execute_host_event` (via `execute_event`) |
+| Creature spawners | `on_enter`, `periodic` | `dispatch_creature_spawners_for_event` (subscriber on room `on_enter`) |
+| Loot spawners | `on_enter`, `on_open`, `on_kill`, `on_break`, `timer` | `dispatch_loot_spawners_for_event` (subscriber on matching host events) |
 
-All three define `on_enter` with different code paths. **M4+ recommendation:** Spawner and loot modules should *register* as event subscribers (or emit through `execute_event` on a host object) rather than bespoke session hooks.
+`execute_event()` runs subscribers first (spawners/loot), then host `@trigger` scripts. Session `go`, inventory open/break, and combat kill all emit through this single path.
 
 ### 3. Two event execution modes
 
@@ -475,7 +475,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 | Priority | Task | Rationale |
 |----------|------|-----------|
 | ~~**P0**~~ | ~~Unify creature `@behavior` scripts into `@trigger` / single executor~~ | Done — §4.1 |
-| **P0** | Route spawner + loot dispatch through event bus | One `on_enter` vocabulary (§4.2) |
+| ~~**P0**~~ | ~~Route spawner + loot dispatch through event bus~~ | Done — §4.2 |
 | **P1** | `gate_events` → `execute_event` (mutating door scripts) | §4.3 |
 | **P1** | Align `@trigger react attack` with `attack_damage` | §4.4 |
 | **P1** | Shared behavior-line parser; drop `npc_behaviors` legacy | §4.4 |

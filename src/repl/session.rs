@@ -353,49 +353,6 @@ impl Session {
             };
             lines.push(movement_line);
         }
-        let owner = self
-            .objects
-            .get(&self.player_id)
-            .map(|p| p.owner.clone())
-            .unwrap_or_else(|| self.player_id.clone());
-        for spawn in crate::creature::run_on_enter_spawners(
-            &target_id,
-            &self.player_id,
-            &owner,
-            &self.anatomy,
-            &mut self.objects,
-        ) {
-            self.dirty.mark(&spawn.npc_id);
-            if let Some(message) = spawn.message {
-                lines.push(message);
-            }
-        }
-        for loot in crate::loot::run_on_enter_loot_spawners(
-            &target_id,
-            &self.player_id,
-            &owner,
-            &mut self.objects,
-        ) {
-            self.dirty.mark(&loot.item_id);
-            if let Some(message) = loot.message {
-                lines.push(message);
-            }
-        }
-        for loot in crate::loot::run_timer_loot_spawners(
-            &target_id,
-            &self.player_id,
-            &owner,
-            &mut self.objects,
-        ) {
-            self.dirty.mark(&loot.item_id);
-            if let Some(message) = loot.message {
-                lines.push(message);
-            }
-        }
-        for spawner in crate::creature::spawners_in_room(&target_id, &self.objects) {
-            self.dirty.mark(&spawner.id);
-        }
-
         let enter_outcome = execute_event(
             ON_ENTER,
             &EventContext {

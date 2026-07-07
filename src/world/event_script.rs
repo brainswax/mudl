@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use crate::creature::behavior::{npc_attack_player, npc_flee_room, read_creature_behaviors};
 use crate::creature::spawner::spawn_creature_from_template;
 use crate::creature::vitality::{apply_damage, heal};
-use crate::mudl::trigger_def::events;
 use crate::mudl::{AnatomyRegistry, CreatureReact};
 use crate::object::{Object, ObjectId};
 
@@ -333,53 +332,6 @@ pub fn execute_host_event(
         let script_outcome = execute_script(&host, &action, ctx, objects, anatomy);
         outcome.append(script_outcome);
     }
-    outcome
-}
-
-/// Convenience: run `on_kill` on victim and killer when a creature is slain.
-pub fn execute_kill_events(
-    victim_id: &ObjectId,
-    killer_id: &ObjectId,
-    room_id: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-    anatomy: Option<&AnatomyRegistry>,
-) -> EventOutcome {
-    let mut outcome = EventOutcome::default();
-
-    let victim_ctx = EventContext {
-        actor_id: killer_id.clone(),
-        host_id: victim_id.clone(),
-        room_id: Some(room_id.clone()),
-        target_id: Some(killer_id.clone()),
-    };
-    outcome.append(execute_host_event(
-        events::ON_DEATH,
-        &victim_ctx,
-        objects,
-        anatomy,
-    ));
-    outcome.append(execute_host_event(
-        events::ON_KILL,
-        &victim_ctx,
-        objects,
-        anatomy,
-    ));
-
-    if killer_id != victim_id {
-        let killer_ctx = EventContext {
-            actor_id: victim_id.clone(),
-            host_id: killer_id.clone(),
-            room_id: Some(room_id.clone()),
-            target_id: Some(victim_id.clone()),
-        };
-        outcome.append(execute_host_event(
-            events::ON_KILL,
-            &killer_ctx,
-            objects,
-            anatomy,
-        ));
-    }
-
     outcome
 }
 

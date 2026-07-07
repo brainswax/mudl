@@ -662,6 +662,31 @@ pub fn destroy_spawners_for_target(
     spawner_ids
 }
 
+/// Dispatch creature spawners subscribed to `event_name` on `host_id` (room enter only today).
+pub fn dispatch_creature_spawners_for_event(
+    event_name: &str,
+    host_id: &ObjectId,
+    player_id: &ObjectId,
+    owner: &ObjectId,
+    anatomy: &AnatomyRegistry,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> crate::world::EventOutcome {
+    use crate::world::EventOutcome;
+
+    if event_name != "on_enter" {
+        return EventOutcome::default();
+    }
+
+    let mut outcome = EventOutcome::default();
+    for spawn in run_on_enter_spawners(host_id, player_id, owner, anatomy, objects) {
+        outcome.mark_dirty(&spawn.npc_id);
+        if let Some(message) = spawn.message {
+            outcome.push_line(message);
+        }
+    }
+    outcome
+}
+
 /// Run `on_enter` spawners in `room_id`. Only locations with spawner objects spawn creatures.
 pub fn run_on_enter_spawners(
     room_id: &ObjectId,

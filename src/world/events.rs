@@ -6,9 +6,13 @@ use crate::mudl::{AnatomyRegistry, TriggerDef};
 use crate::object::{Behavior, LocationRef, Object, ObjectId, PermissionFlags};
 use crate::world::move_manager::MoveResult;
 
+use crate::mudl::trigger_def::events;
+
+use crate::world::event_subscribers::dispatch_event_subscribers;
+
 pub use crate::world::event_script::{
-    execute_host_event, execute_kill_events, execute_script, format_script_line, parse_script,
-    resolve_place_id, ScriptAction,
+    execute_host_event, execute_script, format_script_line, parse_script, resolve_place_id,
+    ScriptAction,
 };
 
 /// Who did what, where — passed to every emitted event.
@@ -104,13 +108,69 @@ pub fn emit_event(
 }
 
 /// Execute `event_name` with full script semantics (react, teleport, spawn, stat mods, …).
+///
+/// Also dispatches registered subscribers (creature spawners, loot spawners) on the host.
 pub fn execute_event(
     event_name: &str,
     ctx: &EventContext,
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: Option<&AnatomyRegistry>,
 ) -> EventOutcome {
-    execute_host_event(event_name, ctx, objects, anatomy)
+    let mut outcome = EventOutcome::default();
+    outcome.append(dispatch_event_subscribers(
+        event_name, ctx, objects, anatomy,
+    ));
+    outcome.append(execute_host_event(
+        event_name, ctx, objects, anatomy,
+    ));
+    outcome
+}
+
+/// Convenience: run death/kill triggers and loot spawners when a creature is slain.
+pub fn execute_kill_events(
+    victim_id: &ObjectId,
+    killer_id: &ObjectId,
+    room_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+    anatomy: Option<&AnatomyRegistry>,
+) -> EventOutcome {
+    let mut outcome = EventOutcome::default();
+
+    let victim_ctx = EventContext {
+        actor_id: killer_id.clone(),
+        host_id: victim_id.clone(),
+        room_id: Some(room_id.clone()),
+        target_id: Some(killer_id.clone()),
+    };
+    outcome.append(execute_event(
+        events::ON_DEATH,
+        &victim_ctx,
+        objects,
+        anatomy,
+    ));
+    outcome.append(execute_event(
+        events::ON_KILL,
+        &victim_ctx,
+        objects,
+        anatomy,
+    ));
+
+    if killer_id != victim_id {
+        let killer_ctx = EventContext {
+            actor_id: victim_id.clone(),
+            host_id: killer_id.clone(),
+            room_id: Some(room_id.clone()),
+            target_id: Some(victim_id.clone()),
+        };
+        outcome.append(execute_event(
+            events::ON_KILL,
+            &killer_ctx,
+            objects,
+            anatomy,
+        ));
+    }
+
+    outcome
 }
 
 /// Resolve the room context for a completed move and fire `on_move` on the moved object.
@@ -285,5 +345,115 @@ mod tests {
             objects.get(&npc_id).unwrap().location.as_ref(),
             Some(&ObjectId::new("area:room-a-001"))
         );
+    }
+
+    #[test]
+    fn execute_event_dispatches_loot_spawner_subscribers() {
+        use crate::loot::{apply_loot_spawner_def, loot_templates_to_property};
+        use crate::mudl::{LootSpawnerDef, LootSpawnerTrigger, LootTemplateDef, SpawnerEntryDef};
+        use crate::object::ContainerSpec;
+
+        let player_id = ObjectId::new("player:hero-001");
+        let chest_id = ObjectId::new("item:scene-chest-001");
+        let mut chest = Object {
+            id: chest_id.clone(),
+            name: "Travel Chest".to_string(),
+            aliases: Vec::new(),
+            location: Some(ObjectId::new("area:void-001")),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        chest.apply_container_role(&ContainerSpec::default());
+
+        let templates = [LootTemplateDef {
+            base_name: "bonus-rations".to_string(),
+            prototype: "trail-rations".to_string(),
+            count: 1,
+        }];
+        let mut spawner = Object {
+            id: ObjectId::new("loot-spawner:chest-bonus-001"),
+            name: "chest-bonus loot spawner".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        let template_map = HashMap::from([(
+            "bonus-rations".to_string(),
+            templates[0].clone(),
+        )]);
+        apply_loot_spawner_def(
+            &mut spawner,
+            &LootSpawnerDef {
+                base_name: "chest-bonus".to_string(),
+                target: "scene-chest".to_string(),
+                trigger: LootSpawnerTrigger::OnOpen,
+                periodic_interval: 5,
+                chance: 1.0,
+                max_active: 2,
+                once: true,
+                entries: vec![SpawnerEntryDef {
+                    template: "bonus-rations".to_string(),
+                    weight: 1,
+                }],
+            },
+            &template_map,
+        )
+        .unwrap();
+        spawner.set_property_object_ref("loot_spawner_target", chest_id.clone());
+        spawner.add_property(loot_templates_to_property(&templates));
+
+        let mut proto = Object {
+            id: ObjectId::new("item:trail-rations-001"),
+            name: "Trail Rations".to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        proto.set_property_bool("stackable", true);
+        proto.set_property_int("stack_count", 3);
+
+        let mut objects = HashMap::from([
+            (chest_id.clone(), chest),
+            (spawner.id.clone(), spawner),
+            (proto.id.clone(), proto),
+        ]);
+
+        let outcome = execute_event(
+            events::ON_OPEN,
+            &EventContext {
+                actor_id: player_id.clone(),
+                host_id: chest_id,
+                room_id: Some(ObjectId::new("area:void-001")),
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert!(
+            outcome.lines.iter().any(|l| l.contains("find")),
+            "on_open loot subscriber should narrate drop: {:?}",
+            outcome.lines
+        );
+        assert!(!outcome.dirty.is_empty());
     }
 }

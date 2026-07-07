@@ -5,6 +5,7 @@ pub mod door;
 pub mod exit_index;
 pub mod exits;
 pub mod event_script;
+pub mod event_subscribers;
 pub mod events;
 pub mod gate_events;
 pub mod module;
