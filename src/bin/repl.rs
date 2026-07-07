@@ -880,11 +880,12 @@ async fn main() -> Result<()> {
                                 match outcome {
                                     Ok(()) => {
                                         if !read_only {
-                                            if let Err(e) = persistence.save_object(&obj).await {
+                                            if let Err(e) =
+                                                session.persist_object(&persistence, obj).await
+                                            {
                                                 error!(error = %e, "@trigger save failed");
                                                 println!("The change fades before it can take hold.");
                                             }
-                                            session.upsert_object(obj);
                                         }
                                     }
                                     Err(TriggerError::NotFound(msg) | TriggerError::Validation(msg)) => {
@@ -1481,13 +1482,20 @@ async fn main() -> Result<()> {
                                             key = %set_cmd.key,
                                             "wizard @set applied"
                                         );
-                                        if let Err(e) = persistence.save_object(&obj).await {
-                                            error!(error = %e, "@set save failed");
-                                            println!("The change fades before it can take hold.");
-                                        } else {
-                                            println!("{}", narrate_field_set(&obj, &set_cmd.key));
+                                        match session.persist_object(&persistence, obj).await {
+                                            Ok(saved) => {
+                                                println!(
+                                                    "{}",
+                                                    narrate_field_set(&saved, &set_cmd.key)
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(error = %e, "@set save failed");
+                                                println!(
+                                                    "The change fades before it can take hold."
+                                                );
+                                            }
                                         }
-                                        session.upsert_object(obj);
                                     }
                                     Err(e) => println!("{e}"),
                                 }
@@ -1540,16 +1548,20 @@ async fn main() -> Result<()> {
                                             key = %unset_cmd.key,
                                             "wizard @unset applied"
                                         );
-                                        if let Err(e) = persistence.save_object(&obj).await {
-                                            error!(error = %e, "@unset save failed");
-                                            println!("The change fades before it can take hold.");
-                                        } else {
-                                            println!(
-                                                "{}",
-                                                narrate_field_unset(&obj, &unset_cmd.key)
-                                            );
+                                        match session.persist_object(&persistence, obj).await {
+                                            Ok(saved) => {
+                                                println!(
+                                                    "{}",
+                                                    narrate_field_unset(&saved, &unset_cmd.key)
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(error = %e, "@unset save failed");
+                                                println!(
+                                                    "The change fades before it can take hold."
+                                                );
+                                            }
                                         }
-                                        session.upsert_object(obj);
                                     }
                                     Err(e) => println!("{e}"),
                                 }
@@ -1593,7 +1605,7 @@ async fn main() -> Result<()> {
                         let id = ObjectId::new(parts[1]);
                         if let Some(obj) = session.object(&id) {
                             let name = obj.name.clone();
-                            match persistence.save_object(&obj).await {
+                            match session.persist_object(&persistence, obj).await {
                                 Ok(_) => {
                                     info!(id = %id, name = %name, "object saved");
                                     println!("{}", narrate_saved(&name));

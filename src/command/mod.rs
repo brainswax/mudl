@@ -500,8 +500,12 @@ pub async fn soft_delete_object<P: Persistence>(
         .ok_or_else(|| anyhow::anyhow!("Object not found: {id}"))?;
     let name = obj.name.clone();
     obj.soft_delete();
-    let meta = persistence.save_object(&obj).await?;
-    meta.apply_to(&mut obj);
+    crate::persistence::save_object_with_retry(
+        persistence,
+        &mut obj,
+        crate::persistence::DEFAULT_SAVE_RETRIES,
+    )
+    .await?;
     objects.insert(id.clone(), obj);
     Ok(crate::display::narrate_soft_delete(&name))
 }
@@ -521,8 +525,12 @@ pub async fn undelete_object<P: Persistence>(
     }
     let name = obj.name.clone();
     obj.undelete();
-    let meta = persistence.save_object(&obj).await?;
-    meta.apply_to(&mut obj);
+    crate::persistence::save_object_with_retry(
+        persistence,
+        &mut obj,
+        crate::persistence::DEFAULT_SAVE_RETRIES,
+    )
+    .await?;
     objects.insert(id.clone(), obj);
     Ok(crate::display::narrate_restore(&name))
 }

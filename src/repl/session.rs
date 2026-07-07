@@ -323,6 +323,24 @@ impl Session {
         self.world.persist_all(persistence).await
     }
 
+    /// Optimistic single-object save with conflict retry; updates the in-memory graph revision.
+    ///
+    /// Uses [`WorldState::cache_object`] so the row is not re-marked dirty after a successful write.
+    pub async fn persist_object<P: Persistence>(
+        &mut self,
+        persistence: &P,
+        mut obj: Object,
+    ) -> anyhow::Result<Object> {
+        crate::persistence::save_object_with_retry(
+            persistence,
+            &mut obj,
+            crate::persistence::DEFAULT_SAVE_RETRIES,
+        )
+        .await?;
+        self.mutate_player(|world, _| world.cache_object(obj.clone()));
+        Ok(obj)
+    }
+
     pub fn len(&self) -> usize {
         self.with_world(|world, _| world.len())
     }
@@ -924,6 +942,28 @@ mod tests {
             session.current_location().map(|id| id.as_str()),
             Some("room:north-001")
         );
+    }
+
+    #[tokio::test]
+    async fn persist_object_syncs_revision_after_conflict() {
+        let (persistence, mut session) = sample_session().await;
+        let hero_id = session.player_id().clone();
+        let mut local = session.object(&hero_id).unwrap();
+        local.name = "Renamed".to_string();
+
+        let mut stale = session.object(&hero_id).unwrap();
+        stale.name = "Stale".to_string();
+        persistence.save_object(&stale).await.unwrap();
+
+        let saved = session.persist_object(&persistence, local).await.unwrap();
+        assert_eq!(saved.name, "Renamed");
+        assert!(saved.revision >= 2);
+        assert!(saved.updated_at.is_some());
+
+        let cached = session.object(&hero_id).unwrap();
+        assert_eq!(cached.revision, saved.revision);
+        assert_eq!(cached.name, "Renamed");
+        assert!(!session.is_dirty(&hero_id));
     }
 
     #[tokio::test]
