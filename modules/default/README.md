@@ -30,6 +30,6 @@ To add a new creature, define `@creature cat` in `creatures.mudl` and set `creat
 
 ## Expansion packs
 
-Self-contained adventures live in `worlds/default_world/expansions/<name>/` — each folder has `<name>.mudl` and `README.md` with theme teaser, quick install, details, and extension ideas.
+Self-contained adventures live in `worlds/default_world/expansions/<name>/` — each folder has `<name>.mudl` and `README.md`. Authoring rules and README template: [MODULES.md](../../MODULES.md).
 
-The stock `world.mudl` already imports all five packs. To add one live, open that pack's README and paste its three-command Quick Install in IRC or the REPL.
+The stock `world.mudl` already imports all five packs. To add one live, open that pack's README and paste its Quick Install block in IRC or the REPL.

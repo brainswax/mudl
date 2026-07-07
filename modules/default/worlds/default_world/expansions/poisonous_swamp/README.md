@@ -14,13 +14,28 @@ Stand in any room and paste:
 
 Then `go down`.
 
-## Details
+## Detailed description
 
-**Entry:** `swamp-entry` — a threshold bowl of stagnant air; wrong paths loop back. Carved stakes and a warning post hint at tastes and textures (bitter, sweet, dry, deep). Regions include bitter fen, sweet stand, dry rise, and deep heart with gas pockets, quicksand, and snares.
+**Module:** `@expansion poisonous_swamp` · entry `swamp-entry` · portal `down` / return `up`
 
-**Tone:** High danger. Environmental damage on harsh rooms, creature ambushes, antidote scarcity, and a fixed warden NPC at the deep heart. Defeating the warden grants `bog_resilience`.
+**Areas**
 
-**Notable features:** Reed breather mask and reed-walker boots; antidote salves from harvests, hidden caches, and breakable spore pods. Gas wisps, bog leeches, and mire crawlers throughout. `up` from the heart scatters to forest or clearing.
+| base_name | Role |
+|-----------|------|
+| `swamp-entry` | Entry; north/east/south/west to route and wrong turns; `up` returns to host when integrated |
+| `swamp-bitter` | Main route — bitter fen; east → `swamp-sweet` |
+| `swamp-sweet` | Main route — sweet reeds; south → `swamp-dry` |
+| `swamp-dry` | Dry rise; west → `swamp-heart`; `in` exit (`exit_returns`: `out`) |
+| `swamp-heart` | Finale; `up` scatters (`scatter_to`: `forest-path`, `the-void`) |
+| `swamp-gas`, `swamp-quicksand`, `swamp-wisps`, `swamp-snare`, `swamp-drown`, `swamp-shrine` | Wrong turns → `loop_to: swamp-entry` |
+
+**Tone:** High danger. Environmental damage on harsh rooms, creature ambushes, antidote scarcity. Fixed warden NPC at the deep heart; kill grants `bog_resilience`.
+
+**Features:** `@effect` reed_breathing, bog_resilience. Reed breather mask, reed-walker boots, antidote salves. Harvest bitter roots and sweet reed beds; breakable spore pods. Gas grate (readable) in gas pocket; heartwood coffer at deep heart. Gas wisps, bog leeches, mire crawlers via `@spawner`.
+
+**Hidden:** Antidote cache at `swamp-sweet` (`hidden_until_discovered`).
+
+**Puzzles:** Warning post and bog markers teach a taste vocabulary (BITTER, SWEET, DRY, DEEP). Safe routes and stake logic are in-game only.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `attack`, `wear`.
 

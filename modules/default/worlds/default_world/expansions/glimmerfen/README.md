@@ -14,15 +14,29 @@ Stand in any room and paste:
 
 Then `go through`.
 
-## Details
+## Detailed description
 
-**Entry:** `fey-threshold` — four outward paths with gentle wrong turns (mist, bramble, mirror glade, wisp hollow, fern cathedral, petal shrine) that loop back softly. Hush-themed navigation via runestone markers; the crossing plaque teaches vocabulary, not the route.
+**Module:** `@expansion fey_glade` · entry `fey-threshold` · portal `through` / return `through`
 
-**Tone:** Restorative. No attack behaviors; ambient fey spawns emote and wander. Glades grant magical `@effect` buffs on entry and healing when worn down — dewdrop_vigor, songpeace, glowcap_luminance, rootwise, fey_grace, and others.
+**Areas**
 
-**Notable areas:** Dewglade, songbower, glowfen, rootbridge, grace pool. Harvest moonpetals, singing reeds, glowcaps, and starroots. NPCs: fairy guide, gnome gardener, elder elf sage. Leaving from the grace pool scatters to clearing, forest, or beach trail.
+| base_name | Role |
+|-----------|------|
+| `fey-threshold` | Entry; north/east/south/west to main route and wrong turns; `through` / `mist` host exits when integrated |
+| `fey-dewglade` | Main route — dew theme; east → `fey-songbower` |
+| `fey-songbower` | Main route — song theme; south → `fey-glowfen` |
+| `fey-glowfen` | Main route — glow theme; west → `fey-rootbridge` |
+| `fey-rootbridge` | Main route — root theme; north → `fey-grace` |
+| `fey-grace` | Finale; `out` scatters (`scatter_to`: `the-void`, `forest-path`, `beach-trail`) |
+| `fey-mist`, `fey-bramble`, `fey-mirror`, `fey-thorn`, `fey-wisp`, `fey-glimmer`, `fey-fern`, `fey-shrine` | Wrong turns → `loop_to: fey-threshold` |
 
-**Optional second entrance:** `prototype=moonmist-arch` with `door_direction=mist` on a shore room links to the same threshold.
+**Tone:** Restorative. No attack behaviors; ambient fey spawns emote and wander.
+
+**Features:** `@effect` dewdrop_vigor, songpeace, glowcap_luminance, rootwise, fey_grace, wonderstruck, pixie_dust. Harvest moonpetals, singing reeds, glowcaps, starroots. Luminous willow heals on approach; grace coffer with weighted elven gear. NPCs: fairy guide (`fey-threshold`), gnome gardener (`fey-dewglade`), elder elf sage (`fey-grace`). Weather/respawn schedules on mist and songbower.
+
+**Hidden:** Gnome cache at `fey-rootbridge`; fairy nest at `fey-dewglade` (`hidden_until_discovered`).
+
+**Puzzles:** Crossing plaque and way markers teach a hush vocabulary (DEW, SONG, GLOW, ROOT, GRACE). Marker sequence and grace path are in the stones — not documented here.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `inventory`, `wear`.
 
@@ -30,6 +44,6 @@ Then `go through`.
 
 - `@schedule` seasonal `@trigger on_weather` blessings on the grace pool.
 - `@spawn-template` unicorn with `fey_wanderer` for rare `on_enter` sightings.
-- Third portal from a custom courtyard with a new `door_direction`.
+- `@create item` with `prototype=moonmist-arch` and `door_direction=mist` for a second entrance to `fey-threshold`.
 - `when skill stealth at_least N` triggers on your own fairy rings.
 - `@effect` festival_merriment toggled by wizard `@set` on the threshold for live events.

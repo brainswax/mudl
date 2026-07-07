@@ -14,13 +14,30 @@ Stand in any room and paste:
 
 Then `go south`.
 
-## Details
+## Detailed description
 
-**Entry:** `beach-trail` → `beach-gate` — four outward paths, some scenic dead ends that loop back with humor. Taste-themed way markers (salt, sun, sip, sand). Rooms include open shore, sunbed veranda, tiki bar, tidepool shelf, and pearl inlet with healing or buff triggers on entry.
+**Module:** `@expansion beach_resort` · entry `beach-trail` · portal `south` / return `north`
+
+**Areas**
+
+| base_name | Role |
+|-----------|------|
+| `beach-trail` | Entry path; south → `beach-gate`; `north` → host when integrated |
+| `beach-gate` | Resort hub; east/south/west/northeast to shore, cabanas, pier, dunes |
+| `beach-shore` | Open shore; east → `beach-sunbeds` |
+| `beach-sunbeds` | Sunbed veranda; south → `beach-bar` |
+| `beach-bar` | Tiki bar; west → `beach-tidepool` |
+| `beach-tidepool` | Tidepool shelf; north → `beach-pearl` |
+| `beach-pearl` | Finale; `out` scatters (`scatter_to`: `the-void`, `forest-path`, `beach-trail`) |
+| `beach-dunes`, `beach-pier`, `beach-jetty`, `beach-shallows`, `beach-cabanas`, `beach-shrine` | Scenic wrong turns → `loop_to: beach-gate` |
 
 **Tone:** No combat. Optional cocktail chaos and gentle navigation loops.
 
-**Notable features:** Stackable cocktails grant layered drunk effects (tipsy → buzz → three sheets); NPCs react differently when unsteady. Tiki bartender, hammock attendant, pier hermit — friendly only. Harvestable shells and tidepool ledges, hidden bottle and cache finds, message in a bottle, pearl coffer with resort gear. `out` from the pearl inlet scatters to clearing, forest path, or sandy trail.
+**Features:** `@effect` tipsy, beach_buzz, three_sheets, sun_kissed, resort_serenity, tidepool_clarity. Stackable cocktails (`on_take` drunk stacks). NPCs: tiki bartender, hammock attendant, pier hermit — greet only. Harvestable shell clusters and tidepool ledges; pearl coffer with resort gear. Message in a bottle at shell shrine. Weather schedules on shore and tidepool; bar respawn garnish narrative.
+
+**Hidden:** Buried bottle at `beach-shore`; tidepool cache at `beach-tidepool` (`hidden_until_discovered`). NPC lines shift when the player is unsteady.
+
+**Puzzles:** Resort trail sign and driftwood markers teach a taste vocabulary (SALT, SUN, SIP, SAND). Route order is discoverable in play — not charted here.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `open`, `inventory`.
 

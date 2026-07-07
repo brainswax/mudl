@@ -14,13 +14,29 @@ Stand in any room and paste:
 
 Then `go in`.
 
-## Details
+## Detailed description
 
-**Entry:** `haunted-entry` — a threshold where many paths look equally inviting; wrong turns loop back without fanfare. Way markers and readable stones reward careful reading. Themed regions: moonlit, ember, mirror, and ash glades with weather and respawn schedules.
+**Module:** `@expansion haunted_forest` · entry `haunted-entry` · portal `in` / return `out`
 
-**Tone:** Medium danger. Navigation tension, ambient phantoms, and lurkers that may attack if you blunder in unprepared. Stealth and survival help.
+**Areas**
 
-**Notable features:** Locked hollow oak portal (consumable key via whisper charm), breakable clay pots, harvestable moss, hidden supply cache, shrine offering, and rootbound reward chest at the deep heart. Wisps and lurkers spawn on enter and on periodic ticks. A deliberate `out` exit from the heart scatters you to familiar ground.
+| base_name | Role |
+|-----------|------|
+| `haunted-entry` | Entry; north/east/south/west to route and wrong turns |
+| `haunted-moon` | Main route — moonlit theme; east → `haunted-ember` |
+| `haunted-ember` | Main route — ember theme; south → `haunted-mirror` |
+| `haunted-mirror` | Main route — mirror theme; west → `haunted-ash` |
+| `haunted-ash` | Main route — ash theme; north → `haunted-heart` |
+| `haunted-heart` | Finale; `out` scatters (`scatter_to`: `the-void`, `forest-path`, `cottage-rear`) |
+| `haunted-wither`, `haunted-mist`, `haunted-moss`, `haunted-thicket`, `haunted-pool`, `haunted-bones`, `haunted-shrine` | Wrong turns → `loop_to: haunted-entry` |
+
+**Tone:** Medium danger. Navigation tension, ambient phantoms, lurkers with awareness checks. Stealth and survival help.
+
+**Features:** Hollow oak portal (`prototype=hollow-oak-portal`, consumable lock `oak-whisper`). Whisper charm key. Breakable clay pots, harvestable moss, shrine offering, rootbound reward chest at the heart. Wisps and lurkers via `@spawner` on enter and periodic ticks. Weather thickens mist in select glades.
+
+**Hidden:** Supply cache at `haunted-moss` (`hidden_until_discovered`).
+
+**Puzzles:** Mossy boulder, mailbox gear, and way markers reward careful reading; symbol order matters in play. No route charted here.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `attack`, `open`, `unlock`.
 

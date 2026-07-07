@@ -14,13 +14,28 @@ Stand in any room and paste:
 
 Then `go in`.
 
-## Details
+## Detailed description
 
-**Entry:** `spider-entry` — a webbed threshold; wrong crawls loop back silently. Thread-themed navigation via bone peg markers and a warning plaque (silk, egg, fang, crown). Chambers escalate through silk galleries, egg nests, fang halls, and the crown where the brood queen waits.
+**Module:** `@expansion giant_spider_den` · entry `spider-entry` · portal `in` / return `out`
 
-**Tone:** High danger. Web-slowed movement, lurkers with awareness checks, hatchling swarms, and a brood queen boss. Stealth, light, and survival skills strongly recommended.
+**Areas**
 
-**Notable features:** Brood lantern and starlight ward gear; `@effect` webbed_slow, starlight_ward, spider_sense. Breakable cocoons, hidden silk cache, brood iron gate with key mechanics, weighted crown coffer. `out` from the crown scatters to forest, clearing, or dry mound.
+| base_name | Role |
+|-----------|------|
+| `spider-entry` | Entry; north/east/south/west to route and wrong turns; `out` → `swamp-dry` (`exit_returns`: `in`) |
+| `spider-silk` | Main route — silk galleries; east → `spider-egg` |
+| `spider-egg` | Egg chamber; south → `spider-fang` |
+| `spider-fang` | Fang antechamber; brood iron gate west → `spider-crown` |
+| `spider-crown` | Finale; `out` scatters (`scatter_to`: `forest-path`, `the-void`, `swamp-dry`) |
+| `spider-gloom`, `spider-pit`, `spider-hatch`, `spider-nest`, `spider-drown`, `spider-shrine` | Wrong turns → `loop_to: spider-entry` |
+
+**Tone:** High danger. Web-slowed movement, lurkers with awareness checks, hatchling swarms, brood queen boss. Stealth, light, and survival strongly recommended.
+
+**Features:** `@effect` webbed_slow, starlight_ward, spider_sense. Brood lantern, starlight ward gear. Breakable cocoons and swellable egg sacs. Brood iron gate (`lock_id=brood-fang-key`). Weighted crown coffer. Ceiling lurkers, broodlings, hatchlings; brood queen NPC with attack behavior. Scheduled tremors in egg chamber.
+
+**Hidden:** Silk cache at `spider-silk` (`hidden_until_discovered`).
+
+**Puzzles:** Warning plaque and bone peg markers teach a thread vocabulary (SILK, EGG, FANG, CROWN). Gate and thread order are for in-game signage — not listed here.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `attack`, `open`, `unlock`, `wield`.
 
