@@ -31,7 +31,7 @@ The diagram below shows **actual** module dependencies today (solid = implemente
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  Frontends: REPL (src/bin/repl.rs)          IRC / Gateway (planned)    │
 └───────────────────────────────┬─────────────────────────────────────────┘
-                                │ repl::Session (graph, location, anatomy)
+                                │ repl::Session { WorldState, PlayerSession }
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  Command layer (src/command/) — parse, @meta, @set/@unset, @dig         │
@@ -196,7 +196,7 @@ The main gaps are **scale and multi-user readiness**: `repl::Session` merges wor
 
 | Issue | Location | Impact | Recommendation |
 |-------|----------|--------|----------------|
-| **World + player conflated** | `repl::Session` holds full `HashMap<ObjectId, Object>` *and* `player_id` | Two IRC nicks cannot safely share one world without a shared `WorldState` + per-connection player view | Split `WorldState` (authoritative graph) from `PlayerSession` (actor, location cache, display prefs). IRC bot holds `Arc<RwLock<WorldState>>` + one lightweight session per nick. |
+| ~~**World + player conflated**~~ | ~~`repl::Session` held graph + `player_id`~~ | **Done** — `world::WorldState` (graph, anatomy, dirty) + `repl::PlayerSession` (actor, location cache). `Session` is a REPL bundle; M5 IRC uses `Arc<RwLock<WorldState>>` + `PlayerSession` per nick. | — |
 | **No concurrency control** | Single-threaded REPL; `DISPATCH_STACK` is `thread_local` | Parallel commands → data races, duplicate spawns, lost updates | Per-world `DispatchGuard` on `WorldState`; serialize mutations per room or per world with `tokio::sync::Mutex`. Wrap multi-object moves in SQLite transactions. |
 | **RBAC stubbed** | `has_wizard_permission()` always `true` | Any IRC nick could run `@set` / `@delete` | Gateway checks `PermissionFlags` on actor object; map IRC auth → player ID. Enforce builder vs wizard tiers before meta-commands. |
 | **Last-write-wins persistence** | `SqlitePersistence::save_object` per row, no version field | Concurrent edits to same object silently overwrite | Add `revision` or `updated_at` on `Object`; optimistic lock on save; retry on conflict. |
@@ -599,7 +599,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 | Priority | Task | Rationale |
 |----------|------|-----------|
-| **P0** | `WorldState` + `PlayerSession` split | Shared world, per-connection actor |
+| ~~**P0**~~ | ~~`WorldState` + `PlayerSession` split~~ | Done — `world/world_state.rs`, `repl/player_session.rs` |
 | **P0** | `Gateway` + real RBAC | `has_wizard_permission` → `PermissionFlags` on actor |
 | **P0** | World-level lock + SQLite transactions | Safe concurrent commands |
 | **P0** | Optimistic revision on `Object` save | Prevent silent overwrites |

@@ -17,6 +17,7 @@ pub mod possession;
 pub mod scheduler;
 pub mod session;
 pub mod stack_transfer;
+pub mod world_state;
 
 pub use bootstrap::bootstrap_world;
 pub use dirty::{persist_dirty, DirtyTracker};
@@ -68,8 +69,9 @@ pub use possession::{
 };
 pub use session::{
     hydrate_world, persist_all, persist_objects, resolve_bootstrap_location,
-    resolve_player_location, restore_session, WorldSession,
+    resolve_player_location, restore_world_graph,
 };
+pub use world_state::WorldState;
 pub use stack_transfer::{
     compute_stack_transfer_plan, split_stack_id, stack_merge_key, StackTransferPlan,
 };

@@ -4,11 +4,11 @@ use crate::object::{Object, ObjectFactory, ObjectId};
 use crate::persistence::Persistence;
 use crate::world::dirty::DirtyTracker;
 
-/// Hydrated world state restored from persistence on startup.
+/// Deprecated alias — use [`WorldState`](crate::world::WorldState) for the shared graph.
+#[deprecated(note = "use WorldState for the shared graph; PlayerSession for per-connection location")]
 #[derive(Debug, Clone)]
 pub struct WorldSession {
     pub objects: HashMap<ObjectId, Object>,
-    pub current_location: Option<ObjectId>,
     pub dirty: DirtyTracker,
 }
 
@@ -42,17 +42,24 @@ pub fn resolve_player_location(
     }
 }
 
-/// Bootstrap + hydrate: returns full session state for the REPL or other frontends.
+/// Hydrate the shared object graph from persistence (no per-player location).
+pub async fn restore_world_graph<P: Persistence>(
+    persistence: &P,
+) -> anyhow::Result<HashMap<ObjectId, Object>> {
+    hydrate_world(persistence).await
+}
+
+/// Deprecated — use [`WorldState::restore`](crate::world::WorldState::restore) and
+/// [`PlayerSession::restore`](crate::repl::PlayerSession::restore).
+#[deprecated(note = "use WorldState::restore and PlayerSession::restore")]
 pub async fn restore_session<P: Persistence>(
     persistence: &P,
-    player_id: ObjectId,
-    bootstrap_location: Option<ObjectId>,
+    _player_id: ObjectId,
+    _bootstrap_location: Option<ObjectId>,
 ) -> anyhow::Result<WorldSession> {
     let objects = hydrate_world(persistence).await?;
-    let current_location = resolve_player_location(&player_id, &objects, bootstrap_location);
     Ok(WorldSession {
         objects,
-        current_location,
         dirty: DirtyTracker::default(),
     })
 }

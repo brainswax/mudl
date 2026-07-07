@@ -653,7 +653,7 @@ mod tests {
     };
     use crate::mudl::load_module;
     use crate::persistence::SqlitePersistence;
-    use crate::repl::session::Session;
+    use crate::repl::Session;
     use crate::world::exits::validate_world_places;
 
     #[tokio::test]
