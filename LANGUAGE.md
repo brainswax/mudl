@@ -87,10 +87,25 @@ Named triggers that run scripted lines when something happens in the world. Buil
 | `narrate` / `say` / `message` | `narrate The air chills.` | Player-facing text |
 | `emote` | `emote shudders.` | Item: `The <item> …`; place: atmospheric |
 | `react` | `react flee` / `react attack` | Creature reactions (flee, attack, greet, warn) |
-| `damage` / `heal` | `heal 5` | Adjust actor health |
-| `mod-stat` / `mod-skill` | `mod-stat strength 2` | Permanent stat/skill bump on actor |
-| `teleport` | `teleport haunted-entry` | Move actor to a place `base_name` |
-| `spawn` | `spawn mist-wisp` | Spawn NPC from a `@spawn-template` in the world |
+| `damage` / `heal` | `heal 5` / `damage host 12` | Adjust health on `actor` (default), `host`, or `target` |
+| `mod-stat` / `mod-skill` | `mod-stat actor strength 2` | Permanent stat/skill bump |
+| `set-property` | `set-property host player_discovered true` | Set a bool/int/string property |
+| `grant-effect` | `grant-effect actor regeneration` | Apply a defined `@effect` to a creature |
+| `teleport` | `teleport haunted-entry` | Move `actor`/`host`/`target` to a place `base_name` |
+| `spawn` | `spawn mist-wisp` / `spawn item trail-rations` | Spawn creature template or item prototype in room |
+| `when` / `if` | `when health below 30 then heal 15` | Conditional — runs nested action when true |
+| `stop` | `stop` | Halt remaining handlers for this event |
+
+**Conditionals** (`when … then …`):
+
+| Condition | Example |
+|-----------|---------|
+| Health | `when health below 30 then heal 15` |
+| Stat / skill | `when skill survival at_least 2 then narrate …` |
+| Property | `when property player_discovered then narrate …` |
+| Chance | `when chance 40 then spawn mist-wisp` (deterministic roll) |
+
+Optional subject prefix on conditions and targeted actions: `actor`, `host`, `target`.
 
 `on_kill` fires on the **victim** (killer as actor) and on the **killer** when the killer has handlers (victim as actor). `on_discovered` runs after perception reveals a hidden creature or object — via `@trigger` on the host (template `on_discovered=` lines are converted automatically at bootstrap). `on_harvest` fires when a player harvests a `harvestable=true` object; attached `@resource-spawner` blocks may drop renewable materials into the room.
 

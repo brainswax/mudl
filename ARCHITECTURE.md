@@ -127,7 +127,7 @@ M4 introduces a builder-facing **`@trigger`** system on places, objects, NPCs, a
 |-----------|------|
 | `trigger_def.rs` | Parse `@trigger <event> <action> [text…]` |
 | `events.rs` | `EventContext`, `attach_triggers`, `execute_event` |
-| `event_script.rs` | Script actions: `narrate`, `emote`, `react`, `damage`, `heal`, `mod-stat`, `teleport`, `spawn` |
+| `event_script.rs` | Script actions: `narrate`, `say`, `emote`, `react`, `damage`/`heal` (with targets), `mod-stat`/`mod-skill`, `set-property`, `grant-effect`, `teleport`, `spawn creature`/`item`, `when`/`if` conditionals, `stop` |
 | **Wired events** | `on_enter`/`on_leave` (movement), `on_take`/`on_drop`/`on_move` (inventory), `on_break`, `on_harvest` (resource nodes), `on_death`/`on_kill` (combat), `on_discovered` (perception + triggers), `on_unlock`/`on_open` (gates, narrative-only) |
 
 **Room entry order** (`Session::go`):

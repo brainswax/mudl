@@ -209,6 +209,7 @@
   prototype=hidden-supply-cache
   location=haunted-moss
   @trigger on_discovered narrate You kneel to inspect the bundle more closely.
+  @trigger on_discovered spawn item trail-rations
 @end
 
 # --- Timed schedules (weather, ambient respawn) ---
@@ -366,6 +367,7 @@ type: area
 base_name: haunted-entry
 name: Tangled Threshold
 description: The trees close like a held breath. Mist beads on your sleeves. Pale motes drift without wind. Every path looks equally inviting and equally wrong.
+@trigger on_enter when skill survival at_least 2 then narrate The threshold feels almost familiar.
 exits:
   north: haunted-moon
   east: haunted-wither
@@ -415,7 +417,7 @@ type: area
 base_name: haunted-heart
 name: Pale Heart of the Wood
 description: The haunted forest kneels here. A ring of roots frames a patch of sky that looks almost ordinary. Something final has been waiting.
-@trigger on_enter heal 5
+@trigger on_enter when health below 60 then heal 10
 @trigger on_enter narrate The wood loosens its grip — you feel steadier on your feet.
 exits:
   south: haunted-ash

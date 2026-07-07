@@ -32,6 +32,7 @@ pub use exits::{
 };
 pub use event_script::{
     execute_host_event, execute_script, parse_script, resolve_place_id, ScriptAction,
+    ScriptCondition, ScriptTarget,
 };
 pub use events::{
     attach_triggers, emit_on_move_event, execute_event, execute_kill_events,

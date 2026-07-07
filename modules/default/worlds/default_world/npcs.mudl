@@ -7,6 +7,7 @@
   @use-behavior guard
   @trigger on_enter say The trees seem to lean closer when you pass.
   @trigger on_kill narrate The forest exhales as the watcher falls.
+  @trigger on_kill grant-effect actor regeneration
   @trigger on_death emote crumples among the roots.
 @end
 
