@@ -2,18 +2,14 @@
 
 use std::collections::HashMap;
 
-use crate::creature::tactics::apply_tactics_from_behaviors;
 use crate::creature::vitality::DEFAULT_MAX_HEALTH;
-use crate::creature::{
-    build_creature_behavior_entries, creature_behaviors_to_property, init_creature_vitality,
-    resolve_behavior_templates,
-};
+use crate::creature::{bootstrap_creature_behavior_system, init_creature_vitality, resolve_behavior_templates};
 use crate::mudl::PlayerTemplate;
 use crate::mudl::{
     AnatomyRegistry, NpcBehaviorDef, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef, SpawnerTrigger,
 };
 use crate::object::{generate_object_id, Object, ObjectId, PermissionFlags, Property, Value};
-use crate::world::events::attach_triggers;
+
 
 /// Result of a spawner tick — optional narrative feedback for the player.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -559,16 +555,13 @@ pub fn spawn_creature(
     npc.set_property_string("spawn_template", &template.base_name);
 
     let behavior_templates = resolve_behavior_templates(spawner);
-    let behavior_entries = build_creature_behavior_entries(
+    bootstrap_creature_behavior_system(
+        &mut npc,
         &template.behaviors,
         &template.use_behaviors,
         &behavior_templates,
+        &template.triggers,
     );
-    if !behavior_entries.is_empty() {
-        npc.add_property(creature_behaviors_to_property(&behavior_entries));
-        apply_tactics_from_behaviors(&mut npc, &behavior_entries, &behavior_templates);
-    }
-    attach_triggers(&mut npc, &template.triggers);
 
     npc
 }

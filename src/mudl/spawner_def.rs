@@ -238,7 +238,7 @@ mod tests {
 @spawn-template mist-wisp
   name=Mist Wisp
   creature=human
-  @behavior on_enter emote drifts through the air.
+  @trigger on_enter emote drifts through the air.
 @end
 @spawner moon-phantoms
   location=haunted-moon
@@ -252,7 +252,8 @@ mod tests {
         let (templates, spawners) = parse_spawner_file(content);
         assert_eq!(templates.len(), 1);
         assert_eq!(templates[0].base_name, "mist-wisp");
-        assert_eq!(templates[0].behaviors.len(), 1);
+        assert_eq!(templates[0].triggers.len(), 1);
+        assert_eq!(templates[0].triggers[0].event, "on_enter");
         assert_eq!(spawners.len(), 1);
         assert_eq!(spawners[0].location, "haunted-moon");
         assert_eq!(spawners[0].entries.len(), 2);
@@ -269,8 +270,11 @@ mod tests {
             .iter()
             .find(|t| t.base_name == "pale-lurker")
             .expect("pale-lurker template");
-        assert_eq!(lurker.triggers.len(), 2);
-        assert_eq!(lurker.triggers[0].event, "on_discovered");
-        assert_eq!(lurker.triggers[0].code, "react attack");
+        assert_eq!(lurker.triggers.len(), 3);
+        assert_eq!(lurker.triggers[0].event, "on_enter");
+        assert_eq!(lurker.triggers[1].event, "on_discovered");
+        assert_eq!(lurker.triggers[1].code, "react attack");
+        assert_eq!(lurker.triggers[2].event, "on_discovered");
+        assert!(lurker.triggers[2].code.contains("lunges from the shadows"));
     }
 }

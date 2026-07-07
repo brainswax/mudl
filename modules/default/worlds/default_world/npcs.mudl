@@ -5,7 +5,7 @@
   creature=human
   location=forest-path
   @use-behavior guard
-  @behavior on_enter say The trees seem to lean closer when you pass.
+  @trigger on_enter say The trees seem to lean closer when you pass.
   @trigger on_kill narrate The forest exhales as the watcher falls.
   @trigger on_death emote crumples among the roots.
 @end

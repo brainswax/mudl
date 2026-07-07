@@ -10,7 +10,8 @@ use crate::creature::tactics::{
 };
 use crate::mudl::AnatomyRegistry;
 use crate::creature::vitality::{apply_damage, creature_health};
-use crate::mudl::{BehaviorTemplateDef, CreatureReact, NpcBehaviorDef};
+use crate::mudl::{BehaviorTemplateDef, CreatureReact, NpcBehaviorDef, TriggerDef};
+use crate::world::event_script::{format_script_line, parse_script, ScriptAction};
 use crate::object::{Object, ObjectId, PermissionFlags, Property, Value};
 
 /// A single behavior entry stored on a creature (`creature_behaviors` property).
@@ -157,9 +158,82 @@ pub fn build_creature_behavior_entries(
         }
     }
     for script in scripts {
-        entries.push(script_to_entry(script));
+        if let Some(entry) = script_to_entry(script) {
+            entries.push(entry);
+        }
     }
     entries
+}
+
+fn behavior_script_code(action: &str, text: &str) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        action.to_string()
+    } else {
+        format!("{action} {text}")
+    }
+}
+
+fn template_script_triggers(template: &BehaviorTemplateDef) -> Vec<TriggerDef> {
+    let mut triggers = Vec::new();
+    if let (Some(action), Some(text)) = (&template.on_enter_action, &template.on_enter_text) {
+        triggers.push(TriggerDef {
+            event: "on_enter".to_string(),
+            code: behavior_script_code(action, text),
+        });
+    }
+    if let (Some(action), Some(text)) = (
+        &template.on_discovered_action,
+        &template.on_discovered_text,
+    ) {
+        triggers.push(TriggerDef {
+            event: "on_discovered".to_string(),
+            code: behavior_script_code(action, text),
+        });
+    }
+    triggers
+}
+
+/// Convert inline `@behavior` scripts and template script lines into `@trigger` definitions.
+pub fn collect_behavior_triggers(
+    scripts: &[NpcBehaviorDef],
+    use_behaviors: &[String],
+    templates: &HashMap<String, BehaviorTemplateDef>,
+) -> Vec<TriggerDef> {
+    let mut triggers = Vec::new();
+    for name in use_behaviors {
+        let Some(template) = templates.get(name) else {
+            continue;
+        };
+        triggers.extend(template_script_triggers(template));
+    }
+    for script in scripts {
+        if script.react.is_none() {
+            triggers.push(TriggerDef {
+                event: script.event.clone(),
+                code: behavior_script_code(&script.action, &script.text),
+            });
+        }
+    }
+    triggers
+}
+
+/// Attach tactics (`creature_behaviors`) and script triggers (`event_handlers`) to a creature.
+pub fn bootstrap_creature_behavior_system(
+    creature: &mut Object,
+    scripts: &[NpcBehaviorDef],
+    use_behaviors: &[String],
+    templates: &HashMap<String, BehaviorTemplateDef>,
+    triggers: &[TriggerDef],
+) {
+    let entries = build_creature_behavior_entries(scripts, use_behaviors, templates);
+    if !entries.is_empty() {
+        creature.add_property(creature_behaviors_to_property(&entries));
+        crate::creature::tactics::apply_tactics_from_behaviors(creature, &entries, templates);
+    }
+    let mut all_triggers = collect_behavior_triggers(scripts, use_behaviors, templates);
+    all_triggers.extend(triggers.iter().cloned());
+    crate::world::events::attach_triggers(creature, &all_triggers);
 }
 
 fn template_to_entry(template: &BehaviorTemplateDef) -> CreatureBehaviorEntry {
@@ -168,8 +242,8 @@ fn template_to_entry(template: &BehaviorTemplateDef) -> CreatureBehaviorEntry {
         template_name: Some(template.base_name.clone()),
         react: Some(template.react),
         event: Some("on_enter".to_string()),
-        action: template.on_enter_action.clone(),
-        text: template.on_enter_text.clone(),
+        action: None,
+        text: None,
         wander_interval: Some(template.wander_interval),
         attack_damage: Some(template.attack_damage),
         awareness_check: template.awareness_check,
@@ -178,18 +252,13 @@ fn template_to_entry(template: &BehaviorTemplateDef) -> CreatureBehaviorEntry {
 }
 
 fn template_to_discovered_entry(template: &BehaviorTemplateDef) -> Option<CreatureBehaviorEntry> {
-    let has_script = template.on_discovered_action.is_some() || template.on_discovered_text.is_some();
-    let has_react = template.on_discovered_react.is_some();
-    if !has_script && !has_react {
-        return None;
-    }
-    Some(CreatureBehaviorEntry {
+    template.on_discovered_react.map(|react| CreatureBehaviorEntry {
         entry_type: "template".to_string(),
         template_name: Some(template.base_name.clone()),
-        react: template.on_discovered_react,
+        react: Some(react),
         event: Some("on_discovered".to_string()),
-        action: template.on_discovered_action.clone(),
-        text: template.on_discovered_text.clone(),
+        action: None,
+        text: None,
         wander_interval: None,
         attack_damage: Some(template.attack_damage),
         awareness_check: None,
@@ -197,33 +266,19 @@ fn template_to_discovered_entry(template: &BehaviorTemplateDef) -> Option<Creatu
     })
 }
 
-fn script_to_entry(script: &NpcBehaviorDef) -> CreatureBehaviorEntry {
-    if let Some(react) = script.react {
-        return CreatureBehaviorEntry {
-            entry_type: "script".to_string(),
-            template_name: None,
-            react: Some(react),
-            event: Some(script.event.clone()),
-            action: None,
-            text: None,
-            wander_interval: None,
-            attack_damage: None,
-            awareness_check: None,
-            perception: None,
-        };
-    }
-    CreatureBehaviorEntry {
+fn script_to_entry(script: &NpcBehaviorDef) -> Option<CreatureBehaviorEntry> {
+    script.react.map(|react| CreatureBehaviorEntry {
         entry_type: "script".to_string(),
         template_name: None,
-        react: None,
+        react: Some(react),
         event: Some(script.event.clone()),
-        action: Some(script.action.clone()),
-        text: Some(script.text.clone()),
+        action: None,
+        text: None,
         wander_interval: None,
         attack_damage: None,
         awareness_check: None,
         perception: None,
-    }
+    })
 }
 
 /// Serialize all behavior templates for attachment to spawner objects.
@@ -517,14 +572,25 @@ pub fn add_behavior_template(creature: &mut Object, template: &BehaviorTemplateD
         entries.push(entry);
     }
     creature.add_property(creature_behaviors_to_property(&entries));
+    crate::world::events::attach_triggers(creature, &template_script_triggers(template));
     true
 }
 
 /// Attach a scripted behavior line at runtime.
 pub fn add_script_behavior(creature: &mut Object, script: &NpcBehaviorDef) {
-    let mut entries = read_creature_behaviors(creature);
-    entries.push(script_to_entry(script));
-    creature.add_property(creature_behaviors_to_property(&entries));
+    if let Some(entry) = script_to_entry(script) {
+        let mut entries = read_creature_behaviors(creature);
+        entries.push(entry);
+        creature.add_property(creature_behaviors_to_property(&entries));
+    } else {
+        crate::world::events::attach_triggers(
+            creature,
+            &[TriggerDef {
+                event: script.event.clone(),
+                code: behavior_script_code(&script.action, &script.text),
+            }],
+        );
+    }
 }
 
 /// List behavior summary lines for builder inspection.
@@ -574,13 +640,18 @@ fn npcs_in_room<'a>(
         .collect()
 }
 
-fn format_script_line(npc: &Object, action: &str, text: &str) -> Option<String> {
-    match action {
-        "say" => Some(format!("{} says, \"{text}\"", npc.name)),
-        "say_to" => Some(text.to_string()),
-        "emote" => Some(format!("{} {text}", npc.name)),
-        _ => None,
-    }
+fn creature_has_speech_trigger(creature: &Object, event: &str) -> bool {
+    creature
+        .event_handlers
+        .get(event)
+        .is_some_and(|handlers| {
+            handlers.iter().any(|behavior| {
+                matches!(
+                    parse_script(&behavior.code),
+                    ScriptAction::Say(_) | ScriptAction::Emote(_)
+                )
+            })
+        })
 }
 
 fn behavior_enter_count(npc: &Object) -> u64 {
@@ -761,24 +832,6 @@ pub fn run_perception_discovery_on_look(
         for id in discovered.dirty {
             outcome.mark_dirty(&id);
         }
-
-        let trigger_outcome = crate::world::execute_host_event(
-            "on_discovered",
-            &crate::world::EventContext {
-                actor_id: player_id.clone(),
-                host_id: npc_id.clone(),
-                room_id: Some(room_id.clone()),
-                target_id: None,
-            },
-            objects,
-            Some(anatomy),
-        );
-        for line in trigger_outcome.lines {
-            outcome.push_line(line);
-        }
-        for id in trigger_outcome.dirty {
-            outcome.mark_dirty(&id);
-        }
     }
 
     outcome
@@ -871,31 +924,47 @@ fn run_creature_behaviors_filtered(
 
         let npc_snapshot = objects.get(&npc_id).cloned().unwrap_or(npc_snapshot);
 
+        let trigger_outcome = crate::world::execute_host_event(
+            event,
+            &crate::world::EventContext {
+                actor_id: player_id.clone(),
+                host_id: npc_id.clone(),
+                room_id: Some(room_id.clone()),
+                target_id: None,
+            },
+            objects,
+            Some(anatomy),
+        );
+        for line in trigger_outcome.lines {
+            outcome.push_line(line);
+        }
+        for id in trigger_outcome.dirty {
+            outcome.mark_dirty(&id);
+        }
+
+        // Legacy `npc_behaviors` / pre-migration script lines without `event_handlers`.
         for entry in &entries {
-            if event == "on_enter" && !aware && uses_awareness_check(&npc_snapshot) {
-                continue;
-            }
-            if entry.react.is_some() && entry.action.is_none() && entry.text.is_none() {
-                continue;
-            }
-            if entry.entry_type == "script" {
-                if let (Some(action), Some(text)) = (&entry.action, &entry.text) {
-                    if let Some(line) = format_script_line(&npc_snapshot, action, text) {
-                        outcome.push_line(line);
-                    }
-                }
-                continue;
-            }
             if let (Some(action), Some(text)) = (&entry.action, &entry.text) {
-                if action != "attack" && action != "flee" {
-                    if let Some(line) = format_script_line(&npc_snapshot, action, text) {
-                        outcome.push_line(line);
-                    }
+                if action == "attack" || action == "flee" {
+                    continue;
+                }
+                let code = behavior_script_code(action, text);
+                if let Some(line) = format_script_line(&npc_snapshot, &parse_script(&code)) {
+                    outcome.push_line(line);
                 }
             }
         }
 
-        let reacts: Vec<CreatureReact> = entries.iter().filter_map(|e| e.react).collect();
+        let reacts: Vec<CreatureReact> = entries
+            .iter()
+            .filter(|entry| {
+                if event == "on_enter" && !aware && uses_awareness_check(&npc_snapshot) {
+                    return false;
+                }
+                entry.react.is_some()
+            })
+            .filter_map(|e| e.react)
+            .collect();
         if reacts.is_empty() {
             continue;
         }
@@ -954,23 +1023,15 @@ fn run_creature_behaviors_filtered(
                     }
                 }
             }
-        } else if reacts.contains(&CreatureReact::Warn) && aware {
-            let already_spoke = entries.iter().any(|e| {
-                e.react == Some(CreatureReact::Warn)
-                    && matches!(e.action.as_deref(), Some("say" | "emote" | "say_to"))
-                    && e.text.as_deref().is_some_and(|t| !t.is_empty())
-            });
-            if !already_spoke {
-                outcome.push_line(format!("{} eyes you warily.", npc_snapshot.name));
-            }
-        } else if reacts.contains(&CreatureReact::Greet) {
-            let already_spoke = entries.iter().any(|e| {
-                matches!(e.action.as_deref(), Some("say" | "emote" | "say_to"))
-                    && e.text.as_deref().is_some_and(|t| !t.is_empty())
-            });
-            if !already_spoke {
-                outcome.push_line(format!("{} greets you.", npc_snapshot.name));
-            }
+        } else if reacts.contains(&CreatureReact::Warn)
+            && aware
+            && !creature_has_speech_trigger(&npc_snapshot, event)
+        {
+            outcome.push_line(format!("{} eyes you warily.", npc_snapshot.name));
+        } else if reacts.contains(&CreatureReact::Greet)
+            && !creature_has_speech_trigger(&npc_snapshot, event)
+        {
+            outcome.push_line(format!("{} greets you.", npc_snapshot.name));
         }
 
         if event == "on_enter" && reacts.contains(&CreatureReact::Wander) {
@@ -1061,19 +1122,20 @@ mod tests {
                 ..BehaviorTemplateDef::default()
             },
         )]);
-        let entries = build_creature_behavior_entries(
-            &[NpcBehaviorDef {
-                event: "on_enter".to_string(),
-                action: "emote".to_string(),
-                text: "narrows its eyes.".to_string(),
-                react: None,
-            }],
+        let scripts = [NpcBehaviorDef {
+            event: "on_enter".to_string(),
+            action: "emote".to_string(),
+            text: "narrows its eyes.".to_string(),
+            react: None,
+        }];
+        let mut watcher = npc("npc:watcher-001", "Watcher", &room);
+        bootstrap_creature_behavior_system(
+            &mut watcher,
+            &scripts,
             &["guard".to_string()],
             &templates,
+            &[],
         );
-        let mut watcher = npc("npc:watcher-001", "Watcher", &room);
-        watcher.add_property(creature_behaviors_to_property(&entries));
-        apply_tactics_from_behaviors(&mut watcher, &entries, &templates);
 
         let anatomy = AnatomyRegistry::default();
         let mut objects = HashMap::from([
@@ -1303,10 +1365,14 @@ mod tests {
                 ..BehaviorTemplateDef::default()
             },
         )]);
-        let entries = build_creature_behavior_entries(&[], &["lurker".to_string()], &templates);
         let mut lurker = npc("npc:lurker-001", "Pale Lurker", &room);
-        lurker.add_property(creature_behaviors_to_property(&entries));
-        apply_tactics_from_behaviors(&mut lurker, &entries, &templates);
+        bootstrap_creature_behavior_system(
+            &mut lurker,
+            &[],
+            &["lurker".to_string()],
+            &templates,
+            &[],
+        );
 
         let anatomy = AnatomyRegistry::default();
         let mut objects = HashMap::from([(player.id.clone(), player), (lurker.id.clone(), lurker)]);

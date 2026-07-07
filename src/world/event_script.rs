@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::creature::behavior::{npc_attack_player, npc_flee_room};
+use crate::creature::behavior::{npc_attack_player, npc_flee_room, read_creature_behaviors};
 use crate::creature::spawner::spawn_creature_from_template;
 use crate::creature::vitality::{apply_damage, heal};
 use crate::mudl::trigger_def::events;
@@ -77,7 +77,11 @@ pub fn parse_script(code: &str) -> ScriptAction {
 pub fn format_script_line(host: &Object, action: &ScriptAction) -> Option<String> {
     let display = host.name.to_lowercase();
     match action {
-        ScriptAction::Narrate(text) | ScriptAction::Say(text) => Some(text.clone()),
+        ScriptAction::Narrate(text) => Some(text.clone()),
+        ScriptAction::Say(text) if host.has_creature_role() => {
+            Some(format!("{} says, \"{text}\"", host.name))
+        }
+        ScriptAction::Say(text) => Some(text.clone()),
         ScriptAction::Emote(text) if host.is_location() => Some(text.clone()),
         ScriptAction::Emote(text) => Some(format!("The {display} {text}")),
         ScriptAction::Raw(text) if !text.is_empty() => Some(text.clone()),
@@ -102,9 +106,19 @@ pub fn execute_script(
         .or_else(|| host.location.clone());
 
     match action {
-        ScriptAction::Narrate(text) | ScriptAction::Say(text) => {
+        ScriptAction::Narrate(text) => {
             if !text.is_empty() {
                 outcome.push_line(text.clone());
+            }
+        }
+        ScriptAction::Say(text) => {
+            if !text.is_empty() {
+                let line = if host.has_creature_role() {
+                    format!("{} says, \"{text}\"", host.name)
+                } else {
+                    text.clone()
+                };
+                outcome.push_line(line);
             }
         }
         ScriptAction::Emote(_) => {
@@ -234,7 +248,18 @@ fn execute_react(
             }
         }
         CreatureReact::Attack => {
-            let damage = 10;
+            let damage = objects
+                .get(host_id)
+                .map(read_creature_behaviors)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter_map(|entry| entry.attack_damage)
+                        .max()
+                        .unwrap_or(10)
+                        .max(1)
+                })
+                .unwrap_or(10);
             if let Some(lines) =
                 npc_attack_player(host_id, actor_id, &room_id, objects, anatomy, damage, false)
             {

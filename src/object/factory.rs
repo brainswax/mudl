@@ -11,10 +11,8 @@
 
 use std::collections::HashMap;
 
-use crate::creature::build_creature_behavior_entries;
-use crate::creature::creature_behaviors_to_property;
+use crate::creature::bootstrap_creature_behavior_system;
 use crate::creature::init_creature_vitality;
-use crate::creature::tactics::apply_tactics_from_behaviors;
 use crate::mudl::{AnatomyRegistry, BehaviorTemplateDef, MudlRoleProps, NpcDef, PlayerTemplate};
 use crate::object::{
     constrain_id_base, generate_object_id, id_base_from_display_name,
@@ -105,13 +103,13 @@ impl<P: Persistence> ObjectFactory<P> {
         if let Some(loc) = location {
             npc.location = Some(loc);
         }
-        let behavior_entries =
-            build_creature_behavior_entries(&def.behaviors, &def.use_behaviors, behavior_templates);
-        if !behavior_entries.is_empty() {
-            npc.add_property(creature_behaviors_to_property(&behavior_entries));
-            apply_tactics_from_behaviors(&mut npc, &behavior_entries, behavior_templates);
-        }
-        crate::world::events::attach_triggers(&mut npc, &def.triggers);
+        bootstrap_creature_behavior_system(
+            &mut npc,
+            &def.behaviors,
+            &def.use_behaviors,
+            behavior_templates,
+            &def.triggers,
+        );
         self.commit(&npc).await?;
         Ok(npc)
     }

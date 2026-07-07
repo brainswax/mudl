@@ -1548,11 +1548,13 @@ mod tests {
             "path watcher should have guard behavior template"
         );
         assert!(
-            entries.iter().any(|e| {
-                e.entry_type == "script"
-                    && e.text.as_deref() == Some("The trees seem to lean closer when you pass.")
-            }),
-            "path watcher should keep inline on_enter script"
+            npc
+                .event_handlers
+                .get("on_enter")
+                .is_some_and(|handlers| handlers.iter().any(|behavior| {
+                    behavior.code.contains("trees seem to lean closer")
+                })),
+            "path watcher on_enter script should be attached as @trigger"
         );
     }
 

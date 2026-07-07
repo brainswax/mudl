@@ -111,7 +111,7 @@ M3 adds living creatures with MUDL-defined personalities, weighted spawns, and t
 | Area | What works |
 |------|------------|
 | **Vitality** | `@stat`, `@skill`, `@effect`, health, encumbrance, equipment regen |
-| **Behaviors** | `@behavior-template`, `@use-behavior`, `@behavior` → `creature_behaviors` property |
+| **Behaviors** | `@behavior-template`, `@use-behavior` → tactics in `creature_behaviors`; scripts via `@trigger` |
 | **Awareness** | Bilateral stealth/perception on enter; hidden lurkers; ambush/surprise damage |
 | **Combat** | `attack <npc>`, initiative, crits, counter-attack, corpses, player respawn at `home_location` |
 | **Spawners** | `@spawn-template` / `@spawner` (on_enter, periodic) — hidden `is_spawner` objects |
@@ -146,7 +146,7 @@ portal prep → on_leave (place) → move player → spawners → loot spawners
 | Items, prototypes | `items.mudl`, `objects.mudl` | Role defaults, weight math |
 | Creature anatomy/stats | `creatures.mudl`, `@effect` | Constitution→health scaling |
 | NPC placement | `npcs.mudl` | — |
-| AI personalities | `behaviors.mudl`, `@behavior` | React execution (flee, attack, wander) |
+| AI personalities | `behaviors.mudl`, `@use-behavior` | React execution (flee, attack, wander) |
 | Spawns / loot tables | `@spawner`, `@loot-spawner` | Weighted pick, chance rolls, counters |
 | Place/object scripts | `@trigger` → `event_handlers` | `event_script` action interpreter |
 | Combat feel | `attack_damage`, stats, gear | Damage formula, crit/surprise rules |
@@ -165,18 +165,16 @@ portal prep → on_leave (place) → move player → spawners → loot spawners
 
 ## Architectural Review — Anti-patterns & Gaps (roll into M4+)
 
-### 1. Dual scripting buses (highest priority)
+### 1. Dual scripting buses — **resolved (M4)**
 
-Creatures today use **two** hook mechanisms:
+Creatures now use a **single script surface** with split storage:
 
-| Mechanism | Storage | Syntax | Executor |
-|-----------|---------|--------|----------|
-| **Creature behaviors** | `creature_behaviors` property | `@behavior`, `@use-behavior` | `run_creature_behaviors()` |
-| **Event triggers** | `event_handlers` map | `@trigger` | `execute_event()` / `event_script` |
+| Layer | Storage | Syntax | Executor |
+|-------|---------|--------|----------|
+| **Scripts** (say, emote, narrate, react via trigger) | `event_handlers` map | `@trigger` (preferred); legacy `@behavior` scripts auto-migrate at bootstrap) | `execute_event()` / `event_script` |
+| **Tactics** (AI personality) | `creature_behaviors` property | `@behavior-template`, `@use-behavior`, `@behavior … react …` | `run_creature_behaviors()` awareness + react |
 
-`on_discovered` runs **both** paths (`behavior.rs` then `execute_host_event`). Builders must learn two vocabularies for overlapping events.
-
-**M4+ recommendation:** Converge on `@trigger` as the single builder surface. Migrate `@behavior` event scripts into `event_handlers` at bootstrap; keep `@behavior-template` for *personality fields* (`react`, `attack_damage`, `awareness_check`) as structured data, not duplicate script lines. Deprecate `creature_behaviors` script entries over time.
+`bootstrap_creature_behavior_system()` converts template `on_enter=` / `on_discovered=` lines and inline `@behavior` say/emote scripts into `@trigger` handlers. `run_creature_behaviors()` calls `execute_host_event()` per creature before running template-driven reacts (flee, attack, wander).
 
 ### 2. Three parallel trigger vocabularies
 
@@ -258,7 +256,7 @@ All three define `on_enter` with different code paths. **M4+ recommendation:** S
 - `LocationRef` enum models the object graph: `Room`, `Inventory`, `Container`, `BodySlot`, `Nowhere`.
 - Properties: key-value data with optional behaviors (`weight`, `volume`, `capacity`, `contents`, `body_slots`, …).
 - Verbs/Behaviors: executable code attached to objects.
-- Events/Hooks: `event_handlers` map on every `Object`; MUDL `@trigger` attaches scripts. `MoveManager` fires `on_move` via `emit_on_move_event`. Creature `@behavior` scripts remain a parallel path (see review §4.1).
+- Events/Hooks: `event_handlers` map on every `Object`; MUDL `@trigger` attaches scripts for places, items, and creatures. `MoveManager` fires `on_move` via `emit_on_move_event`. Creature tactics (awareness, react) run through `run_creature_behaviors()` after per-creature `execute_host_event()` (see §4.1).
 - Prototype/parent system for inheritance and stackable/identical items.
 
 ### 2. DSL Interpreter
@@ -476,7 +474,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 | Priority | Task | Rationale |
 |----------|------|-----------|
-| **P0** | Unify creature `@behavior` scripts into `@trigger` / single executor | Eliminates dual-bus confusion (§4.1) |
+| ~~**P0**~~ | ~~Unify creature `@behavior` scripts into `@trigger` / single executor~~ | Done — §4.1 |
 | **P0** | Route spawner + loot dispatch through event bus | One `on_enter` vocabulary (§4.2) |
 | **P1** | `gate_events` → `execute_event` (mutating door scripts) | §4.3 |
 | **P1** | Align `@trigger react attack` with `attack_damage` | §4.4 |

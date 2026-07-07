@@ -91,7 +91,7 @@ Named triggers that run scripted lines when something happens in the world. Buil
 | `teleport` | `teleport haunted-entry` | Move actor to a place `base_name` |
 | `spawn` | `spawn mist-wisp` | Spawn NPC from a `@spawn-template` in the world |
 
-`on_kill` fires on the **victim** (killer as actor) and on the **killer** when the killer has handlers (victim as actor). `on_discovered` runs after perception reveals a hidden creature — on both `@behavior` entries and `@trigger` scripts.
+`on_kill` fires on the **victim** (killer as actor) and on the **killer** when the killer has handlers (victim as actor). `on_discovered` runs after perception reveals a hidden creature — via `@trigger` on the creature (template `on_discovered=` lines are converted automatically at bootstrap).
 
 ```mudl
 # Place trigger (legacy map block)
@@ -119,7 +119,7 @@ exits:
 @end
 ```
 
-Creature `@behavior` scripts (spawners, NPCs) remain separate — they drive AI reacts and hidden-creature discovery. `@trigger` is for **world objects and rooms** that builders want to script without code.
+Use **`@trigger`** for all creature scripts (say, emote, narrate, react). `@behavior-template` / `@use-behavior` supply AI tactics (`react`, `attack_damage`, `awareness_check`); inline `@behavior … react …` still works for react-only overrides. Legacy `@behavior on_enter say …` is migrated to triggers at bootstrap but prefer `@trigger` in new content.
 ### 5. Built-in Primitives
 * say(msg), tell(player, msg)
 * move(thing, destination)
@@ -356,11 +356,11 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
 ```
 
 - `react` — how the creature responds when a player enters: `ignore`/`passive`, `warn`/`guard`, `attack`/`aggressive`, `flee`/`skittish`, `wander`/`roam`.
-- `on_enter` — optional scripted line (`say`, `emote`, `say_to`) fired alongside the react.
+- `on_enter` / `on_discovered` — optional scripted lines (`say`, `emote`) converted to `@trigger` handlers at bootstrap, fired alongside the react.
 - `attack_damage` — damage dealt on `attack` react (default 8).
 - `wander_interval` — emote every N player entries for `wander` react (default 3).
 
-Creatures support **multiple simultaneous behaviors** — combine `@use-behavior` templates with inline `@behavior` scripts for unique personalities.
+Creatures support **multiple simultaneous behaviors** — combine `@use-behavior` templates with `@trigger` scripts for unique personalities.
 
 **NPCs and behaviors**:
 
@@ -370,11 +370,11 @@ Creatures support **multiple simultaneous behaviors** — combine `@use-behavior
   creature=human
   location=forest-path
   @use-behavior guard
-  @behavior on_enter say The trees seem to lean closer when you pass.
+  @trigger on_enter say The trees seem to lean closer when you pass.
 @end
 ```
 
-Supported script actions: `say`, `say_to`, `emote`. `on_enter` runs when a player enters the NPC's room.
+Supported trigger actions: `say`, `emote`, `narrate`, `react`. `on_enter` runs when a player enters the NPC's room.
 
 Builders can attach templates at runtime: `@addbehavior <creature> <template>`, `@listbehaviors <creature>`.
 
@@ -390,7 +390,7 @@ Player command: `attack <creature>` — turn-based melee in the current room.
 - **Critical hits** — surprise attacks (unaware target) always land as critical blows with bonus damage. Skilled fighters (`combat` 4+) can occasionally score a critical on aware targets.
 - **Awareness** — templates with `awareness_check=true` (default for `react=attack`) run bilateral contests on room entry: player `stealth` vs creature `perception`, and player `survival`/wisdom vs creature ambush stealth. Unaware mobs skip attack/warn reactions; you may see `The pale lurker hasn't noticed you.` or `You spot the pale lurker before it sees you.`
 - **Hidden lurkers** — creatures with `awareness_check=true` stay hidden from `look` until you discover them. `look` and `examine` run a perception check (`survival`, wisdom, dexterity vs ambush stealth). Success: `You notice a pale lurker here.` and any `on_discovered` behaviors fire.
-- **on_discovered** — builder hook when a hidden creature is revealed: `@behavior on_discovered emote ...`, `@behavior on_discovered react flee`, or template `on_discovered=say ...` / `on_discovered_react=attack`. Supports `attack`, `flee`, `warn`, `greet`, and scripted lines.
+- **on_discovered** — builder hook when a hidden creature is revealed: `@trigger on_discovered emote ...`, `@trigger on_discovered react flee`, or template `on_discovered=emote ...` / `on_discovered_react=attack`. Supports `attack`, `flee`, `warn`, `greet`, and scripted lines.
 - **Ambush** — if a lurking creature spots you first but you don't spot it, you may see `A pale lurker ambushes you!` and take surprise damage on its on-enter attack.
 - **Surprise** — attacking an unaware creature adds bonus damage and grants the first strike (`You catch the pale lurker off guard and strike`). If you are unaware, the creature strikes first with bonus damage.
 - **Initiative** — each exchange compares `dexterity`, optional `speed`, and `combat` skill; the faster combatant acts first (`The path watcher is quicker and strikes` when they win initiative).
@@ -424,7 +424,7 @@ Wizard vitals (testing): `@damage <creature> [amount]`, `@heal <creature> [amoun
   name=Mist Wisp
   creature=human
   @use-behavior wanderer
-  @behavior on_enter emote drifts through the air.
+  @trigger on_enter emote drifts through the air.
 @end
 
 @spawner haunted-moon-phantoms

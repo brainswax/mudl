@@ -178,14 +178,14 @@
 @spawn-template mist-wisp
   name=Mist Wisp
   creature=human
-  @behavior on_enter emote drifts through the silvered air without sound.
+  @trigger on_enter emote drifts through the silvered air without sound.
 @end
 
 @spawn-template pale-lurker
   name=Pale Lurker
   creature=human
   @use-behavior lurker
-  @behavior on_enter emote watches you from between the trees.
+  @trigger on_enter emote watches you from between the trees.
   @trigger on_discovered react attack
   @trigger on_discovered emote lunges from the shadows.
 @end
