@@ -106,6 +106,11 @@ pub fn refresh_effect_derived_properties(creature: &mut Object, anatomy: &Anatom
     } else {
         creature.set_int_map("stat_mods", mods.stat_mods.clone());
     }
+    if mods.skill_mods.is_empty() {
+        creature.properties.remove("skill_mods");
+    } else {
+        creature.set_int_map("skill_mods", mods.skill_mods.clone());
+    }
     creature.add_property(Property {
         name: "effect_mod_encumbrance".to_string(),
         value: Value::Float(mods.encumbrance_factor),
@@ -144,7 +149,7 @@ mod tests {
             mod_max_weight: -5,
             mod_encumbrance: 1.1,
             stat_mods: HashMap::from([("dexterity".to_string(), -2)]),
-            skill_mods: HashMap::new(),
+            skill_mods: HashMap::from([("stealth".to_string(), -1)]),
             regen_on_enter: 0,
         }
     }
@@ -194,6 +199,11 @@ mod tests {
             creature.get_int_map("stat_mods").get("dexterity").copied(),
             Some(-2)
         );
+        assert_eq!(
+            creature.get_int_map("skill_mods").get("stealth").copied(),
+            Some(-1)
+        );
+        assert_eq!(crate::creature::vitality::creature_skill(&creature, "stealth"), -1);
         remove_effect(&mut creature, "weary", &anatomy);
         assert!(active_effects(&creature).is_empty());
     }

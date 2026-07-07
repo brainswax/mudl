@@ -31,7 +31,7 @@ use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
 use mudl::persistence::{Persistence, SqlitePersistence};
 use mudl::repl::Session;
-use mudl::world::movement_from_line;
+use mudl::world::{exit_index, movement_from_line};
 use mudl::world::place_builder::DigRequest;
 use tracing::{error, info, warn};
 
@@ -331,11 +331,11 @@ async fn main() -> Result<()> {
                     println!("Usage: go <direction>  (or just: north, around, in, …)");
                     continue;
                 }
-                let room_exits = session
+                let exit_index = session
                     .current_location()
                     .and_then(|loc| session.object(loc))
-                    .map(|room| room.get_exits());
-                if let Some(dir) = movement_from_line(cmd, &parts[1..], room_exits.as_ref()) {
+                    .map(exit_index::ExitIndex::from_place);
+                if let Some(dir) = movement_from_line(cmd, &parts[1..], exit_index.as_ref()) {
                     match session.go(&dir) {
                         Ok(msg) => {
                             println!("{msg}");
@@ -1178,6 +1178,7 @@ async fn main() -> Result<()> {
                                     &link_cmd.direction,
                                     &target_id,
                                     link_cmd.reciprocal,
+                                    link_cmd.return_exit.as_deref(),
                                 ) {
                                     Ok(notes) => {
                                         println!("{}", narrate_link(&notes));

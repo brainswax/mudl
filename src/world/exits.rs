@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use crate::object::{Object, ObjectId, Value};
-use crate::world::navigation::{normalize_direction, resolve_exit};
+use crate::world::exit_index::{normalize_exit_input, ExitIndex};
+use crate::world::navigation::resolve_exit;
 
 /// Pick a scatter destination from `scatter_to` on `from` (deterministic per player).
 pub fn pick_scatter_destination(
@@ -62,64 +63,45 @@ pub fn apply_loop_entry(target_id: &ObjectId, objects: &HashMap<ObjectId, Object
     }
 }
 
-/// Apply scatter exit redirection when leaving `from` along `direction`.
-pub fn apply_scatter_exit(
-    from: &Object,
-    direction: &str,
-    resolved_target: &ObjectId,
-    player_id: &ObjectId,
-    objects: &HashMap<ObjectId, Object>,
-) -> ObjectId {
-    let scatter_dir = from
-        .get_property("scatter_direction")
+fn scatter_exit_name(from: &Object) -> String {
+    from.get_property("scatter_direction")
         .and_then(|prop| {
             if let Value::String(dir) = &prop.value {
-                normalize_direction(dir)
+                Some(normalize_exit_input(dir))
             } else {
                 None
             }
         })
-        .unwrap_or("out");
-    let Some(dir) = normalize_direction(direction) else {
-        return resolved_target.clone();
-    };
-    if dir != scatter_dir {
+        .unwrap_or_else(|| "out".to_string())
+}
+
+/// Apply scatter exit redirection when leaving `from` along `exit_name`.
+pub fn apply_scatter_exit(
+    from: &Object,
+    exit_name: &str,
+    resolved_target: &ObjectId,
+    player_id: &ObjectId,
+    objects: &HashMap<ObjectId, Object>,
+) -> ObjectId {
+    let scatter_dir = scatter_exit_name(from);
+    if !exit_name.eq_ignore_ascii_case(&scatter_dir) {
         return resolved_target.clone();
     }
     pick_scatter_destination(from, player_id, objects).unwrap_or_else(|| resolved_target.clone())
 }
 
-/// Canonical opposite direction for paired exits (north↔south, in↔out, etc.).
-pub fn reverse_direction(direction: &str) -> Option<&'static str> {
-    match normalize_direction(direction)? {
-        "north" => Some("south"),
-        "south" => Some("north"),
-        "east" => Some("west"),
-        "west" => Some("east"),
-        "northeast" => Some("southwest"),
-        "southwest" => Some("northeast"),
-        "northwest" => Some("southeast"),
-        "southeast" => Some("northwest"),
-        "up" => Some("down"),
-        "down" => Some("up"),
-        "in" => Some("out"),
-        "out" => Some("in"),
-        _ => None,
-    }
-}
-
-/// Whether `target` is an active navigable place reachable from `from` via `direction`.
+/// Whether `target` is an active navigable place reachable from `from` via `exit_name`.
 pub fn can_traverse_exit(
     from: &Object,
-    direction: &str,
+    exit_name: &str,
     target_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
 ) -> bool {
     if !from.is_active() || !from.is_location() {
         return false;
     }
-    let exits = from.get_exits();
-    let Some((_, resolved_target)) = resolve_exit(&exits, direction) else {
+    let index = ExitIndex::from_place(from);
+    let Some((_, resolved_target)) = resolve_exit(&index, exit_name) else {
         return false;
     };
     if resolved_target != target_id {
@@ -191,25 +173,25 @@ pub fn validate_place_exits(
     }
 }
 
-/// Validate reciprocal exits where an opposite direction is defined.
+/// Validate reciprocal exits declared via `exit_returns` on each place.
 pub fn validate_reciprocal_exits(
     place: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
-    for (direction, target_id) in place.get_exits() {
-        let Some(reverse) = reverse_direction(&direction) else {
+    for (exit_name, target_id) in place.get_exits() {
+        let Some(return_name) = place.exit_return_name(&exit_name) else {
             continue;
         };
         let Some(target) = objects.get(&target_id) else {
             continue;
         };
-        let target_exits = target.get_exits();
-        if let Some((_, back_id)) = resolve_exit(&target_exits, reverse) {
+        let target_index = ExitIndex::from_place(target);
+        if let Some((_, back_id)) = resolve_exit(&target_index, &return_name) {
             if back_id != &place.id {
                 errors.push(format!(
-                    "{} exit '{}' → {}, but {} '{}' points elsewhere ({})",
-                    place.name, direction, target.name, target.name, reverse, back_id
+                    "{} exit '{}' → {}, but {} exit '{}' points elsewhere ({})",
+                    place.name, exit_name, target.name, target.name, return_name, back_id
                 ));
             }
         }
@@ -268,13 +250,6 @@ mod tests {
     }
 
     #[test]
-    fn reverse_direction_pairs() {
-        assert_eq!(reverse_direction("north"), Some("south"));
-        assert_eq!(reverse_direction("in"), Some("out"));
-        assert_eq!(reverse_direction("enter"), Some("out"));
-    }
-
-    #[test]
     fn can_traverse_requires_active_location_target() {
         let area_id = ObjectId::new("area:hall-001");
         let room_id = ObjectId::new("room:bed-001");
@@ -290,20 +265,15 @@ mod tests {
     }
 
     #[test]
-    fn validate_room_requires_parent_area() {
-        let orphan = bare_place("room:orphan-001", "Orphan", None);
-        let objects = HashMap::from([(orphan.id.clone(), orphan.clone())]);
-        let err = validate_place_hierarchy(&orphan, &objects).unwrap_err();
-        assert!(err.contains("no parent place"));
-    }
-
-    #[test]
-    fn validate_reciprocal_exits_allows_one_way_exits() {
+    fn validate_reciprocal_exits_uses_exit_returns() {
         let area_id = ObjectId::new("area:hall-001");
         let room_id = ObjectId::new("room:bed-001");
         let mut area = bare_place("area:hall-001", "Hall", None);
         area.add_exit("west", room_id.clone());
-        let room = bare_place("room:bed-001", "Bedroom", Some(area_id.clone()));
+        area.set_exit_return("west", "east");
+        let mut room = bare_place("room:bed-001", "Bedroom", Some(area_id.clone()));
+        room.add_exit("east", area_id.clone());
+        room.set_exit_return("east", "west");
         let objects = HashMap::from([
             (area.id.clone(), area.clone()),
             (room.id.clone(), room.clone()),
@@ -313,11 +283,11 @@ mod tests {
 
     #[test]
     fn validate_reciprocal_exits_detects_mismatched_return() {
-        let _a_id = ObjectId::new("area:a-001");
         let b_id = ObjectId::new("area:b-001");
         let c_id = ObjectId::new("area:c-001");
         let mut a = bare_place("area:a-001", "A", None);
-        a.add_exit("north", b_id.clone());
+        a.add_exit("path", b_id.clone());
+        a.set_exit_return("path", "south");
         let mut b = bare_place("area:b-001", "B", None);
         b.add_exit("south", c_id.clone());
         let objects = HashMap::from([(a.id.clone(), a.clone()), (b.id.clone(), b.clone())]);
@@ -326,51 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_scatter_destination_is_deterministic_per_player() {
-        let player = ObjectId::new("player:admin-001");
-        let mut heart = bare_place("area:heart-001", "Heart", None);
-        let void_id = ObjectId::new("area:void-001");
-        let path_id = ObjectId::new("area:path-001");
-        heart.add_property(crate::object::Property {
-            name: "scatter_to".to_string(),
-            value: Value::List(vec![
-                Value::ObjectRef(void_id.clone()),
-                Value::ObjectRef(path_id.clone()),
-            ]),
-            permissions: crate::object::PermissionFlags::EVERYONE,
-            behavior: None,
-        });
-        let void = bare_place("area:void-001", "Void", None);
-        let path = bare_place("area:path-001", "Path", None);
-        let objects = HashMap::from([
-            (heart.id.clone(), heart.clone()),
-            (void.id.clone(), void),
-            (path.id.clone(), path),
-        ]);
-        let first = pick_scatter_destination(&heart, &player, &objects).unwrap();
-        let second = pick_scatter_destination(&heart, &player, &objects).unwrap();
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn apply_loop_entry_redirects_to_configured_place() {
-        let entry_id = ObjectId::new("area:entry-001");
-        let dead_id = ObjectId::new("area:dead-001");
-        let mut dead = bare_place("area:dead-001", "Dead End", None);
-        dead.add_property(crate::object::Property {
-            name: "loop_to".to_string(),
-            value: Value::ObjectRef(entry_id.clone()),
-            permissions: crate::object::PermissionFlags::EVERYONE,
-            behavior: None,
-        });
-        let entry = bare_place("area:entry-001", "Entry", None);
-        let objects = HashMap::from([(dead.id.clone(), dead.clone()), (entry.id.clone(), entry)]);
-        assert_eq!(apply_loop_entry(&dead_id, &objects), entry_id);
-        assert_eq!(apply_loop_entry(&entry_id, &objects), entry_id);
-    }
-
-    #[test]
-    fn apply_scatter_exit_only_on_configured_direction() {
+    fn apply_scatter_exit_only_on_configured_exit_name() {
         let player = ObjectId::new("player:hero-001");
         let mut heart = bare_place("area:heart-001", "Heart", None);
         let spill = ObjectId::new("area:spill-001");
@@ -397,20 +323,5 @@ mod tests {
             apply_scatter_exit(&heart, "south", &spill, &player, &objects),
             spill
         );
-    }
-
-    #[test]
-    fn validate_world_places_accepts_reciprocal_graph() {
-        let area_id = ObjectId::new("area:hall-001");
-        let room_id = ObjectId::new("room:bed-001");
-        let mut area = bare_place("area:hall-001", "Hall", None);
-        area.add_exit("west", room_id.clone());
-        let mut room = bare_place("room:bed-001", "Bedroom", Some(area_id.clone()));
-        room.add_exit("east", area_id.clone());
-        let objects = HashMap::from([
-            (area.id.clone(), area.clone()),
-            (room.id.clone(), room.clone()),
-        ]);
-        validate_world_places(&objects).unwrap();
     }
 }

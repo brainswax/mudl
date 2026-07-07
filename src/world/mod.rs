@@ -2,6 +2,7 @@ pub mod bootstrap;
 pub mod container_fit;
 pub mod dirty;
 pub mod door;
+pub mod exit_index;
 pub mod exits;
 pub mod gate_events;
 pub mod module;
@@ -16,10 +17,10 @@ pub mod stack_transfer;
 pub use bootstrap::bootstrap_world;
 pub use dirty::{persist_dirty, DirtyTracker};
 pub use door::{door_for_direction, door_passage_block, door_permits_exit, DoorBlock};
+pub use exit_index::{normalize_exit_input, ExitIndex};
 pub use exits::{
     apply_loop_entry, apply_scatter_exit, can_traverse_exit, pick_scatter_destination,
-    reverse_direction, validate_place_exits, validate_place_hierarchy, validate_reciprocal_exits,
-    validate_world_places,
+    validate_place_exits, validate_place_hierarchy, validate_reciprocal_exits, validate_world_places,
 };
 pub use gate_events::run_gate_event_handlers;
 pub use module::{active_module_dir, bundle_module, list_universe_files, ModuleManifest};
@@ -28,8 +29,8 @@ pub use move_manager::{
     resolve_location, MoveContext, MoveError, MoveEvent, MoveHooks, MoveResult,
 };
 pub use navigation::{
-    exit_directions, is_direction_verb, movement_direction_from_line, movement_from_line,
-    movement_input, normalize_direction, resolve_exit,
+    exit_directions, exit_index, movement_direction_from_line, movement_from_line, movement_input,
+    resolve_exit, resolve_exit_map,
 };
 pub use place_builder::{
     apply_dig_result, dig_place, link_exit, link_places, unlink_exit, DigOptions, DigRequest,

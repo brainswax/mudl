@@ -183,7 +183,7 @@
 @spawn-template pale-lurker
   name=Pale Lurker
   creature=human
-  @use-behavior aggressive
+  @use-behavior lurker
   @behavior on_enter emote watches you from between the trees.
 @end
 

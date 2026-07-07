@@ -207,6 +207,12 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
   max_health=100
   base_max_weight=90
   @stat strength 10
+  @stat dexterity 10
+  @stat constitution 10
+  @stat intelligence 10
+  @skill combat 0
+  @skill stealth 0
+  @skill crafting 0
   @skill survival 0
   @slot left_hand capacity=1 type=grasp hands=1
 @end
@@ -215,12 +221,19 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
   mod_encumbrance=1.1
   mod_max_weight=-5
   mod_stat_dexterity=-2
+  mod_skill_stealth=-1
 @end
 ```
 
-- `base_max_weight` plus `strength` sets starting carry capacity at bootstrap.
-- `@effect` defines reusable conditions; creatures track `active_effects` at runtime.
-- `@slot` may set `effect=` for slot-tagged body-plan conditions (future wound hooks).
+- **`@stat` / `@skill`** — free-form names; core stats are `strength`, `dexterity`, `constitution`, `intelligence`, `wisdom`, `charisma`. Core skills include `combat`, `stealth`, `crafting`, `survival`. Builders may define custom stats/skills on any `@creature`.
+- **`max_health`** — template value scaled by constitution: each point above 10 adds 5 max health (constitution 12 → +10 health on a 100 template).
+- **`base_max_weight`** plus effective `strength` sets carry capacity (equipment and effects stack on top).
+- **`@effect`** defines reusable conditions; creatures track `active_effects` at runtime. `mod_stat_*` and `mod_skill_*` apply while active.
+- **`@slot` effect=`** — optional slot-tagged body-plan conditions (future wound hooks).
+
+**`examine self`** shows effective stats and skills (gear and active effects included), e.g. `You are Strength 12 (+2), Constitution 10. Your skills are Combat 1, Survival 1 (+1).`
+
+**Skill progression** — combat awards experience on each hit; every 5 XP advances one skill rank (narrative line when a rank increases).
 
 **Equipment modifiers** (wearable and wielded gear stack):
 
@@ -321,8 +334,11 @@ attack path watcher
 
 Player command: `attack <creature>` — turn-based melee in the current room.
 
-- **Damage** — derived from effective `strength` (stats + equipment), mitigated by target `constitution` and `dexterity`. Wielded gear with stat mods is named in the attack line.
-- **Counter-attack** — NPCs with `react=attack` strike back after your blow, using `attack_damage` from their behavior template when set.
+- **Damage** — derived from effective `strength` and `combat` skill (stats + equipment + effects), mitigated by target `constitution` and `dexterity`. Wielded gear with stat mods is named in the attack line. Successful hits award combat skill XP.
+- **Awareness** — templates with `awareness_check=true` (default for `react=attack`) contest player `stealth` vs creature `perception` on room entry. Unaware mobs skip attack/warn reactions and emotes; you may see `The pale lurker hasn't noticed you.`
+- **Surprise** — attacking an unaware creature adds bonus damage and grants the first strike regardless of initiative.
+- **Initiative** — each exchange compares `dexterity`, optional `speed`, and `combat` skill; the faster combatant acts first (NPC may strike before you when aware and quicker).
+- **Counter-attack** — aware NPCs with `react=attack` strike back after your blow (or first, if they win initiative), using `attack_damage` from their behavior template when set.
 - **NPC death** — creature is removed; a **corpse** container (`is_corpse`) appears in the room holding all worn/wielded gear. `on_kill` loot spawners attached to the NPC fire.
 - **Player death** — your corpse and gear remain where you fell; you respawn **naked** at `home_location` (set from `starting_location` at bootstrap) with full health.
 
@@ -395,6 +411,26 @@ description: You are in a featureless void.
 exits:
   north: north-passage
 ```
+
+Exits are **builder-defined** — any name works (`around`, `path`, `door`, `window`, `in`, `out`). There is no built-in compass vocabulary; shorthand like `n` only works when you declare it.
+
+```mudl
+exits:
+  west: the-void
+  around: cottage-front
+exit_aliases:
+  path: around
+  n: north
+exit_returns:
+  west: east
+  around: rear
+```
+
+- **`exits`** — canonical exit name → destination `base_name`.
+- **`exit_aliases`** — alternate player input → canonical exit name (`path` moves via the `around` exit).
+- **`exit_returns`** — when leaving via an exit, the reciprocal exit name on the destination (used by `@link --return` and world validation).
+
+**Movement**: `go around`, `around` (standalone when unambiguous), or `go path` when `path` is an alias. `look` lists obvious exits as `around (path), west`.
 
 ## Player-Facing Output
 

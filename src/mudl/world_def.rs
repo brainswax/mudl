@@ -8,6 +8,10 @@ pub struct WorldDef {
     pub name: String,
     pub description: Option<String>,
     pub exits: HashMap<String, String>,
+    /// Player-facing alias → canonical exit name on this place.
+    pub exit_aliases: HashMap<String, String>,
+    /// Canonical exit name → return exit name on the destination place.
+    pub exit_returns: HashMap<String, String>,
     pub location: Option<String>,
     pub starting_location: Option<String>,
     /// When set, leaving via `scatter_direction` sends the player to one of these places.
@@ -27,6 +31,8 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
         name: "Unknown".to_string(),
         description: None,
         exits: HashMap::new(),
+        exit_aliases: HashMap::new(),
+        exit_returns: HashMap::new(),
         location: None,
         starting_location: None,
         scatter_to: Vec::new(),
@@ -34,6 +40,8 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
         loop_to: None,
     };
     let mut in_exits = false;
+    let mut in_exit_aliases = false;
+    let mut in_exit_returns = false;
 
     for line in content.lines() {
         let trimmed = line.split(';').next().unwrap_or(line).trim();
@@ -50,6 +58,8 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
                     name: "Unknown".to_string(),
                     description: None,
                     exits: HashMap::new(),
+                    exit_aliases: HashMap::new(),
+                    exit_returns: HashMap::new(),
                     location: None,
                     starting_location: None,
                     scatter_to: Vec::new(),
@@ -57,6 +67,8 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
                     loop_to: None,
                 };
                 in_exits = false;
+                in_exit_aliases = false;
+                in_exit_returns = false;
             }
             continue;
         }
@@ -90,6 +102,20 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
         }
         if trimmed == "exits:" {
             in_exits = true;
+            in_exit_aliases = false;
+            in_exit_returns = false;
+            continue;
+        }
+        if trimmed == "exit_aliases:" {
+            in_exit_aliases = true;
+            in_exits = false;
+            in_exit_returns = false;
+            continue;
+        }
+        if trimmed == "exit_returns:" {
+            in_exit_returns = true;
+            in_exits = false;
+            in_exit_aliases = false;
             continue;
         }
         if trimmed.contains(':') {
@@ -99,6 +125,8 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
                 let value = parts[1].trim().to_string();
                 if key == "scatter_to" || key == "scatter_direction" || key == "loop_to" {
                     in_exits = false;
+                    in_exit_aliases = false;
+                    in_exit_returns = false;
                     match key.as_str() {
                         "scatter_to" => {
                             current.scatter_to = value
@@ -117,7 +145,21 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
                     current.exits.insert(parts[0].trim().to_string(), value);
                     continue;
                 }
+                if in_exit_aliases {
+                    current
+                        .exit_aliases
+                        .insert(parts[0].trim().to_string(), value);
+                    continue;
+                }
+                if in_exit_returns {
+                    current
+                        .exit_returns
+                        .insert(parts[0].trim().to_string(), value);
+                    continue;
+                }
                 in_exits = false;
+                in_exit_aliases = false;
+                in_exit_returns = false;
                 match key.as_str() {
                     "type" => current.obj_type = value,
                     "base_name" => current.base_name = value,
@@ -208,6 +250,16 @@ mod tests {
             interior.exits.get("east").map(String::as_str),
             Some("cottage-pantry")
         );
+
+        let rear = defs.iter().find(|d| d.base_name == "cottage-rear").unwrap();
+        assert_eq!(rear.exit_aliases.get("path").map(String::as_str), Some("around"));
+        assert_eq!(
+            rear.exit_returns.get("around").map(String::as_str),
+            Some("rear")
+        );
+
+        let clearing = defs.iter().find(|d| d.base_name == "the-void").unwrap();
+        assert_eq!(clearing.exit_aliases.get("n").map(String::as_str), Some("north"));
     }
 
     #[test]

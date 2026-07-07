@@ -5,8 +5,10 @@ use std::fmt;
 
 use crate::object::{Object, ObjectFactory, ObjectId, Value};
 use crate::persistence::Persistence;
-use crate::world::exits::{reverse_direction, validate_place_exits, validate_place_hierarchy};
-use crate::world::navigation::normalize_direction;
+use crate::world::exit_index::normalize_exit_input;
+use crate::world::exit_index::ExitIndex;
+use crate::world::exits::{validate_place_exits, validate_place_hierarchy};
+use crate::world::navigation::resolve_exit;
 
 /// Options for `@dig`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -14,6 +16,8 @@ pub struct DigOptions {
     pub place_type: Option<String>,
     pub description: Option<String>,
     pub reciprocal: Option<bool>,
+    /// Exit name on the new place pointing back (required for reciprocal links unless `exit_returns` is set).
+    pub return_exit: Option<String>,
 }
 
 /// Request to dig a new place from an existing one.
@@ -56,9 +60,12 @@ impl fmt::Display for PlaceBuildError {
 
 impl std::error::Error for PlaceBuildError {}
 
-fn canonical_direction(direction: &str) -> Result<&'static str, PlaceBuildError> {
-    normalize_direction(direction)
-        .ok_or_else(|| PlaceBuildError::InvalidDirection(direction.to_string()))
+fn exit_label(direction: &str) -> Result<String, PlaceBuildError> {
+    let label = normalize_exit_input(direction);
+    if label.is_empty() {
+        return Err(PlaceBuildError::InvalidDirection(direction.to_string()));
+    }
+    Ok(label)
 }
 
 fn default_place_type(
@@ -90,35 +97,41 @@ pub fn link_exit(
     to: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> Result<(), PlaceBuildError> {
-    let dir = canonical_direction(direction)?;
+    let dir = exit_label(direction)?;
     if !to.is_active() || !to.is_location() {
         return Err(PlaceBuildError::NotAPlace(to.name.clone()));
     }
-    from.add_exit(dir, to.id.clone());
+    from.add_exit(&dir, to.id.clone());
     validate_place_exits(from, objects)
         .map_err(|errors| PlaceBuildError::Validation(errors.join("; ")))?;
     Ok(())
 }
 
-/// Link exits between two places, optionally adding the reciprocal return.
+/// Link exits between two places, optionally adding a reciprocal return exit on `to`.
 pub fn link_places(
     from: &mut Object,
     to: &mut Object,
     direction: &str,
     objects: &HashMap<ObjectId, Object>,
     reciprocal: bool,
+    return_exit: Option<&str>,
 ) -> Result<Vec<String>, PlaceBuildError> {
-    let dir = canonical_direction(direction)?;
-    link_exit(from, dir, to, objects)?;
+    let dir = exit_label(direction)?;
+    link_exit(from, &dir, to, objects)?;
 
     let mut notes = vec![format!("Linked {} exit '{}' → {}", from.name, dir, to.name)];
 
     if reciprocal {
-        if let Some(reverse) = reverse_direction(dir) {
-            let reverse_exits = to.get_exits();
-            if let Some((_, existing)) =
-                crate::world::navigation::resolve_exit(&reverse_exits, reverse)
-            {
+        let reverse = if let Some(ret) = return_exit {
+            Some(exit_label(ret)?)
+        } else if let Some(ret) = from.exit_return_name(&dir) {
+            Some(exit_label(&ret)?)
+        } else {
+            None
+        };
+        if let Some(reverse) = reverse {
+            let target_index = ExitIndex::from_place(to);
+            if let Some((_, existing)) = resolve_exit(&target_index, &reverse) {
                 if existing != &from.id {
                     notes.push(format!(
                         "Skipped reciprocal '{}' on {} (already points elsewhere)",
@@ -126,7 +139,8 @@ pub fn link_places(
                     ));
                 }
             } else {
-                to.add_exit(reverse, from.id.clone());
+                to.add_exit(&reverse, from.id.clone());
+                from.set_exit_return(&dir, &reverse);
                 validate_place_exits(to, objects)
                     .map_err(|errors| PlaceBuildError::Validation(errors.join("; ")))?;
                 notes.push(format!(
@@ -134,6 +148,11 @@ pub fn link_places(
                     to.name, reverse, from.name
                 ));
             }
+        } else {
+            notes.push(format!(
+                "Skipped reciprocal on {} (set exit_returns or pass --return <exit>)",
+                to.name
+            ));
         }
     }
 
@@ -145,9 +164,13 @@ pub fn unlink_exit(
     from: &mut Object,
     direction: &str,
 ) -> Result<Option<ObjectId>, PlaceBuildError> {
-    let dir = canonical_direction(direction)?;
+    let dir = exit_label(direction)?;
     let exits = from.get_exits();
-    let Some(target_id) = exits.get(dir).cloned() else {
+    let Some(target_id) = exits
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(&dir))
+        .map(|(_, id)| id.clone())
+    else {
         return Err(PlaceBuildError::Validation(format!(
             "{} has no exit '{}'",
             from.name, dir
@@ -155,7 +178,13 @@ pub fn unlink_exit(
     };
     if let Some(prop) = from.properties.get_mut("exits") {
         if let Value::Map(map) = &mut prop.value {
-            map.remove(dir);
+            let key = map
+                .keys()
+                .find(|k| k.eq_ignore_ascii_case(&dir))
+                .cloned();
+            if let Some(key) = key {
+                map.remove(&key);
+            }
         }
     }
     Ok(Some(target_id))
@@ -169,9 +198,13 @@ pub async fn dig_place<P: Persistence>(
     request: DigRequest,
     objects: &HashMap<ObjectId, Object>,
 ) -> Result<DigResult, PlaceBuildError> {
-    let dir = canonical_direction(&request.direction)?;
-    if from.get_exits().contains_key(dir) {
-        return Err(PlaceBuildError::ExitExists(dir.to_string()));
+    let dir = exit_label(&request.direction)?;
+    if from
+        .get_exits()
+        .keys()
+        .any(|name| name.eq_ignore_ascii_case(&dir))
+    {
+        return Err(PlaceBuildError::ExitExists(dir.clone()));
     }
 
     let place_type = default_place_type(from, request.options.place_type.as_deref())?;
@@ -197,9 +230,10 @@ pub async fn dig_place<P: Persistence>(
     let notes = link_places(
         &mut from_updated,
         &mut new_place,
-        dir,
+        &dir,
         &objects_with_new,
         reciprocal,
+        request.options.return_exit.as_deref(),
     )?;
 
     factory
@@ -273,7 +307,7 @@ mod tests {
         let mut b = bare_place("area:b-001", "Forest");
         let objects = HashMap::from([(a.id.clone(), a.clone()), (b.id.clone(), b.clone())]);
 
-        let notes = link_places(&mut a, &mut b, "north", &objects, true).unwrap();
+        let notes = link_places(&mut a, &mut b, "north", &objects, true, Some("south")).unwrap();
         assert!(notes
             .iter()
             .any(|n| n.contains("Linked Clearing exit 'north'")));
@@ -319,6 +353,7 @@ mod tests {
                     place_type: Some("room".to_string()),
                     description: Some("Shelves and jars.".to_string()),
                     reciprocal: Some(true),
+                    return_exit: Some("east".to_string()),
                 },
             },
             &objects,
@@ -361,6 +396,7 @@ mod tests {
                     place_type: Some("area".to_string()),
                     description: Some("Sunlight through the trees.".to_string()),
                     reciprocal: Some(true),
+                    return_exit: Some("south".to_string()),
                 },
             },
             &objects,

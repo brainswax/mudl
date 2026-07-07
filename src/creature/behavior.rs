@@ -2,6 +2,10 @@
 
 use std::collections::HashMap;
 
+use crate::creature::tactics::{
+    is_creature_aware, roll_awareness_on_enter, set_creature_aware, uses_awareness_check,
+};
+use crate::mudl::AnatomyRegistry;
 use crate::creature::vitality::{apply_damage, creature_health};
 use crate::mudl::{BehaviorTemplateDef, CreatureReact, NpcBehaviorDef};
 use crate::object::{Object, ObjectId, PermissionFlags, Property, Value};
@@ -17,6 +21,8 @@ pub struct CreatureBehaviorEntry {
     pub text: Option<String>,
     pub wander_interval: Option<u32>,
     pub attack_damage: Option<i64>,
+    pub awareness_check: Option<bool>,
+    pub perception: Option<i64>,
 }
 
 /// Outcome of running creature behaviors — narrative lines and touched object ids.
@@ -69,6 +75,12 @@ fn behavior_entry_map(entry: &CreatureBehaviorEntry) -> Value {
     if let Some(damage) = entry.attack_damage {
         map.insert("attack_damage".to_string(), Value::Int(damage));
     }
+    if let Some(check) = entry.awareness_check {
+        map.insert("awareness_check".to_string(), Value::Bool(check));
+    }
+    if let Some(perception) = entry.perception {
+        map.insert("perception".to_string(), Value::Int(perception));
+    }
     Value::Map(map)
 }
 
@@ -114,6 +126,14 @@ fn entry_from_map(map: &HashMap<String, Value>) -> Option<CreatureBehaviorEntry>
             Value::Int(n) => Some(*n),
             _ => None,
         }),
+        awareness_check: map.get("awareness_check").and_then(|v| match v {
+            Value::Bool(b) => Some(*b),
+            _ => None,
+        }),
+        perception: map.get("perception").and_then(|v| match v {
+            Value::Int(n) => Some(*n),
+            _ => None,
+        }),
     })
 }
 
@@ -146,6 +166,8 @@ fn template_to_entry(template: &BehaviorTemplateDef) -> CreatureBehaviorEntry {
         text: template.on_enter_text.clone(),
         wander_interval: Some(template.wander_interval),
         attack_damage: Some(template.attack_damage),
+        awareness_check: template.awareness_check,
+        perception: template.perception,
     }
 }
 
@@ -159,6 +181,8 @@ fn script_to_entry(script: &NpcBehaviorDef) -> CreatureBehaviorEntry {
         text: Some(script.text.clone()),
         wander_interval: None,
         attack_damage: None,
+        awareness_check: None,
+        perception: None,
     }
 }
 
@@ -185,6 +209,12 @@ pub fn behavior_templates_to_property(templates: &[BehaviorTemplateDef]) -> Prop
                     Value::Int(template.attack_damage),
                 ),
             ]);
+            if let Some(check) = template.awareness_check {
+                map.insert("awareness_check".to_string(), Value::Bool(check));
+            }
+            if let Some(perception) = template.perception {
+                map.insert("perception".to_string(), Value::Int(perception));
+            }
             if let Some(action) = &template.on_enter_action {
                 map.insert("on_enter_action".to_string(), Value::String(action.clone()));
             }
@@ -261,6 +291,17 @@ pub fn resolve_behavior_templates(host: &Object) -> HashMap<String, BehaviorTemp
                                             _ => None,
                                         })
                                         .unwrap_or(8),
+                                    awareness_check: map.get("awareness_check").and_then(|v| {
+                                        if let Value::Bool(b) = v {
+                                            Some(*b)
+                                        } else {
+                                            None
+                                        }
+                                    }),
+                                    perception: map.get("perception").and_then(|v| match v {
+                                        Value::Int(n) => Some(*n),
+                                        _ => None,
+                                    }),
                                 },
                             ))
                         })
@@ -346,6 +387,8 @@ fn legacy_npc_behaviors(obj: &Object) -> Vec<CreatureBehaviorEntry> {
                                 text: Some(text),
                                 wander_interval: None,
                                 attack_damage: None,
+                                awareness_check: None,
+                                perception: None,
                             })
                         })
                         .collect(),
@@ -496,6 +539,7 @@ pub fn run_creature_behaviors(
     room_id: &ObjectId,
     player_id: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
 ) -> BehaviorOutcome {
     let mut outcome = BehaviorOutcome::default();
     let npc_ids: Vec<ObjectId> = npcs_in_room(room_id, player_id, objects)
@@ -518,7 +562,31 @@ pub fn run_creature_behaviors(
             .filter(|e| e.event.as_deref() == Some(event))
             .collect();
 
+        let mut aware = is_creature_aware(&npc_snapshot);
+        if event == "on_enter" && uses_awareness_check(&npc_snapshot) {
+            if let Some((noticed, line)) = roll_awareness_on_enter(
+                &npc_id,
+                player_id,
+                room_id,
+                tick,
+                objects,
+                anatomy,
+            ) {
+                outcome.push_line(line);
+                aware = noticed;
+                if let Some(npc) = objects.get_mut(&npc_id) {
+                    set_creature_aware(npc, noticed);
+                    outcome.mark_dirty(&npc_id);
+                }
+            }
+        }
+
+        let npc_snapshot = objects.get(&npc_id).cloned().unwrap_or(npc_snapshot);
+
         for entry in &entries {
+            if !aware && uses_awareness_check(&npc_snapshot) {
+                continue;
+            }
             if entry.entry_type == "script" {
                 if let (Some(action), Some(text)) = (&entry.action, &entry.text) {
                     if let Some(line) = format_script_line(&npc_snapshot, action, text) {
@@ -555,7 +623,7 @@ pub fn run_creature_behaviors(
             continue;
         }
 
-        if reacts.contains(&CreatureReact::Attack) {
+        if reacts.contains(&CreatureReact::Attack) && aware {
             let damage = entries
                 .iter()
                 .filter_map(|e| e.attack_damage)
@@ -572,7 +640,7 @@ pub fn run_creature_behaviors(
                     ));
                 }
             }
-        } else if reacts.contains(&CreatureReact::Warn) {
+        } else if reacts.contains(&CreatureReact::Warn) && aware {
             let already_spoke = entries.iter().any(|e| {
                 e.react == Some(CreatureReact::Warn)
                     && matches!(e.action.as_deref(), Some("say" | "emote" | "say_to"))
@@ -609,13 +677,15 @@ pub fn run_on_enter_creature_behaviors(
     room_id: &ObjectId,
     player_id: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
 ) -> BehaviorOutcome {
-    run_creature_behaviors("on_enter", room_id, player_id, objects)
+    run_creature_behaviors("on_enter", room_id, player_id, objects, anatomy)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::creature::tactics::apply_tactics_from_behaviors;
     use crate::mudl::PlayerTemplate;
     use crate::object::PermissionFlags;
 
@@ -680,7 +750,9 @@ mod tests {
         );
         let mut watcher = npc("npc:watcher-001", "Watcher", &room);
         watcher.add_property(creature_behaviors_to_property(&entries));
+        apply_tactics_from_behaviors(&mut watcher, &entries, &templates);
 
+        let anatomy = AnatomyRegistry::default();
         let mut objects = HashMap::from([
             (player.id.clone(), player),
             (watcher.id.clone(), watcher),
@@ -714,7 +786,8 @@ mod tests {
             ),
         ]);
 
-        let outcome = run_creature_behaviors("on_enter", &room, &player_id, &mut objects);
+        let outcome =
+            run_creature_behaviors("on_enter", &room, &player_id, &mut objects, &anatomy);
         assert!(outcome.lines.iter().any(|l| l.contains("narrows its eyes")));
         assert!(outcome.lines.iter().any(|l| l.contains("Halt")));
     }
@@ -737,12 +810,59 @@ mod tests {
         let entries = build_creature_behavior_entries(&[], &["aggressive".to_string()], &templates);
         let mut lurker = npc("npc:lurker-001", "Lurker", &room);
         lurker.add_property(creature_behaviors_to_property(&entries));
+        apply_tactics_from_behaviors(&mut lurker, &entries, &templates);
+        set_creature_aware(&mut lurker, true);
 
+        let anatomy = AnatomyRegistry::default();
         let mut objects = HashMap::from([(player.id.clone(), player), (lurker.id.clone(), lurker)]);
 
-        let outcome = run_creature_behaviors("on_enter", &room, &player_id, &mut objects);
+        let outcome =
+            run_creature_behaviors("on_enter", &room, &player_id, &mut objects, &anatomy);
         assert!(outcome.lines.iter().any(|l| l.contains("attacks you")));
         assert_eq!(creature_health(objects.get(&player_id).unwrap()), 85);
+    }
+
+    #[test]
+    fn unaware_lurker_skips_attack_on_enter() {
+        let room = ObjectId::new("area:haunted-moon-001");
+        let player_id = ObjectId::new("player:hero-001");
+        let mut player = npc("player:hero-001", "Hero", &room);
+        player.set_int_map(
+            "skills",
+            HashMap::from([("stealth".to_string(), 8)]),
+        );
+        player.set_int_map(
+            "stats",
+            HashMap::from([("dexterity".to_string(), 14), ("wisdom".to_string(), 12)]),
+        );
+
+        let templates = HashMap::from([(
+            "lurker".to_string(),
+            BehaviorTemplateDef {
+                base_name: "lurker".to_string(),
+                react: CreatureReact::Attack,
+                attack_damage: 12,
+                awareness_check: Some(true),
+                perception: Some(8),
+                ..BehaviorTemplateDef::default()
+            },
+        )]);
+        let entries = build_creature_behavior_entries(&[], &["lurker".to_string()], &templates);
+        let mut lurker = npc("npc:lurker-001", "Pale Lurker", &room);
+        lurker.add_property(creature_behaviors_to_property(&entries));
+        apply_tactics_from_behaviors(&mut lurker, &entries, &templates);
+
+        let anatomy = AnatomyRegistry::default();
+        let mut objects = HashMap::from([(player.id.clone(), player), (lurker.id.clone(), lurker)]);
+
+        let outcome =
+            run_creature_behaviors("on_enter", &room, &player_id, &mut objects, &anatomy);
+        assert!(outcome
+            .lines
+            .iter()
+            .any(|l| l.contains("hasn't noticed you")));
+        assert!(!outcome.lines.iter().any(|l| l.contains("attacks you")));
+        assert_eq!(creature_health(objects.get(&player_id).unwrap()), 100);
     }
 
     #[test]

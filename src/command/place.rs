@@ -18,6 +18,7 @@ pub struct ParsedLinkCommand {
     pub direction: String,
     pub target: String,
     pub reciprocal: bool,
+    pub return_exit: Option<String>,
 }
 
 /// Parsed `@unlink` command.
@@ -113,6 +114,7 @@ fn parse_dig_options(tokens: &[String]) -> DigOptions {
                 "reciprocal" => {
                     opts.reciprocal = Some(value == "true" || value == "1" || value == "yes");
                 }
+                "return" | "return_exit" => opts.return_exit = Some(value.to_string()),
                 _ => {}
             }
         }
@@ -162,23 +164,35 @@ pub fn parse_link_command(input: &str) -> anyhow::Result<ParsedLinkCommand> {
 
     let tokens: Vec<&str> = rest.split_whitespace().collect();
     let reciprocal = !tokens.contains(&"--one-way");
-    let tokens: Vec<&str> = tokens
-        .into_iter()
-        .filter(|t| *t != "--one-way" && *t != "--reciprocal")
-        .collect();
+    let mut return_exit = None;
+    let mut filtered = Vec::new();
+    let mut i = 0;
+    while i < tokens.len() {
+        if tokens[i] == "--return" {
+            return_exit = tokens.get(i + 1).map(|s| s.to_string());
+            i += 2;
+            continue;
+        }
+        if !matches!(tokens[i], "--one-way" | "--reciprocal") {
+            filtered.push(tokens[i]);
+        }
+        i += 1;
+    }
 
-    match tokens.len() {
+    match filtered.len() {
         2 => Ok(ParsedLinkCommand {
             from: None,
-            direction: tokens[0].to_string(),
-            target: tokens[1].to_string(),
+            direction: filtered[0].to_string(),
+            target: filtered[1].to_string(),
             reciprocal,
+            return_exit,
         }),
         3 => Ok(ParsedLinkCommand {
-            from: Some(tokens[0].to_string()),
-            direction: tokens[1].to_string(),
-            target: tokens[2].to_string(),
+            from: Some(filtered[0].to_string()),
+            direction: filtered[1].to_string(),
+            target: filtered[2].to_string(),
             reciprocal,
+            return_exit,
         }),
         _ => anyhow::bail!(
             "Usage: @link <direction> <target>  or  @link <from> <direction> <target>"

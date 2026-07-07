@@ -236,6 +236,35 @@ impl Object {
         HashMap::new()
     }
 
+    /// Alias → canonical exit name (`exit_aliases` property).
+    pub fn get_exit_aliases(&self) -> HashMap<String, String> {
+        self.get_string_map("exit_aliases")
+    }
+
+    pub fn set_exit_alias(&mut self, alias: &str, exit_name: &str) {
+        let mut map = self.get_exit_aliases();
+        map.insert(alias.to_string(), exit_name.to_string());
+        self.set_string_map("exit_aliases", map);
+    }
+
+    /// Exit name → return exit name on the destination (`exit_returns` property).
+    pub fn get_exit_returns(&self) -> HashMap<String, String> {
+        self.get_string_map("exit_returns")
+    }
+
+    pub fn exit_return_name(&self, exit_name: &str) -> Option<String> {
+        self.get_exit_returns()
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(exit_name))
+            .map(|(_, ret)| ret.clone())
+    }
+
+    pub fn set_exit_return(&mut self, exit_name: &str, return_name: &str) {
+        let mut map = self.get_exit_returns();
+        map.insert(exit_name.to_string(), return_name.to_string());
+        self.set_string_map("exit_returns", map);
+    }
+
     pub fn add_exit(&mut self, direction: &str, target: ObjectId) {
         let exits_prop = self.properties.get_mut("exits");
         if let Some(prop) = exits_prop {
@@ -450,7 +479,11 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
     // In-character `examine`: natural sentences, no leading name, stats when relevant.
     if !brief {
         if obj.object_type() == "npc" && obj.has_creature_role() {
-            return crate::display::creature::format_examine_creature_player(obj, &ctx.anatomy);
+            return crate::display::creature::format_examine_creature_player(
+                obj,
+                &ctx.objects,
+                &ctx.anatomy,
+            );
         }
         if obj.is_container() {
             return crate::display::format_examine_container_player(obj, &ctx.objects);

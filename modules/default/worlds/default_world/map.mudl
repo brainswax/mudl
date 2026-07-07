@@ -5,6 +5,12 @@ description: A small clearing at the edge of nowhere. Packed earth shows recent 
 exits:
   north: forest-path
   east: cottage-rear
+exit_aliases:
+  n: north
+  e: east
+exit_returns:
+  north: south
+  east: west
 
 type: area
 base_name: forest-path
@@ -14,6 +20,12 @@ exits:
   south: the-void
   north: cottage-front
   in: haunted-entry
+exit_aliases:
+  s: south
+  n: north
+exit_returns:
+  south: north
+  north: south
 
 type: area
 base_name: cottage-front
@@ -23,6 +35,12 @@ exits:
   south: forest-path
   in: cottage-interior
   rear: cottage-rear
+exit_aliases:
+  s: south
+exit_returns:
+  south: north
+  in: out
+  rear: around
 
 type: area
 base_name: cottage-rear
@@ -31,6 +49,11 @@ description: You stand in the clutter behind the cottage. A rain barrel, stacked
 exits:
   west: the-void
   around: cottage-front
+exit_aliases:
+  path: around
+exit_returns:
+  west: east
+  around: rear
 
 type: area
 base_name: cottage-interior
@@ -40,6 +63,10 @@ exits:
   out: cottage-front
   west: cottage-bedroom
   east: cottage-pantry
+exit_returns:
+  out: in
+  west: east
+  east: west
 
 type: room
 base_name: cottage-bedroom
@@ -48,6 +75,8 @@ location: cottage-interior
 description: A narrow bedroom with a plain bedframe and a small chest at its foot. The main hall lies east.
 exits:
   east: cottage-interior
+exit_returns:
+  east: west
 
 type: room
 base_name: cottage-pantry
@@ -56,3 +85,5 @@ location: cottage-interior
 description: A cramped pantry with dusty shelves and the smell of old wood. Pots and jars line the walls. The main hall lies west.
 exits:
   west: cottage-interior
+exit_returns:
+  west: east

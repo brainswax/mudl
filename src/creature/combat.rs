@@ -4,7 +4,14 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::creature::behavior::read_creature_behaviors;
-use crate::creature::equipment::{creature_effective_max_health, creature_effective_stat};
+use crate::creature::equipment::{
+    creature_effective_max_health, creature_effective_skill, creature_effective_stat,
+};
+use crate::creature::progression::award_skill_xp;
+use crate::creature::tactics::{
+    is_creature_aware, resolve_strike_order, set_creature_aware, StrikeOrder,
+    SURPRISE_DAMAGE_BONUS,
+};
 use crate::creature::vitality::{
     apply_damage, creature_health, creature_is_defeated, creature_max_health, heal,
 };
@@ -168,14 +175,23 @@ pub fn compute_combat_damage(
     defender: &Object,
     objects: &HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
+    surprise: bool,
 ) -> i64 {
     let strength = creature_effective_stat(attacker, "strength", objects, anatomy);
+    let combat = creature_effective_skill(attacker, "combat", objects, anatomy);
     let constitution = creature_effective_stat(defender, "constitution", objects, anatomy);
     let dexterity = creature_effective_stat(defender, "dexterity", objects, anatomy);
 
-    let attack_power = strength.saturating_add(2).max(3);
+    let attack_power = strength
+        .saturating_add(2)
+        .saturating_add(combat / 2)
+        .max(3);
     let defense = (constitution / 3) + (dexterity / 4);
-    (attack_power - defense).max(1)
+    let mut damage = (attack_power - defense).max(1);
+    if surprise {
+        damage = damage.saturating_add(SURPRISE_DAMAGE_BONUS);
+    }
+    damage
 }
 
 fn wielded_weapon_label(attacker: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
@@ -214,7 +230,7 @@ fn npc_retaliation_damage(
     {
         return damage.max(1);
     }
-    compute_combat_damage(attacker, defender, objects, anatomy)
+    compute_combat_damage(attacker, defender, objects, anatomy, false)
 }
 
 fn next_corpse_index(objects: &HashMap<ObjectId, Object>) -> u32 {
@@ -389,6 +405,7 @@ fn handle_player_death(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_attack_line(
     attacker_name: &str,
     target_name: &str,
@@ -397,15 +414,21 @@ fn format_attack_line(
     after: i64,
     max: i64,
     addressing_self_as_attacker: bool,
+    surprise: bool,
 ) -> String {
     let target = target_name.to_lowercase();
     if addressing_self_as_attacker {
+        let opener = if surprise {
+            format!("You catch {target} unaware and strike")
+        } else {
+            "You strike".to_string()
+        };
         if let Some(weapon) = weapon {
             return format!(
-                "You strike {target} with your {weapon} for {damage} damage ({after}/{max} health)."
+                "{opener} {target} with your {weapon} for {damage} damage ({after}/{max} health)."
             );
         }
-        return format!("You strike {target} for {damage} damage ({after}/{max} health).");
+        return format!("{opener} {target} for {damage} damage ({after}/{max} health).");
     }
     let attacker = attacker_name.to_lowercase();
     format!("{attacker} strikes you for {damage} damage ({after}/{max} health remaining).")
@@ -463,12 +486,55 @@ pub fn attack_creature(
     let mut outcome = AttackOutcome::default();
     let owner = actor.owner.clone();
 
+    let surprise = !is_creature_aware(&target);
+    let order = if surprise {
+        StrikeOrder::ActorFirst
+    } else {
+        resolve_strike_order(&actor, &target, objects, anatomy)
+    };
+
     let weapon = wielded_weapon_label(&actor, objects);
-    let player_damage = compute_combat_damage(&actor, &target, objects, anatomy);
+
+    if order == StrikeOrder::TargetFirst
+        && target.object_type() == "npc"
+        && is_creature_aware(&target)
+    {
+        let npc = objects.get(&target_id).cloned().unwrap();
+        let retaliate = npc_retaliation_damage(&npc, &actor, objects, anatomy);
+        let player_max = creature_effective_max_health(&actor, objects, anatomy);
+        let player = objects.get_mut(actor_id).unwrap();
+        let after = apply_damage(player, retaliate);
+        outcome.mark_dirty(actor_id);
+        mark_dirty(&mut dirty, actor_id);
+        outcome.push_line(format!(
+            "{} acts first and strikes you for {retaliate} damage ({after}/{player_max} health remaining).",
+            npc.name
+        ));
+        if after == 0 {
+            handle_player_death(
+                actor_id,
+                Some(&npc.name),
+                room_id,
+                objects,
+                anatomy,
+                &mut outcome,
+            );
+            for id in &outcome.dirty {
+                mark_dirty(&mut dirty, id);
+            }
+            return Ok(outcome);
+        } else if after * 100 / player_max.max(1) < 25 {
+            outcome.push_line("You stagger from the blow.".to_string());
+        }
+    }
+
+    let player_damage =
+        compute_combat_damage(&actor, &target, objects, anatomy, surprise);
     let target_max = creature_effective_max_health(&target, objects, anatomy);
     {
         let target_mut = objects.get_mut(&target_id).unwrap();
         let after = apply_damage(target_mut, player_damage);
+        set_creature_aware(target_mut, true);
         outcome.mark_dirty(&target_id);
         mark_dirty(&mut dirty, &target_id);
         outcome.push_line(format_attack_line(
@@ -479,7 +545,16 @@ pub fn attack_creature(
             after,
             target_max,
             true,
+            surprise,
         ));
+        if let Some(actor_mut) = objects.get_mut(actor_id) {
+            let xp = if after == 0 { 5 } else { 1 };
+            if let Some(msg) = award_skill_xp(actor_mut, "combat", xp) {
+                outcome.push_line(msg);
+            }
+            outcome.mark_dirty(actor_id);
+            mark_dirty(&mut dirty, actor_id);
+        }
         if after == 0 {
             if target.object_type() == "npc" {
                 handle_npc_death(&target_id, actor_id, room_id, &owner, objects, &mut outcome);
@@ -500,9 +575,11 @@ pub fn attack_creature(
         }
     }
 
-    if target.object_type() == "npc" {
+    if order == StrikeOrder::ActorFirst
+        && target.object_type() == "npc"
+    {
         let npc = objects.get(&target_id).cloned().unwrap();
-        if !creature_is_defeated(&npc) {
+        if !creature_is_defeated(&npc) && is_creature_aware(&npc) {
             let retaliate = npc_retaliation_damage(&npc, &actor, objects, anatomy);
             let player_max = creature_effective_max_health(&actor, objects, anatomy);
             let player = objects.get_mut(actor_id).unwrap();
@@ -749,16 +826,91 @@ mod tests {
             (blade.id.clone(), blade),
         ]);
 
-        let base = compute_combat_damage(&attacker, &defender, &objects, &anatomy);
+        let base = compute_combat_damage(&attacker, &defender, &objects, &anatomy, false);
         let mut bare = attacker.clone();
         bare.set_property_map("body_slots", HashMap::new());
         let objects_bare = HashMap::from([
             (bare.id.clone(), bare.clone()),
             (defender.id.clone(), defender.clone()),
         ]);
-        let unarmed = compute_combat_damage(&bare, &defender, &objects_bare, &anatomy);
+        let unarmed = compute_combat_damage(&bare, &defender, &objects_bare, &anatomy, false);
         assert!(base > unarmed);
         assert!(base >= 6);
+    }
+
+    #[test]
+    fn surprise_damage_bonus_on_unaware_target() {
+        let anatomy = AnatomyRegistry::default();
+        let attacker = creature("player:hero-001", "Hero");
+        let mut defender = creature("npc:lurker-001", "Pale Lurker");
+        defender.set_property_bool("creature_aware", false);
+        let objects = HashMap::from([
+            (attacker.id.clone(), attacker),
+            (defender.id.clone(), defender.clone()),
+        ]);
+        let attacker_ref = objects.get(&ObjectId::new("player:hero-001")).unwrap();
+        let normal = compute_combat_damage(attacker_ref, &defender, &objects, &anatomy, false);
+        let surprise = compute_combat_damage(attacker_ref, &defender, &objects, &anatomy, true);
+        assert_eq!(surprise, normal + SURPRISE_DAMAGE_BONUS);
+    }
+
+    #[test]
+    fn combat_skill_increases_damage() {
+        let anatomy = AnatomyRegistry::default();
+        let novice = creature("player:hero-001", "Hero");
+        let mut veteran = novice.clone();
+        veteran.set_int_map("skills", HashMap::from([("combat".to_string(), 4)]));
+        let defender = creature("npc:watcher-001", "Path Watcher");
+        let novice_map = HashMap::from([
+            (novice.id.clone(), novice.clone()),
+            (defender.id.clone(), defender.clone()),
+        ]);
+        let veteran_map = HashMap::from([
+            (veteran.id.clone(), veteran.clone()),
+            (defender.id.clone(), defender.clone()),
+        ]);
+        let novice_damage =
+            compute_combat_damage(&novice, &defender, &novice_map, &anatomy, false);
+        let veteran_damage =
+            compute_combat_damage(&veteran, &defender, &veteran_map, &anatomy, false);
+        assert!(veteran_damage >= novice_damage);
+    }
+
+    #[test]
+    fn attack_awards_combat_skill_xp() {
+        let actor = ObjectId::new("player:admin-001");
+        let room = ObjectId::new("area:room-001");
+        let mut player = creature("player:admin-001", "Admin");
+        player.location = Some(room.clone());
+        player.set_int_map("skills", HashMap::from([("combat".to_string(), 0)]));
+        let mut watcher = creature("npc:watcher-001", "Path Watcher");
+        watcher.location = Some(room.clone());
+        let watcher_id = watcher.id.clone();
+        let mut objects = HashMap::from([
+            (player.id.clone(), player),
+            (watcher_id.clone(), watcher),
+        ]);
+        let anatomy = AnatomyRegistry::default();
+
+        for _ in 0..5 {
+            let _ = attack_creature(
+                &actor,
+                Some(&room),
+                &mut objects,
+                &anatomy,
+                None,
+                "path watcher",
+            );
+            if creature_health(objects.get(&watcher_id).unwrap()) == 0 {
+                break;
+            }
+        }
+
+        let hero = objects.get(&actor).unwrap();
+        assert!(
+            hero.get_int_map("skills").get("combat").copied().unwrap_or(0) >= 1
+                || hero.get_int_map("skill_xp").get("combat").copied().unwrap_or(0) > 0
+        );
     }
 
     #[test]
@@ -777,6 +929,8 @@ mod tests {
             text: None,
             wander_interval: None,
             attack_damage: Some(12),
+            awareness_check: None,
+            perception: None,
         }]));
         let mut objects = HashMap::from([
             (player.id.clone(), player),
@@ -893,6 +1047,8 @@ mod tests {
             text: None,
             wander_interval: None,
             attack_damage: Some(20),
+            awareness_check: None,
+            perception: None,
         }]));
         let mut objects = HashMap::from([
             (player.id.clone(), player),

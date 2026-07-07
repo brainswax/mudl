@@ -107,9 +107,11 @@ pub fn run_on_enter_behaviors(
     room_id: &ObjectId,
     player_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
+    anatomy: &crate::mudl::AnatomyRegistry,
 ) -> Vec<String> {
     let mut objects = objects.clone();
-    crate::creature::run_on_enter_creature_behaviors(room_id, player_id, &mut objects).lines
+    crate::creature::run_on_enter_creature_behaviors(room_id, player_id, &mut objects, anatomy)
+        .lines
 }
 
 #[cfg(test)]
@@ -159,7 +161,7 @@ mod tests {
         let player = ObjectId::new("player:hero-001");
         let npc = npc_with_behaviors();
         let mut objects = HashMap::from([(npc.id.clone(), npc)]);
-        let lines = run_on_enter_behaviors(&room, &player, &objects);
+        let lines = run_on_enter_behaviors(&room, &player, &objects, &crate::mudl::AnatomyRegistry::default());
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("Path Watcher"));
         assert!(lines[0].contains("trees seem to lean closer"));
@@ -180,6 +182,9 @@ mod tests {
         };
         let player_id = player_obj.id.clone();
         objects.insert(player_id.clone(), player_obj);
-        assert_eq!(run_on_enter_behaviors(&room, &player_id, &objects).len(), 1);
+        assert_eq!(
+            run_on_enter_behaviors(&room, &player_id, &objects, &crate::mudl::AnatomyRegistry::default()).len(),
+            1
+        );
     }
 }

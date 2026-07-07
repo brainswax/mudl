@@ -437,6 +437,12 @@ pub async fn bootstrap_world<P: Persistence>(
                 })?;
                 obj.add_exit(dir, target_id.clone());
             }
+            for (alias, exit_name) in &def.exit_aliases {
+                obj.set_exit_alias(alias, exit_name);
+            }
+            for (exit_name, return_name) in &def.exit_returns {
+                obj.set_exit_return(exit_name, return_name);
+            }
             if !def.scatter_to.is_empty() {
                 let scatter_ids: Vec<Value> = def
                     .scatter_to
@@ -915,6 +921,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forest_clearing_navigation_with_aliases() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let forest_path_id = objects
+            .values()
+            .find(|o| o.name == "Forest Path")
+            .map(|o| o.id.clone())
+            .expect("forest path");
+        let cottage_front_id = objects
+            .values()
+            .find(|o| o.name == "Front of Small Cottage")
+            .map(|o| o.id.clone())
+            .expect("cottage front");
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(start.clone()),
+        );
+
+        session.go("n").unwrap();
+        assert_eq!(session.current_location(), Some(&forest_path_id));
+
+        session.go("s").unwrap();
+        assert_eq!(session.current_location(), Some(&start));
+
+        session.go("north").unwrap();
+        session.go("north").unwrap();
+        assert_eq!(session.current_location(), Some(&cottage_front_id));
+    }
+
+    #[tokio::test]
     async fn cottage_rear_custom_around_exit() {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
@@ -958,6 +1016,13 @@ mod tests {
         assert_eq!(session.current_location(), Some(&cottage_rear_id));
 
         let msg = session.go("around").unwrap();
+        assert!(msg.contains("around"));
+        assert_eq!(session.current_location(), Some(&cottage_front_id));
+
+        session.go("rear").unwrap();
+        assert_eq!(session.current_location(), Some(&cottage_rear_id));
+
+        let msg = session.go("path").unwrap();
         assert!(msg.contains("around"));
         assert_eq!(session.current_location(), Some(&cottage_front_id));
     }
@@ -1532,14 +1597,21 @@ mod tests {
         assert!(self_examine.contains("You feel fit."));
         assert!(self_examine.contains("Strength 10"));
 
-        let npc_examine = format_examine_creature_player(&npc, &world.anatomy);
+        let npc_examine =
+            format_examine_creature_player(&npc, &objects, &world.anatomy);
         assert!(npc_examine.contains("looks fit"));
         assert!(npc_examine.contains("Strength 10"));
 
         let forest_path = ObjectId::new("area:forest-path-001");
         let mut behavior_objects = objects.clone();
         let outcome =
-            run_creature_behaviors("on_enter", &forest_path, &player_id, &mut behavior_objects);
+            run_creature_behaviors(
+                "on_enter",
+                &forest_path,
+                &player_id,
+                &mut behavior_objects,
+                &world.anatomy,
+            );
         assert!(outcome.lines.len() >= 2, "guard + script should both fire");
         assert!(outcome
             .lines

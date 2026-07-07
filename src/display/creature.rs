@@ -1,10 +1,16 @@
 //! Player-facing examine output for creatures (NPCs).
 
+use std::collections::HashMap;
+
 use crate::mudl::AnatomyRegistry;
-use crate::object::Object;
+use crate::object::{Object, ObjectId};
 
 /// In-character `examine` for an NPC or other non-player creature.
-pub fn format_examine_creature_player(obj: &Object, anatomy: &AnatomyRegistry) -> String {
+pub fn format_examine_creature_player(
+    obj: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
+) -> String {
     let mut lines = Vec::new();
     if let Some(creature) = obj.creature_name() {
         lines.push(format!("A {} named {}.", creature, obj.name.to_lowercase()));
@@ -15,9 +21,13 @@ pub fn format_examine_creature_player(obj: &Object, anatomy: &AnatomyRegistry) -
         obj,
         Some(anatomy),
     ));
-    let summary = crate::creature::format_creature_stats_summary(obj);
-    if !summary.is_empty() {
-        lines.push(format!("You gauge: {summary}."));
+    let gauge = crate::creature::format_creature_gauge(
+        obj,
+        |name| crate::creature::creature_effective_stat(obj, name, objects, anatomy),
+        |name| crate::creature::creature_effective_skill(obj, name, objects, anatomy),
+    );
+    if !gauge.is_empty() {
+        lines.push(format!("You gauge: {gauge}."));
     }
     lines.join("\n")
 }
@@ -61,7 +71,7 @@ mod tests {
         });
         init_creature_vitality(&mut watcher, human);
 
-        let output = format_examine_creature_player(&watcher, &anatomy);
+        let output = format_examine_creature_player(&watcher, &HashMap::new(), &anatomy);
         assert!(output.contains("path watcher"));
         assert!(output.contains("looks fit"));
         assert!(output.contains("Strength 10"));

@@ -7,13 +7,22 @@
 
 @behavior-template guard
   react=warn
+  awareness_check=false
   on_enter=say Halt! Who goes there?
 @end
 
 @behavior-template aggressive
   react=attack
+  awareness_check=false
   on_enter=say You should not have come here.
   attack_damage=12
+@end
+
+@behavior-template lurker
+  react=attack
+  awareness_check=true
+  perception=12
+  attack_damage=10
 @end
 
 @behavior-template skittish

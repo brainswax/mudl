@@ -1015,6 +1015,41 @@ impl Object {
             .unwrap_or_default()
     }
 
+    pub fn set_string_map(&mut self, name: &str, map: HashMap<String, String>) {
+        let value_map: HashMap<String, Value> = map
+            .into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect();
+        self.add_property(Property {
+            name: name.to_string(),
+            value: Value::Map(value_map),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+    }
+
+    pub fn get_string_map(&self, name: &str) -> HashMap<String, String> {
+        self.get_property(name)
+            .and_then(|p| {
+                if let Value::Map(map) = &p.value {
+                    Some(
+                        map.iter()
+                            .filter_map(|(k, v)| {
+                                if let Value::String(s) = v {
+                                    Some((k.clone(), s.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
     pub fn set_string_list(&mut self, name: &str, items: Vec<String>) {
         self.add_property(Property {
             name: name.to_string(),

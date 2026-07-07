@@ -46,6 +46,10 @@ pub struct BehaviorTemplateDef {
     pub wander_interval: u32,
     /// Default damage for `attack` react when no script overrides.
     pub attack_damage: i64,
+    /// When true, creature may fail to notice sneaking players on entry.
+    pub awareness_check: Option<bool>,
+    /// Bonus perception for awareness contests (stealth vs notice).
+    pub perception: Option<i64>,
 }
 
 impl Default for BehaviorTemplateDef {
@@ -57,6 +61,8 @@ impl Default for BehaviorTemplateDef {
             on_enter_text: None,
             wander_interval: 3,
             attack_damage: 8,
+            awareness_check: None,
+            perception: None,
         }
     }
 }
@@ -121,6 +127,15 @@ pub fn parse_behavior_file(content: &str) -> Vec<BehaviorTemplateDef> {
                     }
                     "attack_damage" | "damage" => {
                         template.attack_damage = value.parse().unwrap_or(8).max(0);
+                    }
+                    "awareness_check" | "awareness" => {
+                        template.awareness_check = Some(matches!(
+                            value.to_ascii_lowercase().as_str(),
+                            "true" | "yes" | "1"
+                        ));
+                    }
+                    "perception" => {
+                        template.perception = value.parse().ok();
                     }
                     _ => {}
                 }

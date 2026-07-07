@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::object::{Object, ObjectId};
+use crate::world::exit_index::ExitIndex;
 use crate::world::portal::{
     portal_for_direction, portal_kind_label, portal_passage_block, portals_in_room, PortalBlock,
 };
@@ -23,26 +24,38 @@ fn passable_portal_exit_suffix(portal: &Object) -> Option<String> {
     }
 }
 
-fn exit_label(direction: &str, room: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let Some(portal) = portal_for_direction(&room.id, direction, objects) else {
-        return direction.to_string();
-    };
-    if let Some(suffix) = passable_portal_exit_suffix(portal) {
-        return format!("{direction} ({suffix})");
+fn exit_label(
+    direction: &str,
+    index: &ExitIndex,
+    room: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> String {
+    if let Some(portal) = portal_for_direction(&room.id, direction, objects) {
+        if let Some(suffix) = passable_portal_exit_suffix(portal) {
+            return format!("{direction} ({suffix})");
+        }
     }
-    direction.to_string()
+    let aliases: Vec<String> = index
+        .aliases_for(direction)
+        .into_iter()
+        .map(|a| a.to_string())
+        .collect();
+    if aliases.is_empty() {
+        return direction.to_string();
+    }
+    format!("{} ({})", direction, join_natural_list(&aliases))
 }
 
 fn format_exits(room: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let exits = room.get_exits();
-    if exits.is_empty() {
+    let index = ExitIndex::from_place(room);
+    let names = index.exit_names();
+    if names.is_empty() {
         return String::new();
     }
-    let mut dirs: Vec<String> = exits
-        .keys()
-        .map(|dir| exit_label(dir, room, objects))
+    let dirs: Vec<String> = names
+        .into_iter()
+        .map(|dir| exit_label(dir, &index, room, objects))
         .collect();
-    dirs.sort_unstable();
     format!("Obvious exits: {}", dirs.join(", "))
 }
 
@@ -390,6 +403,22 @@ mod tests {
         let output = format_room_look_player(&room, &ctx);
         assert!(output.starts_with("Inside Cottage Interior."));
         assert!(output.contains("narrow bedroom"));
+    }
+
+    #[test]
+    fn room_look_lists_exit_aliases_naturally() {
+        let mut room = bare_room("area:cottage-rear-001", "Behind the Cottage", "Clutter.");
+        room.add_exit("around", ObjectId::new("area:cottage-front-001"));
+        room.add_exit("west", ObjectId::new("area:the-void-001"));
+        room.set_exit_alias("path", "around");
+
+        let mut objects = HashMap::new();
+        objects.insert(room.id.clone(), room.clone());
+
+        let ctx = DisplayContext::new(ObjectId::new("player:hero-001"), DisplayMode::Player)
+            .with_objects(objects);
+        let output = format_room_look_player(&room, &ctx);
+        assert!(output.contains("Obvious exits: around (path), west"));
     }
 
     #[test]

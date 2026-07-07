@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::creature::tactics::apply_tactics_from_behaviors;
 use crate::creature::vitality::DEFAULT_MAX_HEALTH;
 use crate::creature::{
     build_creature_behavior_entries, creature_behaviors_to_property, init_creature_vitality,
@@ -525,6 +526,7 @@ pub fn spawn_creature(
     );
     if !behavior_entries.is_empty() {
         npc.add_property(creature_behaviors_to_property(&behavior_entries));
+        apply_tactics_from_behaviors(&mut npc, &behavior_entries, &behavior_templates);
     }
 
     npc

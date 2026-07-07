@@ -102,11 +102,15 @@ pub fn format_examine_self(
     let identity = format_identity_sentence(&creature, &holding, &wearing);
     let capacity = format_capacity_and_weight(player, objects, plan);
     let health = crate::creature::format_health_clause(player, Some(anatomy));
-    let vitals = crate::creature::format_creature_stats_summary(player);
+    let vitals = crate::creature::format_creature_vitals_summary(
+        player,
+        Some(objects),
+        Some(anatomy),
+    );
     if vitals.is_empty() {
         format!("{identity} {health} {capacity}")
     } else {
-        format!("{identity} {health} You are {vitals}. {capacity}")
+        format!("{identity} {health} {vitals}. {capacity}")
     }
 }
 
@@ -184,7 +188,8 @@ mod tests {
             "You're a human carrying a Rusty Sword and Wooden Sword and wearing a backpack."
         ));
         assert!(output.contains("You feel fit."));
-        assert!(output.contains("Strength 10"));
+        assert!(output.contains("You are Strength 10"));
+        assert!(output.contains("Your skills are Combat 0"));
         assert!(output.contains("carry capacity of 3/10"));
         assert!(!output.contains("Admin"));
     }

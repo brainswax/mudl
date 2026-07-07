@@ -16,7 +16,8 @@ use crate::object::{player_encumbrance_level_with_anatomy, EncumbranceLevel, Obj
 use crate::object::{Object, ObjectId};
 use crate::persistence::Persistence;
 use crate::world::exits::{apply_loop_entry, apply_scatter_exit, can_traverse_exit};
-use crate::world::navigation::{normalize_direction, resolve_exit};
+use crate::world::exit_index::ExitIndex;
+use crate::world::navigation::resolve_exit;
 use crate::world::place_builder::{
     apply_dig_result, dig_place, link_places, unlink_exit, DigRequest, DigResult, PlaceBuildError,
 };
@@ -49,10 +50,7 @@ impl std::fmt::Display for SessionError {
                 write!(f, "The ground shifts beneath you — you are nowhere.")
             }
             Self::PlayerMissing => write!(f, "You seem to have lost yourself."),
-            Self::NoExit(dir) => {
-                let friendly = normalize_direction(dir).unwrap_or(dir.as_str());
-                write!(f, "{}", narrate_no_exit(friendly))
-            }
+            Self::NoExit(dir) => write!(f, "{}", narrate_no_exit(dir)),
             Self::DoorClosed(name) => write!(f, "The {name} is closed."),
             Self::DoorLocked(name) => write!(f, "The {name} is locked."),
             Self::Overloaded => write!(f, "{}", narrate_overloaded()),
@@ -244,8 +242,8 @@ impl Session {
             .ok_or(SessionError::LocationMissing)?
             .clone();
 
-        let exits = room.get_exits();
-        let (dir_label, map_target_id) = resolve_exit(&exits, direction)
+        let index = ExitIndex::from_place(&room);
+        let (dir_label, map_target_id) = resolve_exit(&index, direction)
             .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
 
         if !can_traverse_exit(&room, dir_label, map_target_id, &self.objects) {
@@ -375,6 +373,7 @@ impl Session {
             &target_id,
             &self.player_id,
             &mut self.objects,
+            &self.anatomy,
         );
         for id in behavior_outcome.dirty {
             self.dirty.mark(&id);
@@ -437,6 +436,7 @@ impl Session {
         direction: &str,
         target_id: &ObjectId,
         reciprocal: bool,
+        return_exit: Option<&str>,
     ) -> Result<Vec<String>, PlaceBuildError> {
         let from = self
             .objects
@@ -463,6 +463,7 @@ impl Session {
             direction,
             &self.objects,
             reciprocal,
+            return_exit,
         )?;
         self.dirty.mark(&from_mut.id);
         self.dirty.mark(&target_mut.id);
@@ -488,11 +489,10 @@ impl Session {
             .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
         let removed = unlink_exit(from, direction)?;
         self.dirty.mark(from_id);
-        let dir = crate::world::navigation::normalize_direction(direction).unwrap_or(direction);
         Ok(format!(
             "Removed {} exit '{}'{}",
             from_name,
-            dir,
+            direction,
             removed
                 .and_then(|id| self.objects.get(&id).map(|o| format!(" (was {})", o.name)))
                 .unwrap_or_default()
@@ -600,6 +600,9 @@ mod tests {
         let mut north = bare("room:north-001", "North Passage");
         north.set_property_string("description", "A narrow passage north.");
         north.add_exit("south", room_id.clone());
+        north.set_exit_return("south", "north");
+        room.set_exit_alias("n", "north");
+        room.set_exit_return("north", "south");
 
         persistence.save_object(&player).await.unwrap();
         persistence.save_object(&room).await.unwrap();
@@ -825,6 +828,7 @@ mod tests {
                         place_type: Some("room".to_string()),
                         description: Some("A small side room.".to_string()),
                         reciprocal: Some(true),
+                        return_exit: None,
                     },
                 },
             )

@@ -1,18 +1,18 @@
 //! Health, stats, and skills for creatures (players and NPCs).
 
+use std::collections::HashMap;
+
 use crate::mudl::{AnatomyRegistry, CreatureDef};
-use crate::object::{Object, PermissionFlags, Property, Value};
+use crate::object::{Object, ObjectId, PermissionFlags, Property, Value};
+
+use super::stats::{format_skill_values, format_stat_values, max_health_from_creature_def};
 
 /// Default health when a creature definition omits `max_health`.
 pub const DEFAULT_MAX_HEALTH: i64 = 100;
 
 /// Apply creature-definition defaults to a player or NPC object.
 pub fn init_creature_vitality(creature: &mut Object, def: &CreatureDef) {
-    let max_health = if def.max_health > 0 {
-        def.max_health
-    } else {
-        DEFAULT_MAX_HEALTH
-    };
+    let max_health = max_health_from_creature_def(def);
     creature.set_property_int("health", max_health);
     creature.set_property_int("max_health", max_health);
 
@@ -77,13 +77,19 @@ pub fn creature_stat(creature: &Object, name: &str) -> i64 {
     base.saturating_add(bonus)
 }
 
-/// Named skill rank.
+/// Named skill rank (base + temporary effect bonuses stored in `skill_mods`).
 pub fn creature_skill(creature: &Object, name: &str) -> i64 {
-    creature
+    let base = creature
         .get_int_map("skills")
         .get(name)
         .copied()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let bonus = creature
+        .get_int_map("skill_mods")
+        .get(name)
+        .copied()
+        .unwrap_or(0);
+    base.saturating_add(bonus)
 }
 
 /// Whether a creature has been reduced to zero health.
@@ -91,29 +97,29 @@ pub fn creature_is_defeated(creature: &Object) -> bool {
     creature_health(creature) == 0
 }
 
-/// Compact player-facing summary of core stats and skills.
+/// Compact player-facing summary of core stats and skills (base values only).
 pub fn format_creature_stats_summary(creature: &Object) -> String {
-    format_creature_stats_summary_with_equipment(creature, None, None)
+    format_creature_vitals_summary(creature, None, None)
 }
 
-/// Stats summary including equipment bonuses when `objects` and `anatomy` are provided.
+/// Stats/skills summary including equipment when `objects` and `anatomy` are provided.
 pub fn format_creature_stats_summary_with_equipment(
     creature: &Object,
-    objects: Option<&std::collections::HashMap<crate::object::ObjectId, Object>>,
+    objects: Option<&HashMap<ObjectId, Object>>,
     anatomy: Option<&AnatomyRegistry>,
 ) -> String {
-    let stats = creature.get_int_map("stats");
-    let skills = creature.get_int_map("skills");
-    if stats.is_empty() && skills.is_empty() {
-        return String::new();
-    }
+    format_creature_vitals_summary(creature, objects, anatomy)
+}
 
+/// Player-facing vitals: stats sentence and optional skills sentence.
+pub fn format_creature_vitals_summary(
+    creature: &Object,
+    objects: Option<&HashMap<ObjectId, Object>>,
+    anatomy: Option<&AnatomyRegistry>,
+) -> String {
     let use_equipment = objects.is_some() && anatomy.is_some();
-    let mut parts = Vec::new();
-    let mut stat_names: Vec<_> = stats.keys().collect();
-    stat_names.sort();
-    for name in stat_names {
-        let value = if use_equipment {
+    let stat_effective = |name: &str| {
+        if use_equipment {
             crate::creature::creature_effective_stat(
                 creature,
                 name,
@@ -122,13 +128,10 @@ pub fn format_creature_stats_summary_with_equipment(
             )
         } else {
             creature_stat(creature, name)
-        };
-        parts.push(format!("{} {}", capitalize_stat_name(name), value));
-    }
-    let mut skill_names: Vec<_> = skills.keys().collect();
-    skill_names.sort();
-    for name in skill_names {
-        let value = if use_equipment {
+        }
+    };
+    let skill_effective = |name: &str| {
+        if use_equipment {
             crate::creature::creature_effective_skill(
                 creature,
                 name,
@@ -137,23 +140,17 @@ pub fn format_creature_stats_summary_with_equipment(
             )
         } else {
             creature_skill(creature, name)
-        };
-        parts.push(format!("{} {}", capitalize_stat_name(name), value));
-    }
-    parts.join(", ")
-}
+        }
+    };
 
-fn capitalize_stat_name(name: &str) -> String {
-    name.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    let stats = format_stat_values(creature, stat_effective);
+    let skills = format_skill_values(creature, skill_effective);
+    match (stats.is_empty(), skills.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => format!("You are {stats}"),
+        (true, false) => format!("Your skills are {skills}"),
+        (false, false) => format!("You are {stats}. Your skills are {skills}"),
+    }
 }
 
 /// Third-person health phrase for examining an NPC.
@@ -298,9 +295,9 @@ mod tests {
         let mut creature = bare_creature("player:hero-001");
         init_creature_vitality(&mut creature, &human_def());
         let summary = format_creature_stats_summary(&creature);
-        assert!(summary.contains("Strength 10"));
+        assert!(summary.contains("You are Strength 10"));
         assert!(summary.contains("Dexterity 12"));
-        assert!(summary.contains("Survival 1"));
+        assert!(summary.contains("Your skills are Survival 1"));
     }
 
     #[test]
