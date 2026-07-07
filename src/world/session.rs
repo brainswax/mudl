@@ -2,16 +2,6 @@ use std::collections::HashMap;
 
 use crate::object::{Object, ObjectFactory, ObjectId};
 use crate::persistence::Persistence;
-use crate::world::dirty::DirtyTracker;
-
-/// Deprecated alias — use [`WorldState`](crate::world::WorldState) for the shared graph.
-#[deprecated(note = "use WorldState for the shared graph; PlayerSession for per-connection location")]
-#[derive(Debug, Clone)]
-pub struct WorldSession {
-    pub objects: HashMap<ObjectId, Object>,
-    pub dirty: DirtyTracker,
-}
-
 /// Load all active objects from persistence into an in-memory map.
 pub async fn hydrate_world<P: Persistence>(
     persistence: &P,
@@ -47,21 +37,6 @@ pub async fn restore_world_graph<P: Persistence>(
     persistence: &P,
 ) -> anyhow::Result<HashMap<ObjectId, Object>> {
     hydrate_world(persistence).await
-}
-
-/// Deprecated — use [`WorldState::restore`](crate::world::WorldState::restore) and
-/// [`PlayerSession::restore`](crate::repl::PlayerSession::restore).
-#[deprecated(note = "use WorldState::restore and PlayerSession::restore")]
-pub async fn restore_session<P: Persistence>(
-    persistence: &P,
-    _player_id: ObjectId,
-    _bootstrap_location: Option<ObjectId>,
-) -> anyhow::Result<WorldSession> {
-    let objects = hydrate_world(persistence).await?;
-    Ok(WorldSession {
-        objects,
-        dirty: DirtyTracker::default(),
-    })
 }
 
 /// Resolve start location after bootstrap when the world already exists.
