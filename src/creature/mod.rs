@@ -15,7 +15,8 @@ pub use ai::{npc_behaviors, npcs_in_room, run_on_enter_behaviors, NpcAction, Npc
 pub use behavior::{
     add_behavior_template, add_script_behavior, behavior_templates_to_property,
     bootstrap_creature_behavior_system, build_creature_behavior_entries,
-    collect_behavior_triggers, creature_behaviors_to_property, format_creature_behavior_list,
+    collect_behavior_triggers, creature_attack_damage, creature_behaviors_to_property,
+    format_creature_behavior_list, DEFAULT_ATTACK_DAMAGE,
     read_creature_behaviors, resolve_behavior_templates, run_creature_behaviors,
     run_on_enter_creature_behaviors, run_perception_discovery_on_look, BehaviorOutcome,
     CreatureBehaviorEntry,

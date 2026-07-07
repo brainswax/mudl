@@ -1037,7 +1037,7 @@ fn resolve_gate_target(ctx: &InventoryContext<'_>, name: &str) -> Result<ObjectI
     }
 }
 
-/// Unlock a door or container by resolved ID, firing `on_unlock` handlers after the action line.
+/// Unlock a door or container by resolved ID, firing `on_unlock` via `execute_event`.
 fn unlock_gate(
     ctx: &mut InventoryContext<'_>,
     gate_id: &ObjectId,
@@ -1144,7 +1144,7 @@ fn unlock_gate(
     Ok(lines)
 }
 
-/// Open a door or container by resolved ID, firing `on_open` handlers after the action line.
+/// Open a door or container by resolved ID, firing `on_open` via `execute_event` (full script semantics).
 fn open_gate(
     ctx: &mut InventoryContext<'_>,
     gate_id: &ObjectId,

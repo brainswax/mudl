@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use crate::creature::behavior::{npc_attack_player, npc_flee_room, read_creature_behaviors};
+use crate::creature::behavior::{
+    creature_attack_damage, npc_attack_player, npc_flee_room, DEFAULT_ATTACK_DAMAGE,
+};
 use crate::creature::spawner::spawn_creature_from_template;
 use crate::creature::vitality::{apply_damage, heal};
 use crate::mudl::{AnatomyRegistry, CreatureReact};
@@ -249,16 +251,8 @@ fn execute_react(
         CreatureReact::Attack => {
             let damage = objects
                 .get(host_id)
-                .map(read_creature_behaviors)
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .filter_map(|entry| entry.attack_damage)
-                        .max()
-                        .unwrap_or(10)
-                        .max(1)
-                })
-                .unwrap_or(10);
+                .map(creature_attack_damage)
+                .unwrap_or(DEFAULT_ATTACK_DAMAGE);
             if let Some(lines) =
                 npc_attack_player(host_id, actor_id, &room_id, objects, anatomy, damage, false)
             {
@@ -418,5 +412,89 @@ mod tests {
             objects.get(&player_id).unwrap().location.as_ref(),
             Some(&dest_id)
         );
+    }
+
+    #[test]
+    fn react_attack_uses_creature_attack_damage() {
+        use crate::creature::behavior::{creature_behaviors_to_property, CreatureBehaviorEntry};
+        use crate::mudl::CreatureReact;
+
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:haunted-moon-001");
+        let npc_id = ObjectId::new("npc:lurker-001");
+
+        let mut player = Object {
+            id: player_id.clone(),
+            name: "Hero".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        player.init_creature_role(&crate::mudl::PlayerTemplate {
+            name: "hero".to_string(),
+            creature: "human".to_string(),
+            gender: "neutral".to_string(),
+        });
+        player.set_property_int("health", 100);
+        player.set_property_int("max_health", 100);
+
+        let mut lurker = Object {
+            id: npc_id.clone(),
+            name: "Pale Lurker".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        lurker.init_creature_role(&crate::mudl::PlayerTemplate {
+            name: "lurker".to_string(),
+            creature: "human".to_string(),
+            gender: "neutral".to_string(),
+        });
+        lurker.add_property(creature_behaviors_to_property(&[CreatureBehaviorEntry {
+            entry_type: "template".to_string(),
+            template_name: Some("aggressive".to_string()),
+            react: Some(CreatureReact::Attack),
+            event: Some("on_discovered".to_string()),
+            action: None,
+            text: None,
+            wander_interval: None,
+            attack_damage: Some(15),
+            awareness_check: None,
+            perception: None,
+        }]));
+
+        let mut objects = HashMap::from([
+            (player_id.clone(), player),
+            (npc_id.clone(), lurker.clone()),
+        ]);
+
+        let outcome = execute_script(
+            &lurker,
+            &ScriptAction::React(CreatureReact::Attack),
+            &EventContext {
+                actor_id: player_id.clone(),
+                host_id: npc_id.clone(),
+                room_id: Some(room_id.clone()),
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert!(outcome.lines.iter().any(|l| l.contains("attacks you for 15 damage")));
+        assert_eq!(crate::creature::creature_health(objects.get(&player_id).unwrap()), 85);
     }
 }

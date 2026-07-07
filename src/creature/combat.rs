@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::creature::behavior::read_creature_behaviors;
+use crate::creature::behavior::{creature_attack_damage, read_creature_behaviors};
 use crate::creature::equipment::{
     creature_effective_max_health, creature_effective_skill, creature_effective_stat,
 };
@@ -300,13 +300,11 @@ fn npc_retaliation_hit(
 ) -> CombatHit {
     let seed = combat_exchange_seed(attacker_id, defender_id, room_id);
     let behaviors = read_creature_behaviors(attacker);
-    if let Some(damage) = behaviors
+    if behaviors
         .iter()
-        .filter(|e| e.react == Some(CreatureReact::Attack))
-        .filter_map(|e| e.attack_damage)
-        .max()
+        .any(|entry| entry.react == Some(CreatureReact::Attack))
     {
-        return resolve_template_damage_hit(damage.max(1), surprise, seed);
+        return resolve_template_damage_hit(creature_attack_damage(attacker), surprise, seed);
     }
     resolve_combat_hit(
         attacker,

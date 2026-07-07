@@ -61,7 +61,7 @@ The diagram below shows **actual** module dependencies today (solid = implemente
 ┌─────────────────────┐         ┌─────────────────────────────────────────┐
 │ Creature (M3)       │         │ Events (M4 partial)                       │
 │ combat, behavior,   │         │ execute_event / event_script            │
-│ tactics, spawner    │         │ gate_events (narrative-only today)      │
+│ tactics, spawner    │         │ event_subscribers (spawner/loot bus)    │
 └─────────┬───────────┘         └─────────────────────────────────────────┘
           │
           ▼
@@ -186,18 +186,16 @@ Creatures now use a **single script surface** with split storage:
 
 `execute_event()` runs subscribers first (spawners/loot), then host `@trigger` scripts. Session `go`, inventory open/break, and combat kill all emit through this single path.
 
-### 3. Two event execution modes
+### 3. Two event execution modes — **resolved (M4)**
 
-- **`execute_event`** — full semantics (react, teleport, spawn, stat mods)
-- **`run_event_handlers_on` / `gate_events`** — narrative formatting only; doors cannot run mutating `on_open` scripts
-
-**M4+ recommendation:** Route gate unlock/open through `execute_event`; delete or narrow `emit_event` (currently unused).
+- **`execute_event`** — full semantics (react, teleport, spawn, stat mods, loot subscribers) — used for gates, rooms, items, creatures
+- **`run_event_handlers_on`** — read-only narrative preview (builder dry-run / formatting); production paths use `execute_event`
 
 ### 4. Inconsistencies to fix in M4
 
 | Issue | Location | Fix |
 |-------|----------|-----|
-| `@trigger react attack` uses hardcoded damage 10 | `event_script.rs` | Read `attack_damage` from host properties / behavior template |
+| ~~`@trigger react attack` uses hardcoded damage 10~~ | ~~`event_script.rs`~~ | Done — `creature_attack_damage()` shared helper |
 | Duplicate `parse_behavior_line` | `npc_def.rs`, `spawner_def.rs` | Shared `mudl/behavior_line.rs` |
 | Legacy `npc_behaviors` fallback | `behavior.rs` | Remove after migration |
 | `on_discovered` on generic objects | — | Not wired; LANGUAGE.md marks "coming" |
@@ -476,8 +474,8 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 |----------|------|-----------|
 | ~~**P0**~~ | ~~Unify creature `@behavior` scripts into `@trigger` / single executor~~ | Done — §4.1 |
 | ~~**P0**~~ | ~~Route spawner + loot dispatch through event bus~~ | Done — §4.2 |
-| **P1** | `gate_events` → `execute_event` (mutating door scripts) | §4.3 |
-| **P1** | Align `@trigger react attack` with `attack_damage` | §4.4 |
+| ~~**P1**~~ | ~~`gate_events` → `execute_event` (mutating door scripts)~~ | Done — §4.3 |
+| ~~**P1**~~ | ~~Align `@trigger react attack` with `attack_damage`~~ | Done — `creature_attack_damage()` |
 | **P1** | Shared behavior-line parser; drop `npc_behaviors` legacy | §4.4 |
 | **P2** | `on_discovered` on arbitrary objects | Builder traps, hidden items |
 | **P2** | Central `EventScheduler` (replace periodic/timer counters) | §4.4 |

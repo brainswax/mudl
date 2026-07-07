@@ -70,7 +70,9 @@ pub fn format_trigger_script(host: &Object, code: &str) -> Option<String> {
     format_script_line(host, &parse_script(code))
 }
 
-/// Run all handlers on `host` for `event_name` (read-only narrative formatting).
+/// Preview handler output without side effects (builder dry-run).
+///
+/// Production code should use [`execute_event`] for gates, rooms, and objects.
 pub fn run_event_handlers_on(host: &Object, event_name: &str) -> Vec<String> {
     host.event_handlers
         .get(event_name)
@@ -81,30 +83,6 @@ pub fn run_event_handlers_on(host: &Object, event_name: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-/// Emit `event_name` on `ctx.host_id` — narrative-only when `objects` is not mutated.
-pub fn emit_event(
-    event_name: &str,
-    ctx: &EventContext,
-    objects: &HashMap<ObjectId, Object>,
-) -> EventOutcome {
-    let Some(host) = objects.get(&ctx.host_id) else {
-        return EventOutcome::default();
-    };
-
-    let mut outcome = EventOutcome::default();
-    if let Some(handlers) = host.event_handlers.get(event_name) {
-        for behavior in handlers {
-            if let Some(line) = format_trigger_script(host, &behavior.code) {
-                outcome.push_line(line);
-            }
-        }
-    }
-    let _ = ctx.actor_id.as_str();
-    let _ = ctx.room_id.as_ref();
-    let _ = ctx.target_id.as_ref();
-    outcome
 }
 
 /// Execute `event_name` with full script semantics (react, teleport, spawn, stat mods, …).
@@ -455,5 +433,81 @@ mod tests {
             outcome.lines
         );
         assert!(!outcome.dirty.is_empty());
+    }
+
+    #[test]
+    fn execute_event_runs_mutating_gate_scripts() {
+        use crate::object::ContainerSpec;
+
+        let player_id = ObjectId::new("player:hero-001");
+        let room_id = ObjectId::new("area:void-001");
+        let chest_id = ObjectId::new("item:scene-chest-001");
+
+        let mut player = Object {
+            id: player_id.clone(),
+            name: "Hero".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        player.init_creature_role(&crate::mudl::PlayerTemplate {
+            name: "hero".to_string(),
+            creature: "human".to_string(),
+            gender: "neutral".to_string(),
+        });
+        player.set_property_int("health", 80);
+        player.set_property_int("max_health", 100);
+
+        let mut chest = Object {
+            id: chest_id.clone(),
+            name: "Travel Chest".to_string(),
+            aliases: Vec::new(),
+            location: Some(room_id.clone()),
+            prototype: None,
+            owner: player_id.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        chest.apply_container_role(&ContainerSpec::default());
+        attach_triggers(
+            &mut chest,
+            &[TriggerDef {
+                event: events::ON_OPEN.to_string(),
+                code: "heal 5".to_string(),
+            }],
+        );
+
+        let mut objects = HashMap::from([
+            (player_id.clone(), player),
+            (chest_id.clone(), chest),
+        ]);
+
+        let outcome = execute_event(
+            events::ON_OPEN,
+            &EventContext {
+                actor_id: player_id.clone(),
+                host_id: chest_id,
+                room_id: Some(room_id),
+                target_id: None,
+            },
+            &mut objects,
+            None,
+        );
+        assert!(outcome.lines.iter().any(|l| l.contains("recover 5 health")));
+        assert_eq!(
+            crate::creature::creature_health(objects.get(&player_id).unwrap()),
+            85
+        );
     }
 }

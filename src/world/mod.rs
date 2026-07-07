@@ -7,7 +7,6 @@ pub mod exits;
 pub mod event_script;
 pub mod event_subscribers;
 pub mod events;
-pub mod gate_events;
 pub mod module;
 pub mod move_manager;
 pub mod navigation;
@@ -29,10 +28,9 @@ pub use event_script::{
     execute_host_event, execute_script, parse_script, resolve_place_id, ScriptAction,
 };
 pub use events::{
-    attach_triggers, emit_event, emit_on_move_event, execute_event, execute_kill_events,
+    attach_triggers, emit_on_move_event, execute_event, execute_kill_events,
     format_trigger_script, run_event_handlers_on, EventContext, EventOutcome,
 };
-pub use gate_events::run_gate_event_handlers;
 pub use module::{active_module_dir, bundle_module, list_universe_files, ModuleManifest};
 pub use move_manager::{
     move_object, move_to_container, move_to_grasp, move_to_inventory, move_to_room,

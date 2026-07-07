@@ -14,6 +14,9 @@ use crate::mudl::{BehaviorTemplateDef, CreatureReact, NpcBehaviorDef, TriggerDef
 use crate::world::event_script::{format_script_line, parse_script, ScriptAction};
 use crate::object::{Object, ObjectId, PermissionFlags, Property, Value};
 
+/// Default damage for `react attack` when no template overrides (`@behavior-template` default).
+pub const DEFAULT_ATTACK_DAMAGE: i64 = 8;
+
 /// A single behavior entry stored on a creature (`creature_behaviors` property).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreatureBehaviorEntry {
@@ -471,6 +474,16 @@ pub fn read_creature_behaviors(obj: &Object) -> Vec<CreatureBehaviorEntry> {
         entries = legacy_npc_behaviors(obj);
     }
     entries
+}
+
+/// Resolve attack damage from `creature_behaviors` entries (templates, tactics).
+pub fn creature_attack_damage(creature: &Object) -> i64 {
+    read_creature_behaviors(creature)
+        .iter()
+        .filter_map(|entry| entry.attack_damage)
+        .max()
+        .unwrap_or(DEFAULT_ATTACK_DAMAGE)
+        .max(1)
 }
 
 fn read_creature_behaviors_property(obj: &Object, name: &str) -> Vec<CreatureBehaviorEntry> {
@@ -986,12 +999,7 @@ fn run_creature_behaviors_filtered(
 
         let can_attack = aware || event == "on_discovered";
         if reacts.contains(&CreatureReact::Attack) && can_attack {
-            let base_damage = entries
-                .iter()
-                .filter_map(|e| e.attack_damage)
-                .max()
-                .unwrap_or(8)
-                .max(1);
+            let base_damage = creature_attack_damage(&npc_snapshot);
             let ambush = event == "on_enter"
                 && objects
                     .get(player_id)
