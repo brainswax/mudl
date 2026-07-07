@@ -11,7 +11,10 @@ use crate::display::{
     DisplayMode, ResolveScope, TargetResolution,
 };
 use crate::object::{player_encumbrance_level, ObjectFactory, EncumbranceLevel};
-use crate::world::portal::{passable_portal_blocks_passage, PortalBlock};
+use crate::inventory::{prepare_gate_for_passage, InventoryError};
+use crate::world::portal::{
+    passable_portal_for_direction, portal_passage_block, portal_permits_exit,
+};
 use crate::world::place_builder::{
     apply_dig_result, dig_place, link_places, unlink_exit, DigRequest, DigResult, PlaceBuildError,
 };
@@ -35,6 +38,8 @@ pub enum SessionError {
     DoorClosed(String),
     DoorLocked(String),
     Overloaded,
+    /// Movement or portal prep blocked with a player-facing explanation.
+    Blocked(String),
 }
 
 impl std::fmt::Display for SessionError {
@@ -52,6 +57,7 @@ impl std::fmt::Display for SessionError {
             Self::DoorClosed(name) => write!(f, "The {name} is closed."),
             Self::DoorLocked(name) => write!(f, "The {name} is locked."),
             Self::Overloaded => write!(f, "{}", narrate_overloaded()),
+            Self::Blocked(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -233,35 +239,42 @@ impl Session {
         let room = self
             .objects
             .get(&loc_id)
-            .ok_or(SessionError::LocationMissing)?;
+            .ok_or(SessionError::LocationMissing)?
+            .clone();
 
         let exits = room.get_exits();
         let (dir_label, map_target_id) = resolve_exit(&exits, direction)
             .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
 
-        if !can_traverse_exit(room, dir_label, map_target_id, &self.objects) {
+        if !can_traverse_exit(&room, dir_label, map_target_id, &self.objects) {
             return Err(SessionError::NoExit(direction.to_string()));
         }
 
-        if let Some(block) =
-            passable_portal_blocks_passage(&loc_id, dir_label, map_target_id, &self.objects)
+        let mut portal_prep_lines = Vec::new();
+        if let Some(portal) =
+            passable_portal_for_direction(&loc_id, dir_label, &self.objects)
         {
-            let name = self
-                .objects
-                .get(&loc_id)
-                .and_then(|room| {
-                    crate::world::portal::passable_portal_for_direction(
-                        &room.id,
-                        dir_label,
-                        &self.objects,
-                    )
-                })
-                .map(|portal| portal.name.to_lowercase())
-                .unwrap_or_else(|| "passage".to_string());
-            return Err(match block {
-                PortalBlock::Closed => SessionError::DoorClosed(name),
-                PortalBlock::Locked => SessionError::DoorLocked(name),
-            });
+            if portal_permits_exit(portal, map_target_id)
+                && portal_passage_block(portal).is_some()
+            {
+                let portal_id = portal.id.clone();
+                let portal_name = portal.name.to_lowercase();
+                let mut ctx = self.inventory_context();
+                match prepare_gate_for_passage(&mut ctx, &portal_id) {
+                    Ok(lines) => portal_prep_lines = lines,
+                    Err(InventoryError::NoMatchingKey(_))
+                    | Err(InventoryError::ContainerLocked(_)) => {
+                        return Err(SessionError::DoorLocked(portal_name));
+                    }
+                    Err(InventoryError::ContainerClosed(_)) => {
+                        return Err(SessionError::DoorClosed(portal_name));
+                    }
+                    Err(InventoryError::InvalidTarget(msg)) => {
+                        return Err(SessionError::Blocked(msg));
+                    }
+                    Err(err) => return Err(SessionError::Blocked(err.to_string())),
+                }
+            }
         }
 
         let encumbrance = self
@@ -275,7 +288,7 @@ impl Session {
 
         let looped_target = apply_loop_entry(map_target_id, &self.objects);
         let target_id = apply_scatter_exit(
-            room,
+            &room,
             dir_label,
             &looped_target,
             &self.player_id,
@@ -293,7 +306,7 @@ impl Session {
 
         let looped = looped_target != *map_target_id;
         let scattered = target_id != looped_target;
-        let mut lines = Vec::new();
+        let mut lines = portal_prep_lines;
         if scattered {
             let dest_name = object_name(&target_id, &self.objects);
             lines.push(narrate_scatter_exit(&dest_name));

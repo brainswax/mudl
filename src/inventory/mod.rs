@@ -125,6 +125,12 @@ where
     f(&mut move_ctx).map_err(Into::into)
 }
 
+fn mark_dirty(ctx: &mut InventoryContext<'_>, id: &ObjectId) {
+    if let Some(dirty) = ctx.dirty.as_deref_mut() {
+        dirty.mark(id);
+    }
+}
+
 fn player_body_plan<'a>(
     player: &Object,
     anatomy: &'a AnatomyRegistry,
@@ -944,7 +950,146 @@ fn resolve_gate_target(
     }
 }
 
+/// Unlock a door or container by resolved ID, firing `on_unlock` handlers after the action line.
+fn unlock_gate(
+    ctx: &mut InventoryContext<'_>,
+    gate_id: &ObjectId,
+    key_name: Option<&str>,
+) -> Result<Vec<String>, InventoryError> {
+    let gate = ctx
+        .objects
+        .get(gate_id)
+        .ok_or_else(|| InventoryError::NotFound(gate_id.as_str().to_string()))?
+        .clone();
+
+    if !gate.gate_has_lock() {
+        return Err(InventoryError::NoLock(gate.name.to_lowercase()));
+    }
+    if !gate.gate_is_locked() {
+        return Ok(vec![format!(
+            "The {} is already unlocked.",
+            gate.name.to_lowercase()
+        )]);
+    }
+
+    let key_id = match key_name {
+        Some(name) => {
+            let room_id = ctx.room_id.cloned();
+            resolve_inventory_target(
+                name,
+                room_id.as_ref(),
+                ctx.player_id,
+                ctx.objects,
+                ResolveScope::CarriedOrGround,
+            )?
+        }
+        None => {
+            let matches = find_matching_keys_in_possession(ctx.player_id, &gate, ctx.objects);
+            match matches.len() {
+                0 => {
+                    return Err(InventoryError::NoMatchingKey(
+                        gate.name.to_lowercase(),
+                    ));
+                }
+                1 => matches[0].id.clone(),
+                _ => {
+                    return Err(InventoryError::InvalidTarget(
+                        format_ambiguous_keys_message(&gate.name, &matches, ctx.objects),
+                    ));
+                }
+            }
+        }
+    };
+
+    let key = ctx
+        .objects
+        .get(&key_id)
+        .ok_or_else(|| InventoryError::NotFound(key_name.unwrap_or("key").to_string()))?
+        .clone();
+
+    if !key.is_key() {
+        return Err(InventoryError::NotKey(key.name.to_lowercase()));
+    }
+    if !Object::key_unlocks_gate(&key, &gate) {
+        return Err(InventoryError::WrongKey(key.name.to_lowercase()));
+    }
+
+    let mut gate = gate;
+    gate.set_gate_locked(false);
+    ctx.objects.insert(gate_id.clone(), gate.clone());
+    mark_dirty(ctx, gate_id);
+
+    let mut lines = vec![format!(
+        "You unlock the {} with the {}.",
+        gate.name.to_lowercase(),
+        key.name.to_lowercase()
+    )];
+    lines.extend(crate::world::gate_events::run_gate_event_handlers(&gate, "on_unlock"));
+    Ok(lines)
+}
+
+/// Open a door or container by resolved ID, firing `on_open` handlers after the action line.
+fn open_gate(
+    ctx: &mut InventoryContext<'_>,
+    gate_id: &ObjectId,
+) -> Result<Vec<String>, InventoryError> {
+    let gate = ctx
+        .objects
+        .get(gate_id)
+        .ok_or_else(|| InventoryError::NotFound(gate_id.as_str().to_string()))?
+        .clone();
+
+    let display = gate.name.to_lowercase();
+    if gate.gate_is_open() {
+        return Ok(vec![format!("The {display} is already open.")]);
+    }
+    if gate.gate_is_locked() {
+        return Err(InventoryError::ContainerLocked(display));
+    }
+
+    let mut gate = gate;
+    gate.set_gate_open(true);
+    ctx.objects.insert(gate_id.clone(), gate.clone());
+    mark_dirty(ctx, gate_id);
+
+    let gate = ctx.objects.get(gate_id).unwrap();
+    let mut lines = vec![if gate.is_container() {
+        crate::display::format_open_container_message(gate, ctx.objects)
+    } else {
+        format!("You open the {display}.")
+    }];
+    lines.extend(crate::world::gate_events::run_gate_event_handlers(gate, "on_open"));
+    Ok(lines)
+}
+
+/// Unlock (if needed) and open a gate so passage is allowed — used when moving through a portal.
+pub fn prepare_gate_for_passage(
+    ctx: &mut InventoryContext<'_>,
+    gate_id: &ObjectId,
+) -> Result<Vec<String>, InventoryError> {
+    let gate = ctx
+        .objects
+        .get(gate_id)
+        .ok_or_else(|| InventoryError::NotFound(gate_id.as_str().to_string()))?
+        .clone();
+
+    let mut lines = Vec::new();
+    if gate.gate_is_locked() {
+        lines.extend(unlock_gate(ctx, gate_id, None)?);
+    }
+    let gate = ctx
+        .objects
+        .get(gate_id)
+        .ok_or_else(|| InventoryError::NotFound(gate_id.as_str().to_string()))?;
+    if !gate.gate_is_open() {
+        lines.extend(open_gate(ctx, gate_id)?);
+    }
+    Ok(lines)
+}
+
 /// Open a door or container on the ground or in your possession.
+///
+/// When the target is locked, automatically unlocks with a matching key in possession if possible.
 pub fn open_container(
     ctx: &mut InventoryContext<'_>,
     target_name: &str,
@@ -960,22 +1105,13 @@ pub fn open_container(
     if gate.gate_is_open() {
         return Ok(format!("The {display} is already open."));
     }
+
+    let mut lines = Vec::new();
     if gate.gate_is_locked() {
-        return Err(InventoryError::ContainerLocked(display));
+        lines.extend(unlock_gate(ctx, &gate_id, None)?);
     }
-
-    let mut gate = gate;
-    gate.set_gate_open(true);
-    ctx.objects.insert(gate_id.clone(), gate);
-
-    let gate = ctx.objects.get(&gate_id).unwrap();
-    if gate.is_container() {
-        return Ok(crate::display::format_open_container_message(
-            gate,
-            ctx.objects,
-        ));
-    }
-    Ok(format!("You open the {display}."))
+    lines.extend(open_gate(ctx, &gate_id)?);
+    Ok(lines.join("\n"))
 }
 
 /// Close a door or container on the ground or in your possession.
@@ -1048,73 +1184,8 @@ pub fn unlock_container(
     key_name: Option<&str>,
 ) -> Result<String, InventoryError> {
     let gate_id = resolve_gate_target(ctx, target_name)?;
-    let gate = ctx
-        .objects
-        .get(&gate_id)
-        .ok_or_else(|| InventoryError::NotFound(target_name.to_string()))?
-        .clone();
-
-    if !gate.gate_has_lock() {
-        return Err(InventoryError::NoLock(gate.name.to_lowercase()));
-    }
-    if !gate.gate_is_locked() {
-        return Ok(format!(
-            "The {} is already unlocked.",
-            gate.name.to_lowercase()
-        ));
-    }
-
-    let key_id = match key_name {
-        Some(name) => {
-            let room_id = ctx.room_id.cloned();
-            resolve_inventory_target(
-                name,
-                room_id.as_ref(),
-                ctx.player_id,
-                ctx.objects,
-                ResolveScope::CarriedOrGround,
-            )?
-        }
-        None => {
-            let matches = find_matching_keys_in_possession(ctx.player_id, &gate, ctx.objects);
-            match matches.len() {
-                0 => {
-                    return Err(InventoryError::NoMatchingKey(
-                        gate.name.to_lowercase(),
-                    ));
-                }
-                1 => matches[0].id.clone(),
-                _ => {
-                    return Err(InventoryError::InvalidTarget(
-                        format_ambiguous_keys_message(&gate.name, &matches, ctx.objects),
-                    ));
-                }
-            }
-        }
-    };
-
-    let key = ctx
-        .objects
-        .get(&key_id)
-        .ok_or_else(|| InventoryError::NotFound(key_name.unwrap_or("key").to_string()))?
-        .clone();
-
-    if !key.is_key() {
-        return Err(InventoryError::NotKey(key.name.to_lowercase()));
-    }
-    if !Object::key_unlocks_gate(&key, &gate) {
-        return Err(InventoryError::WrongKey(key.name.to_lowercase()));
-    }
-
-    let mut gate = gate;
-    gate.set_gate_locked(false);
-    ctx.objects.insert(gate_id, gate.clone());
-
-    Ok(format!(
-        "You unlock the {} with the {}.",
-        gate.name.to_lowercase(),
-        key.name.to_lowercase()
-    ))
+    let lines = unlock_gate(ctx, &gate_id, key_name)?;
+    Ok(lines.join("\n"))
 }
 
 /// Read text from an object in the room or in your possession.
@@ -3637,16 +3708,17 @@ mod tests {
         let lock_msg = lock_container(&mut ctx, "chest").unwrap();
         assert_eq!(lock_msg, "You lock the travel chest.");
 
-        let err = open_container(&mut ctx, "chest").unwrap_err();
-        assert_eq!(err, InventoryError::ContainerLocked("travel chest".to_string()));
-
-        let unlock_msg = unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
-        assert_eq!(unlock_msg, "You unlock the travel chest with the brass key.");
-
         let open_msg = open_container(&mut ctx, "chest").unwrap();
-        assert_eq!(open_msg, "You open the travel chest. It is empty.");
+        assert!(open_msg.contains("unlock the travel chest with the brass key"));
+        assert_eq!(
+            open_msg.lines().last().unwrap(),
+            "You open the travel chest. It is empty."
+        );
 
+        drop_item(&mut ctx, "brass key").unwrap();
         let lock_open_msg = lock_container(&mut ctx, "chest").unwrap();
+        let err = open_container(&mut ctx, "chest").unwrap_err();
+        assert_eq!(err, InventoryError::NoMatchingKey("travel chest".to_string()));
         assert_eq!(lock_open_msg, "You close the travel chest and lock it.");
         let chest = ctx.objects.get(&chest_id).unwrap();
         assert!(!chest.container_is_open());
@@ -3900,6 +3972,117 @@ mod tests {
 
         let err = unlock_container(&mut ctx, "chest", None).unwrap_err();
         assert_eq!(err, InventoryError::NoMatchingKey("chest".to_string()));
+    }
+
+    #[tokio::test]
+    async fn open_auto_unlocks_with_key_in_hand() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest.clone());
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = open_container(&mut ctx, "chest").unwrap();
+        assert!(msg.contains("unlock the travel chest with the brass key"));
+        assert!(msg.contains("open the travel chest"));
+        let chest = ctx.objects.get(&chest.id).unwrap();
+        assert!(!chest.gate_is_locked());
+        assert!(chest.gate_is_open());
+    }
+
+    #[tokio::test]
+    async fn open_unlock_and_open_fire_gate_events_in_order() {
+        use crate::object::{Behavior, PermissionFlags};
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+        chest.add_event_handler(
+            "on_unlock".to_string(),
+            Behavior {
+                code: "narrate The lock yields with a soft click.".to_string(),
+                permissions: PermissionFlags::EVERYONE,
+            },
+        );
+        chest.add_event_handler(
+            "on_open".to_string(),
+            Behavior {
+                code: "narrate The lid lifts with a groan.".to_string(),
+                permissions: PermissionFlags::EVERYONE,
+            },
+        );
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = open_container(&mut ctx, "chest").unwrap();
+        let lines: Vec<&str> = msg.lines().collect();
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], "You unlock the travel chest with the brass key.");
+        assert_eq!(lines[1], "The lock yields with a soft click.");
+        assert_eq!(lines[2], "You open the travel chest. It is empty.");
+        assert_eq!(lines[3], "The lid lifts with a groan.");
     }
 
     #[tokio::test]

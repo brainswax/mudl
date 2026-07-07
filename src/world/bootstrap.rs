@@ -453,8 +453,8 @@ mod tests {
     use crate::repl::session::Session;
     use crate::world::exits::validate_world_places;
     use crate::inventory::{
-        close_container, open_container, read_item, take_item, unlock_container,
-        InventoryContext, InventoryError,
+        close_container, open_container, read_item, take_item,
+        InventoryContext,
     };
     use crate::mudl::load_module;
     use crate::persistence::SqlitePersistence;
@@ -631,20 +631,9 @@ mod tests {
         assert!(take_key.contains("pick up"));
         assert!(take_key.to_lowercase().contains("brass key"));
 
-        let err = open_container(&mut ctx, "chest").unwrap_err();
-        assert_eq!(
-            err,
-            InventoryError::ContainerLocked("travel chest".to_string())
-        );
-
-        let unlock_msg = unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
-        assert_eq!(
-            unlock_msg,
-            "You unlock the travel chest with the brass key."
-        );
-
         let open_chest = open_container(&mut ctx, "chest").unwrap();
-        assert!(open_chest.starts_with("You open the travel chest."));
+        assert!(open_chest.contains("unlock the travel chest with the brass key"));
+        assert!(open_chest.contains("open the travel chest"));
         assert!(!open_chest.contains("folded note"));
 
         close_container(&mut ctx, "mailbox").unwrap();
@@ -865,8 +854,6 @@ mod tests {
         );
         session.go("north").unwrap();
         session.go("north").unwrap();
-        unlock_container(&mut session.inventory_context(), "door", None).unwrap();
-        open_container(&mut session.inventory_context(), "door").unwrap();
         session.go("in").unwrap();
         session.go("east").unwrap();
         assert_eq!(session.current_location(), Some(&pantry_id));
@@ -900,7 +887,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut objects: HashMap<ObjectId, Object> = persistence
+        let objects: HashMap<ObjectId, Object> = persistence
             .list_objects(false)
             .await
             .unwrap()
@@ -914,21 +901,10 @@ mod tests {
             .map(|o| o.id.clone())
             .expect("cottage front");
 
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: Some(&start),
-            objects: &mut objects,
-            anatomy: &anatomy,
-            dirty: None,
-        };
-
-        open_container(&mut ctx, "mailbox").unwrap();
-        take_item(&mut ctx, "cottage key").unwrap();
-
         let mut session = Session::test_session(
             player_id.clone(),
             anatomy.clone(),
-            ctx.objects.clone(),
+            objects,
             Some(start.clone()),
         );
         session.go("north").unwrap();
@@ -945,21 +921,16 @@ mod tests {
         let blocked = session.go("in").unwrap_err().to_string();
         assert!(blocked.contains("locked"));
 
-        let room_id = session.current_location().cloned();
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: room_id.as_ref(),
-            objects: session.objects_mut(),
-            anatomy: &anatomy,
-            dirty: None,
-        };
-        let unlock = unlock_container(&mut ctx, "door", None).unwrap();
-        assert!(unlock.contains("unlock"));
-        let open = open_container(&mut ctx, "door").unwrap();
-        assert!(open.contains("open"));
+        session.go("south").unwrap();
+        session.go("south").unwrap();
+        open_container(&mut session.inventory_context(), "mailbox").unwrap();
+        take_item(&mut session.inventory_context(), "cottage key").unwrap();
+        session.go("north").unwrap();
+        session.go("north").unwrap();
 
-        drop(ctx);
         let msg = session.go("in").unwrap();
+        assert!(msg.contains("unlock"));
+        assert!(msg.contains("open"));
         assert!(msg.contains("main hall"));
         assert_eq!(
             session
@@ -1007,7 +978,6 @@ mod tests {
 
         open_container(&mut ctx, "mailbox").unwrap();
         take_item(&mut ctx, "brass key").unwrap();
-        unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
         open_container(&mut ctx, "chest").unwrap();
         take_item(&mut ctx, "whisper charm").unwrap();
         drop(ctx);
@@ -1021,10 +991,9 @@ mod tests {
 
         session.go("north").unwrap();
 
-        unlock_container(&mut session.inventory_context(), "oak", None).unwrap();
-        open_container(&mut session.inventory_context(), "oak").unwrap();
-
         let entry_msg = session.go("in").unwrap();
+        assert!(entry_msg.contains("unlock"));
+        assert!(entry_msg.contains("open"));
         assert!(entry_msg.contains("Tangled Threshold") || entry_msg.contains("held breath"));
 
         let wrong_turn = session.go("east").unwrap();
@@ -1098,8 +1067,6 @@ mod tests {
             None => panic!("nowhere after scatter"),
         }
 
-        unlock_container(&mut session.inventory_context(), "oak", None).unwrap();
-        open_container(&mut session.inventory_context(), "oak").unwrap();
         session.go("in").unwrap();
         assert_eq!(
             session.object(session.current_location().unwrap()).unwrap().name,
@@ -1208,13 +1175,10 @@ mod tests {
 
         open_container(&mut session.inventory_context(), "mailbox").unwrap();
         take_item(&mut session.inventory_context(), "brass key").unwrap();
-        unlock_container(&mut session.inventory_context(), "chest", Some("brass key")).unwrap();
         open_container(&mut session.inventory_context(), "chest").unwrap();
         take_item(&mut session.inventory_context(), "whisper charm").unwrap();
 
         session.go("north").unwrap();
-        unlock_container(&mut session.inventory_context(), "oak", None).unwrap();
-        open_container(&mut session.inventory_context(), "oak").unwrap();
         session.go("in").unwrap();
         session.go("north").unwrap();
 

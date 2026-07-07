@@ -3,6 +3,7 @@ pub mod container_fit;
 pub mod dirty;
 pub mod door;
 pub mod exits;
+pub mod gate_events;
 pub mod place_builder;
 pub mod portal;
 pub mod navigation;
@@ -20,6 +21,7 @@ pub use portal::{
     passable_portal_blocks_passage, passable_portal_for_direction, portal_for_direction,
     portal_kind_label, portal_passage_block, portal_permits_exit, portals_in_room, PortalBlock,
 };
+pub use gate_events::run_gate_event_handlers;
 pub use exits::{
     apply_loop_entry, apply_scatter_exit, can_traverse_exit, pick_scatter_destination,
     reverse_direction,
