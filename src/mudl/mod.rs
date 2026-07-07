@@ -6,6 +6,7 @@ pub mod loot_spawner_def;
 pub mod npc_def;
 pub mod roles;
 pub mod spawner_def;
+pub mod trigger_def;
 pub mod world_def;
 
 pub use anatomy::{
@@ -26,4 +27,5 @@ pub use roles::MudlRoleProps;
 pub use spawner_def::{
     parse_spawner_file, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef, SpawnerTrigger,
 };
+pub use trigger_def::{parse_trigger_line, TriggerDef};
 pub use world_def::{parse_world_file, WorldDef};

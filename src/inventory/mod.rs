@@ -9,6 +9,8 @@ use crate::display::{
 };
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{LocationRef, Object, ObjectId};
+use crate::mudl::trigger_def::events::{ON_BREAK, ON_DROP, ON_TAKE};
+use crate::world::events::{execute_event, emit_on_move_event, EventContext};
 use crate::world::move_manager::{
     move_object, move_to_container, move_to_grasp, move_to_room, MoveContext, MoveError, MoveHooks,
 };
@@ -520,12 +522,34 @@ pub fn take_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, I
     } else {
         None
     };
-    Ok(format_stack_transfer_message(
+    let mut msg = format_stack_transfer_message(
         "pick up",
         &item,
         transferred,
         remainder,
-    ))
+    );
+    let actor_id = ctx.player_id.clone();
+    let take_outcome = execute_event(
+        ON_TAKE,
+        &EventContext {
+            actor_id: actor_id.clone(),
+            host_id: result.object_id.clone(),
+            room_id: Some(room_id.clone()),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    let move_outcome = emit_on_move_event(&actor_id, &result, ctx.objects, Some(ctx.anatomy));
+    for line in take_outcome
+        .lines
+        .into_iter()
+        .chain(move_outcome.lines)
+    {
+        msg.push('\n');
+        msg.push_str(&line);
+    }
+    Ok(msg)
 }
 
 pub fn drop_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, InventoryError> {
@@ -566,12 +590,34 @@ pub fn drop_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, I
     } else {
         None
     };
-    Ok(format_stack_transfer_message(
+    let mut msg = format_stack_transfer_message(
         "drop",
         &item,
         transferred,
         remainder,
-    ))
+    );
+    let actor_id = ctx.player_id.clone();
+    let drop_outcome = execute_event(
+        ON_DROP,
+        &EventContext {
+            actor_id: actor_id.clone(),
+            host_id: result.object_id.clone(),
+            room_id: Some(room_id.clone()),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    let move_outcome = emit_on_move_event(&actor_id, &result, ctx.objects, Some(ctx.anatomy));
+    for line in drop_outcome
+        .lines
+        .into_iter()
+        .chain(move_outcome.lines)
+    {
+        msg.push('\n');
+        msg.push_str(&line);
+    }
+    Ok(msg)
 }
 
 /// Parsed `put [count] <item> in <container>` command.
@@ -1361,6 +1407,19 @@ pub fn break_item(
     let mut lines = vec![item
         .break_text()
         .unwrap_or_else(|| format!("You break the {display}."))];
+
+    let break_outcome = execute_event(
+        ON_BREAK,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: item_id.clone(),
+            room_id: room_id.clone(),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(break_outcome.lines);
 
     let spawner_ids = crate::creature::destroy_spawners_for_target(&item_id, ctx.objects);
     for spawner_id in &spawner_ids {

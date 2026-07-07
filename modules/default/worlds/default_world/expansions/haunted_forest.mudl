@@ -90,6 +90,7 @@
   description=A squat earthen pot glazed with silver dust. Pale motes coil inside, restless.
   breakable=true
   break_text=You smash the clay pot. The silver motes scatter and the wood grows quiet.
+  @trigger on_break emote shatters into pale dust.
   weight=2.0
   volume=2.0
   pocketable=false
@@ -185,6 +186,8 @@
   creature=human
   @use-behavior lurker
   @behavior on_enter emote watches you from between the trees.
+  @trigger on_discovered react attack
+  @trigger on_discovered emote lunges from the shadows.
 @end
 
 @spawner haunted-moon-phantoms
@@ -306,6 +309,7 @@ type: area
 base_name: haunted-moon
 name: Moonlit Glade
 description: A silvered clearing where the canopy breaks. The air is colder than it should be under this much light.
+@trigger on_enter narrate Silver mist clings to the branches.
 exits:
   south: haunted-entry
   east: haunted-ember
@@ -342,6 +346,8 @@ type: area
 base_name: haunted-heart
 name: Pale Heart of the Wood
 description: The haunted forest kneels here. A ring of roots frames a patch of sky that looks almost ordinary. Something final has been waiting.
+@trigger on_enter heal 5
+@trigger on_enter narrate The wood loosens its grip — you feel steadier on your feet.
 exits:
   south: haunted-ash
   out: haunted-entry

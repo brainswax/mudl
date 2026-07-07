@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
+use super::trigger_def::parse_trigger_line;
 use super::CreatureReact;
+use super::TriggerDef;
 
 /// A single scripted behavior on an NPC.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +26,7 @@ pub struct NpcDef {
     pub behaviors: Vec<NpcBehaviorDef>,
     /// `@use-behavior` template names applied at bootstrap.
     pub use_behaviors: Vec<String>,
+    pub triggers: Vec<TriggerDef>,
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -90,7 +93,16 @@ pub fn parse_npc_file(content: &str) -> Vec<NpcDef> {
                 location: String::new(),
                 behaviors: Vec::new(),
                 use_behaviors: Vec::new(),
+                triggers: Vec::new(),
             });
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("@trigger ") {
+            if let Some(trigger) = parse_trigger_line(rest) {
+                if let Some(npc) = &mut current {
+                    npc.triggers.push(trigger);
+                }
+            }
             continue;
         }
         if let Some(name) = line.strip_prefix("@use-behavior ") {

@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use crate::mudl::trigger_def::parse_trigger_line;
+use crate::mudl::TriggerDef;
+
 /// Parsed object/room definition from declarative MUDL files.
 #[derive(Debug, Clone)]
 pub struct WorldDef {
@@ -19,6 +22,8 @@ pub struct WorldDef {
     pub scatter_direction: Option<String>,
     /// When set, entering this place silently sends the player to the named place.
     pub loop_to: Option<String>,
+    /// `@trigger` scripts attached to this place.
+    pub triggers: Vec<TriggerDef>,
 }
 
 /// Parse room/object definitions from MUDL source (legacy declarative format).
@@ -38,6 +43,7 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
         scatter_to: Vec::new(),
         scatter_direction: None,
         loop_to: None,
+        triggers: Vec::new(),
     };
     let mut in_exits = false;
     let mut in_exit_aliases = false;
@@ -65,6 +71,7 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
                     scatter_to: Vec::new(),
                     scatter_direction: None,
                     loop_to: None,
+                    triggers: Vec::new(),
                 };
                 in_exits = false;
                 in_exit_aliases = false;
@@ -98,6 +105,15 @@ pub fn parse_world_file(content: &str) -> (Vec<WorldDef>, Option<String>) {
             || trimmed.starts_with("@item ")
             || trimmed == "@end"
         {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("@trigger ") {
+            in_exits = false;
+            in_exit_aliases = false;
+            in_exit_returns = false;
+            if let Some(trigger) = parse_trigger_line(rest) {
+                current.triggers.push(trigger);
+            }
             continue;
         }
         if trimmed == "exits:" {
@@ -293,5 +309,20 @@ mod tests {
             Some("haunted-entry")
         );
         assert_eq!(wither.loop_to.as_deref(), Some("haunted-entry"));
+    }
+
+    #[test]
+    fn parse_haunted_moon_on_enter_trigger() {
+        let content = include_str!(
+            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+        );
+        let (defs, _) = parse_world_file(content);
+        let moon = defs.iter().find(|d| d.base_name == "haunted-moon").unwrap();
+        assert_eq!(moon.triggers.len(), 1);
+        assert_eq!(moon.triggers[0].event, "on_enter");
+        assert_eq!(
+            moon.triggers[0].code,
+            "narrate Silver mist clings to the branches."
+        );
     }
 }

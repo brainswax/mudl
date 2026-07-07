@@ -604,6 +604,48 @@ fn mix_seed(parts: &[&str]) -> u64 {
     hash
 }
 
+/// Move an NPC to a random valid exit from `room_id` (used by react flee scripts).
+pub fn npc_flee_room(
+    npc_id: &ObjectId,
+    room_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> bool {
+    let mut outcome = BehaviorOutcome::default();
+    flee_npc(npc_id, room_id, objects, &mut outcome);
+    !outcome.dirty.is_empty()
+}
+
+/// NPC strikes `player_id` for `damage`; returns player-facing lines.
+pub fn npc_attack_player(
+    npc_id: &ObjectId,
+    player_id: &ObjectId,
+    room_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+    anatomy: Option<&AnatomyRegistry>,
+    damage: i64,
+    surprise: bool,
+) -> Option<Vec<String>> {
+    let npc_name = objects.get(npc_id).map(|n| n.name.clone())?;
+    let player = objects.get_mut(player_id)?;
+    if !player.has_creature_role() || creature_health(player) <= 0 {
+        return None;
+    }
+    let after = apply_damage(player, damage);
+    set_player_aware(player, true);
+    if let Some(npc) = objects.get_mut(npc_id) {
+        set_creature_discovered(npc, true);
+    }
+    let line = if surprise {
+        format!(
+            "{npc_name} strikes from hiding for {damage} damage ({after} health remaining)."
+        )
+    } else {
+        format!("{npc_name} attacks you for {damage} damage ({after} health remaining).")
+    };
+    let _ = (room_id, anatomy);
+    Some(vec![line])
+}
+
 fn flee_npc(
     npc_id: &ObjectId,
     room_id: &ObjectId,
@@ -717,6 +759,24 @@ pub fn run_perception_discovery_on_look(
             outcome.push_line(line);
         }
         for id in discovered.dirty {
+            outcome.mark_dirty(&id);
+        }
+
+        let trigger_outcome = crate::world::execute_host_event(
+            "on_discovered",
+            &crate::world::EventContext {
+                actor_id: player_id.clone(),
+                host_id: npc_id.clone(),
+                room_id: Some(room_id.clone()),
+                target_id: None,
+            },
+            objects,
+            Some(anatomy),
+        );
+        for line in trigger_outcome.lines {
+            outcome.push_line(line);
+        }
+        for id in trigger_outcome.dirty {
             outcome.mark_dirty(&id);
         }
     }

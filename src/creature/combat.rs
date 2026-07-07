@@ -18,6 +18,7 @@ use crate::creature::vitality::{
 };
 use crate::display::{resolve_object, ResolveScope, TargetResolution};
 use crate::loot::run_on_kill_loot_spawners;
+use crate::world::execute_kill_events;
 use crate::mudl::{AnatomyRegistry, CreatureReact};
 use crate::object::{
     generate_object_id, id_base_from_display_name, ContainerSpec, Object, ObjectId,
@@ -422,11 +423,20 @@ fn handle_npc_death(
     room_id: &ObjectId,
     owner: &ObjectId,
     objects: &mut HashMap<ObjectId, Object>,
+    anatomy: &AnatomyRegistry,
     outcome: &mut AttackOutcome,
 ) {
     let victim = objects.get(victim_id).cloned().unwrap();
     let display = victim.name.to_lowercase();
     let had_gear = !victim.carried_body_items().is_empty();
+
+    let kill_outcome = execute_kill_events(victim_id, killer_id, room_id, objects, Some(anatomy));
+    for line in kill_outcome.lines {
+        outcome.push_line(line);
+    }
+    for id in kill_outcome.dirty {
+        outcome.mark_dirty(&id);
+    }
 
     create_creature_corpse(&victim, room_id, owner, objects, outcome);
     strip_creature_gear(victim_id, objects, outcome);
@@ -737,7 +747,15 @@ pub fn attack_creature(
         }
         if after == 0 {
             if target.object_type() == "npc" {
-                handle_npc_death(&target_id, actor_id, room_id, &owner, objects, &mut outcome);
+                handle_npc_death(
+                    &target_id,
+                    actor_id,
+                    room_id,
+                    &owner,
+                    objects,
+                    anatomy,
+                    &mut outcome,
+                );
             } else {
                 handle_player_death(
                     &target_id,

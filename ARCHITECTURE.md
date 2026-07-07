@@ -327,7 +327,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 ### Defer (next milestones)
 
 - Gateway + per-player world views (multi-user / IRC)
-- Event bus wiring `MoveHooks.on_move` → `event_handlers`
+- ~~Event bus wiring `MoveHooks.on_move` → `event_handlers`~~ — Done (M4): `world::events` + `@trigger` on places/objects; `on_move` via `emit_on_move_event` on inventory moves
 - Prototype inheritance resolver in world state (not just factory copy)
 - Location/exits as first-class `LocationRef` / exit objects (beyond `exits` map on areas)
 - Graph consistency validator (orphan `contents`, stale `body_slots`) on load

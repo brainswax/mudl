@@ -60,14 +60,66 @@ verb "bake bread" on kitchen {
     }
 }
 ```
-### 4. Events & HooksNamed triggers that run code.Built-in examples: on_enter, on_say, on_use, on_tick.Custom events can be defined.
+### 4. Events & Hooks
+
+Named triggers that run scripted lines when something happens in the world. Builders attach them with `@trigger` on **places** (`map.mudl` / expansion areas) and **objects** (`@prototype` / `@item` blocks).
+
+**Built-in events** (Milestone 4):
+
+| Event | Fires when |
+|-------|------------|
+| `on_enter` | A player enters the place |
+| `on_leave` | A player leaves the place |
+| `on_take` | A player picks up the object |
+| `on_drop` | A player drops the object |
+| `on_move` | The object changes location (take, drop, put, etc.) |
+| `on_break` | A breakable object is smashed |
+| `on_death` | A creature with handlers dies (NPCs/objects) |
+| `on_kill` | Reserved — use loot spawners for kill drops today |
+| `on_discovered` | Creature behaviors today; object triggers coming |
+| `on_unlock` / `on_open` | Doors and containers (same as gate handlers) |
+
+**Script actions**:
+
+| Action | Example | Effect |
+|--------|---------|--------|
+| `narrate` / `say` / `message` | `narrate The air chills.` | Player-facing text |
+| `emote` | `emote shudders.` | Item: `The <item> …`; place: atmospheric |
+| `react` | `react flee` / `react attack` | Creature reactions (flee, attack, greet, warn) |
+| `damage` / `heal` | `heal 5` | Adjust actor health |
+| `mod-stat` / `mod-skill` | `mod-stat strength 2` | Permanent stat/skill bump on actor |
+| `teleport` | `teleport haunted-entry` | Move actor to a place `base_name` |
+| `spawn` | `spawn mist-wisp` | Spawn NPC from a `@spawn-template` in the world |
+
+`on_kill` fires on the **victim** (killer as actor) and on the **killer** when the killer has handlers (victim as actor). `on_discovered` runs after perception reveals a hidden creature — on both `@behavior` entries and `@trigger` scripts.
+
 ```mudl
-on_enter(room) {
-    if (random(10) > 7) {
-        say("The fire crackles warmly.")
-    }
-}
+# Place trigger (legacy map block)
+type: area
+base_name: haunted-moon
+name: Moonlit Glade
+@trigger on_enter narrate Silver mist clings to the branches.
+exits:
+  south: haunted-entry
+
+# Object trigger (@prototype / @item)
+@prototype haunted-clay-pot
+  breakable=true
+  @trigger on_break emote shatters into pale dust.
+@end
+
+# Creature triggers (@npc / @spawn-template)
+@npc path-watcher
+  @trigger on_kill narrate The forest exhales as the watcher falls.
+@end
+
+@spawn-template pale-lurker
+  @trigger on_discovered react attack
+  @trigger on_discovered emote lunges from the shadows.
+@end
 ```
+
+Creature `@behavior` scripts (spawners, NPCs) remain separate — they drive AI reacts and hidden-creature discovery. `@trigger` is for **world objects and rooms** that builders want to script without code.
 ### 5. Built-in Primitives
 * say(msg), tell(player, msg)
 * move(thing, destination)

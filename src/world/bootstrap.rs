@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::mudl::{ItemInstanceDef, ItemPrototypeDef, LoadedWorld, WorldDef};
 use crate::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value};
 use crate::persistence::Persistence;
+use crate::world::events::attach_triggers;
 use crate::world::exits::validate_world_places;
 use crate::world::session::resolve_bootstrap_location;
 
@@ -66,7 +67,7 @@ async fn spawn_prototype<P: Persistence>(
         return Ok(());
     }
     let name = def.name.as_deref().unwrap_or(&def.base_name);
-    let obj = factory
+    let mut obj = factory
         .create_from_mudl_spec(
             &def.base_name,
             name,
@@ -77,6 +78,8 @@ async fn spawn_prototype<P: Persistence>(
             &def.aliases,
         )
         .await?;
+    attach_triggers(&mut obj, &def.triggers);
+    factory.persistence().save_object(&obj).await?;
     ids.insert(def.base_name.clone(), obj.id);
     Ok(())
 }
@@ -123,6 +126,15 @@ async fn spawn_instance<P: Persistence>(
             &aliases,
         )
         .await?;
+
+    let mut triggers = Vec::new();
+    if let Some(proto_name) = def.prototype.as_deref() {
+        if let Some(proto_def) = prototype_defs.iter().find(|p| p.base_name == proto_name) {
+            triggers.extend(proto_def.triggers.clone());
+        }
+    }
+    triggers.extend(def.triggers.clone());
+    attach_triggers(&mut obj, &triggers);
 
     let parent_id = placements.get(&def.location).ok_or_else(|| {
         anyhow::anyhow!(
@@ -476,6 +488,7 @@ pub async fn bootstrap_world<P: Persistence>(
                     });
                 }
             }
+            attach_triggers(&mut obj, &def.triggers);
             factory.persistence().save_object(&obj).await?;
         }
     }
@@ -1811,9 +1824,13 @@ mod tests {
             take_item(&mut ctx, "whisper charm").unwrap();
         }
 
-        session.go("north").unwrap();
+        let moon_entry = session.go("north").unwrap();
         session.go("in").unwrap();
-        session.go("north").unwrap();
+        let moon_arrival = session.go("north").unwrap();
+        assert!(
+            moon_arrival.contains("Silver mist clings to the branches"),
+            "haunted-moon on_enter trigger should narrate: {moon_arrival}"
+        );
         assert_eq!(
             session
                 .object(session.current_location().unwrap())
@@ -1821,6 +1838,7 @@ mod tests {
                 .name,
             "Moonlit Glade"
         );
+        let _ = moon_entry;
 
         let wisp_count_before = session
             .objects()
@@ -1843,6 +1861,10 @@ mod tests {
         };
 
         assert!(break_msg.contains("smash the clay pot"));
+        assert!(
+            break_msg.contains("shatters into pale dust"),
+            "pot on_break trigger should fire: {break_msg}"
+        );
         assert!(break_msg.contains("find") || break_msg.contains("rations"));
         assert!(
             session.objects().get(&pot_id).is_some_and(|o| o.is_deleted),
@@ -2010,6 +2032,14 @@ mod tests {
         )
         .unwrap();
         assert!(outcome.lines.iter().any(|l| l.contains("corpse")));
+        assert!(
+            outcome
+                .lines
+                .iter()
+                .any(|l| l.contains("forest exhales")),
+            "path watcher on_kill trigger should narrate: {:?}",
+            outcome.lines
+        );
         assert!(
             outcome.lines.iter().any(|l| l.contains("rations")),
             "on_kill loot should drop trail rations: {:?}",

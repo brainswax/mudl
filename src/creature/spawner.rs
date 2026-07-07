@@ -13,6 +13,7 @@ use crate::mudl::{
     AnatomyRegistry, NpcBehaviorDef, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef, SpawnerTrigger,
 };
 use crate::object::{generate_object_id, Object, ObjectId, PermissionFlags, Property, Value};
+use crate::world::events::attach_triggers;
 
 /// Result of a spawner tick — optional narrative feedback for the player.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,6 +322,16 @@ pub fn spawn_templates_to_property(templates: &[SpawnTemplateDef]) -> Property {
                 .iter()
                 .map(|name| Value::String(name.clone()))
                 .collect();
+            let triggers: Vec<Value> = template
+                .triggers
+                .iter()
+                .map(|trigger| {
+                    Value::Map(HashMap::from([
+                        ("event".to_string(), Value::String(trigger.event.clone())),
+                        ("code".to_string(), Value::String(trigger.code.clone())),
+                    ]))
+                })
+                .collect();
             Value::Map(HashMap::from([
                 (
                     "base_name".to_string(),
@@ -341,6 +352,7 @@ pub fn spawn_templates_to_property(templates: &[SpawnTemplateDef]) -> Property {
                 ),
                 ("behaviors".to_string(), Value::List(behaviors)),
                 ("use_behaviors".to_string(), Value::List(use_behaviors)),
+                ("triggers".to_string(), Value::List(triggers)),
             ]))
         })
         .collect();
@@ -352,7 +364,8 @@ pub fn spawn_templates_to_property(templates: &[SpawnTemplateDef]) -> Property {
     }
 }
 
-fn resolve_spawn_template(template_name: &str, spawner: &Object) -> Option<SpawnTemplateDef> {
+/// Look up a spawn template by name on a spawner object.
+pub fn resolve_spawn_template(template_name: &str, spawner: &Object) -> Option<SpawnTemplateDef> {
     spawner.get_property("spawn_templates").and_then(|prop| {
         if let Value::List(items) = &prop.value {
             items.iter().find_map(|entry| {
@@ -433,12 +446,35 @@ fn resolve_spawn_template(template_name: &str, spawner: &Object) -> Option<Spawn
                         }
                     })
                     .unwrap_or_default();
+                let triggers: Vec<crate::mudl::TriggerDef> = map
+                    .get("triggers")
+                    .and_then(|v| {
+                        if let Value::List(list) = v {
+                            Some(
+                                list.iter()
+                                    .filter_map(|entry| {
+                                        let Value::Map(tmap) = entry else {
+                                            return None;
+                                        };
+                                        Some(crate::mudl::TriggerDef {
+                                            event: tmap.get("event")?.as_string()?,
+                                            code: tmap.get("code")?.as_string()?,
+                                        })
+                                    })
+                                    .collect(),
+                            )
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
                 Some(SpawnTemplateDef {
                     base_name: base.to_string(),
                     name,
                     creature,
                     behaviors,
                     use_behaviors,
+                    triggers,
                 })
             })
         } else {
@@ -532,8 +568,54 @@ pub fn spawn_creature(
         npc.add_property(creature_behaviors_to_property(&behavior_entries));
         apply_tactics_from_behaviors(&mut npc, &behavior_entries, &behavior_templates);
     }
+    attach_triggers(&mut npc, &template.triggers);
 
     npc
+}
+
+/// Find a spawn template by name on any spawner in the world graph.
+pub fn find_spawn_template_in_world(
+    template_name: &str,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<(SpawnTemplateDef, Object)> {
+    for spawner in objects.values().filter(|o| o.is_active() && is_spawner(o)) {
+        if let Some(template) = resolve_spawn_template(template_name, spawner) {
+            return Some((template, spawner.clone()));
+        }
+    }
+    None
+}
+
+/// Spawn an NPC from a named template into `room_id` and insert it into `objects`.
+pub fn spawn_creature_from_template(
+    template_name: &str,
+    room_id: &ObjectId,
+    owner: &ObjectId,
+    anatomy: &AnatomyRegistry,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> Option<(Object, Option<String>)> {
+    let (template, spawner) = find_spawn_template_in_world(template_name, objects)?;
+    let spawn_index = objects
+        .values()
+        .filter(|o| {
+            o.is_active()
+                && o.object_type() == "npc"
+                && o.get_object_ref_property("spawned_by").as_ref() == Some(&spawner.id)
+        })
+        .count() as u32
+        + 1;
+    let npc = spawn_creature(
+        &spawner,
+        &template,
+        room_id,
+        owner,
+        anatomy,
+        spawn_index,
+    );
+    let message = spawn_message(&template);
+    let npc_id = npc.id.clone();
+    objects.insert(npc_id, npc.clone());
+    Some((npc, Some(message)))
 }
 
 fn spawn_message(template: &SpawnTemplateDef) -> String {
@@ -691,6 +773,7 @@ mod tests {
                     react: None,
                 }],
                 use_behaviors: vec![],
+                triggers: vec![],
             },
         )])
     }

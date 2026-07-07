@@ -111,6 +111,7 @@ impl<P: Persistence> ObjectFactory<P> {
             npc.add_property(creature_behaviors_to_property(&behavior_entries));
             apply_tactics_from_behaviors(&mut npc, &behavior_entries, behavior_templates);
         }
+        crate::world::events::attach_triggers(&mut npc, &def.triggers);
         self.commit(&npc).await?;
         Ok(npc)
     }

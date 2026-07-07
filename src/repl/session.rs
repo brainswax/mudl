@@ -25,8 +25,10 @@ use crate::world::portal::{
     passable_portal_for_direction, portal_passage_block, portal_permits_exit,
 };
 use crate::world::{
-    persist_all, persist_dirty, resolve_player_location, restore_session, DirtyTracker,
+    execute_event, persist_all, persist_dirty, resolve_player_location, restore_session,
+    DirtyTracker, EventContext,
 };
+use crate::mudl::trigger_def::events::{ON_ENTER, ON_LEAVE};
 
 /// Errors from session-level navigation and state operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,6 +313,18 @@ impl Session {
             &self.objects,
         );
 
+        let leave_outcome = execute_event(
+            ON_LEAVE,
+            &EventContext {
+                actor_id: self.player_id.clone(),
+                host_id: loc_id.clone(),
+                room_id: Some(loc_id.clone()),
+                target_id: Some(target_id.clone()),
+            },
+            &mut self.objects,
+            Some(&self.anatomy),
+        );
+
         let player = self
             .objects
             .get_mut(&self.player_id)
@@ -323,6 +337,10 @@ impl Session {
         let looped = looped_target != *map_target_id;
         let scattered = target_id != looped_target;
         let mut lines = portal_prep_lines;
+        lines.extend(leave_outcome.lines);
+        for id in leave_outcome.dirty {
+            self.dirty.mark(&id);
+        }
         if scattered {
             let dest_name = object_name(&target_id, &self.objects);
             lines.push(narrate_scatter_exit(&dest_name));
@@ -376,6 +394,24 @@ impl Session {
         }
         for spawner in crate::creature::spawners_in_room(&target_id, &self.objects) {
             self.dirty.mark(&spawner.id);
+        }
+
+        let enter_outcome = execute_event(
+            ON_ENTER,
+            &EventContext {
+                actor_id: self.player_id.clone(),
+                host_id: target_id.clone(),
+                room_id: Some(target_id.clone()),
+                target_id: None,
+            },
+            &mut self.objects,
+            Some(&self.anatomy),
+        );
+        for line in enter_outcome.lines {
+            lines.push(line);
+        }
+        for id in enter_outcome.dirty {
+            self.dirty.mark(&id);
         }
 
         let behavior_outcome = crate::creature::run_creature_behaviors(

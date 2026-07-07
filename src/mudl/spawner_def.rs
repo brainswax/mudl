@@ -1,6 +1,8 @@
 //! Creature spawner definitions — weighted templates attached to locations.
 
 use super::npc_def::NpcBehaviorDef;
+use super::trigger_def::parse_trigger_line;
+use super::TriggerDef;
 
 /// When a spawner attempts to create creatures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub struct SpawnTemplateDef {
     pub creature: String,
     pub behaviors: Vec<NpcBehaviorDef>,
     pub use_behaviors: Vec<String>,
+    pub triggers: Vec<TriggerDef>,
 }
 
 /// Weighted reference to a spawn template inside a spawner.
@@ -115,7 +118,17 @@ pub fn parse_spawner_file(content: &str) -> (Vec<SpawnTemplateDef>, Vec<SpawnerD
                 creature: "human".to_string(),
                 behaviors: Vec::new(),
                 use_behaviors: Vec::new(),
+                triggers: Vec::new(),
             });
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("@trigger ") {
+            if let Some(trigger) = parse_trigger_line(rest) {
+                if let Some(template) = &mut current_template {
+                    template.triggers.push(trigger);
+                }
+            }
             continue;
         }
 
@@ -244,5 +257,20 @@ mod tests {
         assert_eq!(spawners[0].location, "haunted-moon");
         assert_eq!(spawners[0].entries.len(), 2);
         assert_eq!(spawners[0].entries[0].weight, 3);
+    }
+
+    #[test]
+    fn parse_pale_lurker_on_discovered_triggers() {
+        let content = include_str!(
+            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+        );
+        let (templates, _) = parse_spawner_file(content);
+        let lurker = templates
+            .iter()
+            .find(|t| t.base_name == "pale-lurker")
+            .expect("pale-lurker template");
+        assert_eq!(lurker.triggers.len(), 2);
+        assert_eq!(lurker.triggers[0].event, "on_discovered");
+        assert_eq!(lurker.triggers[0].code, "react attack");
     }
 }

@@ -1,43 +1,19 @@
 //! Gate event handlers (`on_unlock`, `on_open`, etc.) for doors and containers.
 
 use crate::object::Object;
+use crate::world::events::run_event_handlers_on;
 
 /// Run all handlers registered on `gate` for `event_name` and return player-facing lines.
 pub fn run_gate_event_handlers(gate: &Object, event_name: &str) -> Vec<String> {
-    gate.event_handlers
-        .get(event_name)
-        .map(|handlers| {
-            handlers
-                .iter()
-                .filter_map(|behavior| format_gate_behavior_line(gate, &behavior.code))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn format_gate_behavior_line(gate: &Object, code: &str) -> Option<String> {
-    let code = code.trim();
-    if code.is_empty() {
-        return None;
-    }
-    let display = gate.name.to_lowercase();
-    if let Some((verb, text)) = code.split_once(char::is_whitespace) {
-        let text = text.trim();
-        if !text.is_empty() {
-            return match verb.to_ascii_lowercase().as_str() {
-                "say" | "narrate" | "message" => Some(text.to_string()),
-                "emote" => Some(format!("The {display} {text}")),
-                _ => Some(code.to_string()),
-            };
-        }
-    }
-    Some(code.to_string())
+    run_event_handlers_on(gate, event_name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::{Behavior, PermissionFlags};
+    use crate::object::PermissionFlags;
+    use crate::world::events::attach_triggers;
+    use crate::mudl::TriggerDef;
     use std::collections::HashMap;
 
     fn gate_with_handlers() -> Object {
@@ -55,19 +31,18 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         };
-        gate.add_event_handler(
-            "on_unlock".to_string(),
-            Behavior {
-                code: "narrate The lock clicks free.".to_string(),
-                permissions: PermissionFlags::EVERYONE,
-            },
-        );
-        gate.add_event_handler(
-            "on_open".to_string(),
-            Behavior {
-                code: "emote swings open".to_string(),
-                permissions: PermissionFlags::EVERYONE,
-            },
+        attach_triggers(
+            &mut gate,
+            &[
+                TriggerDef {
+                    event: "on_unlock".to_string(),
+                    code: "narrate The lock clicks free.".to_string(),
+                },
+                TriggerDef {
+                    event: "on_open".to_string(),
+                    code: "emote swings open".to_string(),
+                },
+            ],
         );
         gate
     }

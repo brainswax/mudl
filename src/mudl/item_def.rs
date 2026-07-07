@@ -1,6 +1,7 @@
 //! Item prototypes and spawn instances from MUDL `items.mudl` / `objects.mudl`.
 
-use crate::mudl::MudlRoleProps;
+use crate::mudl::trigger_def::parse_trigger_line;
+use crate::mudl::{MudlRoleProps, TriggerDef};
 
 /// Shared template for identical items (stored as a real object for inheritance).
 #[derive(Debug, Clone, PartialEq)]
@@ -10,6 +11,7 @@ pub struct ItemPrototypeDef {
     pub description: Option<String>,
     pub aliases: Vec<String>,
     pub props: MudlRoleProps,
+    pub triggers: Vec<TriggerDef>,
 }
 
 /// A concrete item placed in the world at bootstrap.
@@ -22,6 +24,7 @@ pub struct ItemInstanceDef {
     pub aliases: Vec<String>,
     pub location: String,
     pub props: MudlRoleProps,
+    pub triggers: Vec<TriggerDef>,
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -108,6 +111,7 @@ pub fn parse_item_file(content: &str) -> (Vec<ItemPrototypeDef>, Vec<ItemInstanc
                 description: None,
                 aliases: Vec::new(),
                 props: MudlRoleProps::default(),
+                triggers: Vec::new(),
             });
             continue;
         }
@@ -125,7 +129,19 @@ pub fn parse_item_file(content: &str) -> (Vec<ItemPrototypeDef>, Vec<ItemInstanc
                 aliases: Vec::new(),
                 location: String::new(),
                 props: MudlRoleProps::default(),
+                triggers: Vec::new(),
             });
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("@trigger ") {
+            if let Some(trigger) = parse_trigger_line(rest) {
+                if let Some(proto) = &mut current_proto {
+                    proto.triggers.push(trigger);
+                } else if let Some(item) = &mut current_item {
+                    item.triggers.push(trigger);
+                }
+            }
             continue;
         }
 
@@ -362,6 +378,14 @@ mod tests {
             .find(|p| p.base_name == "hollow-oak-portal")
             .expect("hollow-oak-portal prototype");
         assert_eq!(oak.props.lock_consumable, Some(true));
+
+        let pot = prototypes
+            .iter()
+            .find(|p| p.base_name == "haunted-clay-pot")
+            .expect("haunted-clay-pot prototype");
+        assert_eq!(pot.triggers.len(), 1);
+        assert_eq!(pot.triggers[0].event, "on_break");
+        assert_eq!(pot.triggers[0].code, "emote shatters into pale dust.");
     }
 
     #[test]
