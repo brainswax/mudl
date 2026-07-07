@@ -1172,6 +1172,7 @@ mod tests {
             attack_damage: Some(12),
             awareness_check: None,
             perception: None,
+            grant_effect_on_hit: None,
         }]));
         let mut objects = HashMap::from([
             (player.id.clone(), player),
@@ -1296,6 +1297,7 @@ mod tests {
             attack_damage: Some(20),
             awareness_check: None,
             perception: None,
+            grant_effect_on_hit: None,
         }]));
         let mut objects = HashMap::from([
             (player.id.clone(), player),
@@ -1379,6 +1381,7 @@ mod tests {
             attack_damage: Some(8),
             awareness_check: None,
             perception: None,
+            grant_effect_on_hit: None,
         }]));
         let mut objects = HashMap::from([
             (player.id.clone(), player),

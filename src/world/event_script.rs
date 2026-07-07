@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use crate::creature::behavior::{
     creature_attack_damage, npc_attack_player, npc_flee_room, DEFAULT_ATTACK_DAMAGE,
 };
-use crate::creature::effects::apply_effect;
+use crate::creature::conditions::{
+    apply_condition, creature_has_condition_tag, creature_has_effect, cure_by_tag, remove_condition,
+};
 use crate::creature::spawner::spawn_creature_from_template;
 use crate::creature::vitality::{apply_damage, creature_health, heal};
 use crate::mudl::{AnatomyRegistry, CreatureReact};
@@ -107,6 +109,15 @@ pub enum ScriptCondition {
     Chance {
         percent: u32,
     },
+    Effect {
+        target: ScriptTarget,
+        name: String,
+    },
+    ConditionTag {
+        target: ScriptTarget,
+        tag: String,
+    },
+    Not(Box<ScriptCondition>),
 }
 
 /// Parsed script verb + payload.
@@ -122,6 +133,8 @@ pub enum ScriptAction {
     ModSkill(String, i64, ScriptTarget),
     SetProperty(String, PropertyValue, ScriptTarget),
     GrantEffect(String, ScriptTarget),
+    RemoveEffect(String, ScriptTarget),
+    CureTag(String, ScriptTarget),
     Teleport(String, ScriptTarget),
     SpawnCreature(String),
     SpawnItem(String, u32),
@@ -159,12 +172,27 @@ fn parse_condition(rest: &str) -> Option<ScriptCondition> {
         return None;
     }
 
+    if tokens[0].eq_ignore_ascii_case("not") {
+        return parse_condition(&tokens[1..].join(" "))
+            .map(|inner| ScriptCondition::Not(Box::new(inner)));
+    }
+
     let (target, start) = if ScriptTarget::parse(tokens[0]).is_some() {
         (ScriptTarget::parse(tokens[0]).unwrap(), 1)
     } else {
         (ScriptTarget::Actor, 0)
     };
     let words = &tokens[start..];
+
+    if words.first() == Some(&"effect") {
+        let name = words.get(1)?.to_string();
+        return Some(ScriptCondition::Effect { target, name });
+    }
+
+    if words.first() == Some(&"condition") {
+        let tag = words.get(1)?.to_string();
+        return Some(ScriptCondition::ConditionTag { target, tag });
+    }
 
     if words.first() == Some(&"chance") {
         let percent = words.get(1).and_then(|v| v.parse().ok()).unwrap_or(50);
@@ -315,6 +343,16 @@ pub fn parse_script(code: &str) -> ScriptAction {
             let effect = rest_tokens.first().cloned().unwrap_or_default();
             ScriptAction::GrantEffect(effect, target)
         }
+        "remove-effect" | "remove_effect" | "cure-effect" | "cure_effect" => {
+            let (target, rest_tokens) = parse_target_prefix(&tokens);
+            let effect = rest_tokens.first().cloned().unwrap_or_default();
+            ScriptAction::RemoveEffect(effect, target)
+        }
+        "cure-tag" | "cure_tag" | "cure" => {
+            let (target, rest_tokens) = parse_target_prefix(&tokens);
+            let tag = rest_tokens.first().cloned().unwrap_or_default();
+            ScriptAction::CureTag(tag, target)
+        }
         "teleport" | "send" => {
             let (target, rest_tokens) = parse_target_prefix(&tokens);
             let place = rest_tokens.join(" ");
@@ -389,8 +427,36 @@ fn evaluate_condition(
     ctx: &EventContext,
     host_id: &ObjectId,
     objects: &HashMap<ObjectId, Object>,
+    anatomy: Option<&AnatomyRegistry>,
 ) -> bool {
     match condition {
+        ScriptCondition::Not(inner) => {
+            !evaluate_condition(inner, ctx, host_id, objects, anatomy)
+        }
+        ScriptCondition::Effect { target, name } => {
+            let Some(id) = resolve_target_id(*target, ctx, host_id) else {
+                return false;
+            };
+            let Some(obj) = objects.get(&id) else {
+                return false;
+            };
+            let Some(anatomy) = anatomy else {
+                return false;
+            };
+            creature_has_effect(obj, name, objects, anatomy)
+        }
+        ScriptCondition::ConditionTag { target, tag } => {
+            let Some(id) = resolve_target_id(*target, ctx, host_id) else {
+                return false;
+            };
+            let Some(obj) = objects.get(&id) else {
+                return false;
+            };
+            let Some(anatomy) = anatomy else {
+                return false;
+            };
+            creature_has_condition_tag(obj, tag, anatomy)
+        }
         ScriptCondition::Chance { percent } => {
             let seed = mix_seed(&[
                 ctx.actor_id.as_str(),
@@ -558,7 +624,7 @@ pub fn execute_script(
 
     match action {
         ScriptAction::When(condition, inner) => {
-            if evaluate_condition(condition, ctx, &host_id, objects) {
+            if evaluate_condition(condition, ctx, &host_id, objects, anatomy) {
                 return execute_script(host, inner, ctx, objects, anatomy);
             }
         }
@@ -700,13 +766,59 @@ pub fn execute_script(
             }
             if let Some(subject) = objects.get_mut(&id) {
                 if subject.has_creature_role() {
-                    apply_effect(subject, effect, anatomy);
+                    apply_condition(subject, effect, anatomy);
                     outcome.mark_dirty(&id);
                     if *target == ScriptTarget::Actor {
                         outcome.push_line(format!("You feel the {effect} effect take hold."));
                     }
                 } else {
                     outcome.record_error("grant-effect: target is not a creature".to_string());
+                }
+            }
+        }
+        ScriptAction::RemoveEffect(effect, target) => {
+            if effect.is_empty() {
+                outcome.record_error("remove-effect: missing effect name".to_string());
+                return outcome;
+            }
+            let Some(id) = resolve_target_id(*target, ctx, &host_id) else {
+                return outcome;
+            };
+            let Some(anatomy) = anatomy else {
+                return outcome;
+            };
+            if let Some(subject) = objects.get_mut(&id) {
+                if subject.has_creature_role() {
+                    remove_condition(subject, effect, anatomy);
+                    outcome.mark_dirty(&id);
+                    if *target == ScriptTarget::Actor {
+                        outcome.push_line(format!("The {effect} effect lifts."));
+                    }
+                }
+            }
+        }
+        ScriptAction::CureTag(tag, target) => {
+            if tag.is_empty() {
+                outcome.record_error("cure-tag: missing tag".to_string());
+                return outcome;
+            }
+            let Some(id) = resolve_target_id(*target, ctx, &host_id) else {
+                return outcome;
+            };
+            let Some(anatomy) = anatomy else {
+                return outcome;
+            };
+            if let Some(subject) = objects.get_mut(&id) {
+                if subject.has_creature_role() {
+                    let removed = cure_by_tag(subject, tag, anatomy);
+                    if !removed.is_empty() {
+                        outcome.mark_dirty(&id);
+                        if *target == ScriptTarget::Actor {
+                            outcome.push_line(format!(
+                                "You feel the {tag} condition ease."
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -1134,6 +1246,7 @@ mod tests {
             attack_damage: Some(15),
             awareness_check: None,
             perception: None,
+            grant_effect_on_hit: None,
         }]));
 
         let mut objects = HashMap::from([

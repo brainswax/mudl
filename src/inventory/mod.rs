@@ -9,7 +9,7 @@ use crate::display::{
 };
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{LocationRef, Object, ObjectId};
-use crate::mudl::trigger_def::events::{ON_BREAK, ON_DROP, ON_HARVEST, ON_TAKE};
+use crate::mudl::trigger_def::events::{ON_BREAK, ON_DROP, ON_HARVEST, ON_TAKE, ON_USE};
 use crate::world::events::{execute_event, emit_on_move_event, EventContext};
 use crate::world::move_manager::{
     move_object, move_to_container, move_to_grasp, move_to_room, MoveContext, MoveError, MoveHooks,
@@ -62,6 +62,8 @@ pub enum InventoryError {
     AlreadyBroken(String),
     /// Object cannot be harvested.
     NotHarvestable(String),
+    /// Object has no `on_use` handler and is not consumable.
+    NotUsable(String),
 }
 
 impl fmt::Display for InventoryError {
@@ -111,6 +113,7 @@ impl fmt::Display for InventoryError {
             Self::NotBreakable(name) => write!(f, "The {name} can't be broken."),
             Self::AlreadyBroken(name) => write!(f, "The {name} is already broken."),
             Self::NotHarvestable(name) => write!(f, "You can't harvest from the {name}."),
+            Self::NotUsable(name) => write!(f, "You don't know how to use the {name}."),
         }
     }
 }
@@ -1481,6 +1484,77 @@ pub fn harvest_item(
 
     for id in harvest_outcome.dirty {
         mark_dirty(ctx, &id);
+    }
+
+    Ok(lines.join("\n"))
+}
+
+/// Use a carried item (`use` / `drink` / `apply`) — fires `on_use` triggers.
+pub fn use_item(
+    ctx: &mut InventoryContext<'_>,
+    item_name: &str,
+) -> Result<String, InventoryError> {
+    let room_id = ctx.room_id.cloned().ok_or(InventoryError::NoRoom)?;
+    let item_id = resolve_inventory_target(
+        item_name,
+        None,
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Carried,
+    )?;
+
+    if !is_carried_by(ctx.player_id, &item_id, ctx.objects) {
+        return Err(InventoryError::NotCarried);
+    }
+
+    let item = ctx
+        .objects
+        .get(&item_id)
+        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?
+        .clone();
+
+    let display = item.name.to_lowercase();
+    if !item.is_active() {
+        return Err(InventoryError::NotFound(item_name.to_string()));
+    }
+
+    let has_use = item
+        .event_handlers
+        .contains_key(ON_USE)
+        || item.get_bool_property("consumable").unwrap_or(false);
+    if !has_use {
+        return Err(InventoryError::NotUsable(display));
+    }
+
+    let mut lines = vec![format!("You use the {display}.")];
+    let use_outcome = execute_event(
+        ON_USE,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: item_id.clone(),
+            room_id: Some(room_id),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(use_outcome.lines);
+
+    for id in use_outcome.dirty {
+        mark_dirty(ctx, &id);
+    }
+
+    if item.get_bool_property("consumable").unwrap_or(false) {
+        if let Some(obj) = ctx.objects.get_mut(&item_id) {
+            if obj.is_stackable() && obj.stack_count() > 1 {
+                obj.set_stack_count(obj.stack_count() - 1);
+                mark_dirty(ctx, &item_id);
+            } else {
+                obj.soft_delete();
+                mark_dirty(ctx, &item_id);
+                clear_creature_slots_for_item(ctx.player_id, &item_id, ctx.objects);
+            }
+        }
     }
 
     Ok(lines.join("\n"))

@@ -223,6 +223,12 @@ mod tests {
                 stat_mods: HashMap::new(),
                 skill_mods: HashMap::new(),
                 regen_on_enter: 3,
+                condition_type: None,
+                cure_tags: Vec::new(),
+                damage_on_tick: 0,
+                heal_on_tick: 0,
+                tick_on: "on_enter".to_string(),
+                duration_ticks: 0,
             },
         );
         registry.creatures.insert(

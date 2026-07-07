@@ -29,7 +29,7 @@ use mudl::display::{
 use mudl::inventory::{
     break_item, close_container, describe_inventory, drop_item, harvest_item, lock_container,
     open_container, parse_put_args, parse_unlock_args, put_item, read_item, remove_item,
-    take_item, unlock_container, wear_item, wield_item,
+    take_item, unlock_container, use_item, wear_item, wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
@@ -1088,6 +1088,23 @@ async fn main() -> Result<()> {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after harvest failed");
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "use" | "drink" | "apply" => {
+                        if parts.len() < 2 {
+                            println!("Usage: use <item>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match use_item(&mut ctx, &item_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
+                                    error!(error = %e, "persist after use failed");
                                 }
                             }
                             Err(e) => println!("{e}"),

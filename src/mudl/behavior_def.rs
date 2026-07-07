@@ -58,6 +58,8 @@ pub struct BehaviorTemplateDef {
     pub on_discovered_text: Option<String>,
     /// Optional react override when discovered (defaults to script-only if unset).
     pub on_discovered_react: Option<CreatureReact>,
+    /// Effect applied to the target when this template's attack hits.
+    pub grant_effect_on_hit: Option<String>,
 }
 
 impl Default for BehaviorTemplateDef {
@@ -74,6 +76,7 @@ impl Default for BehaviorTemplateDef {
             on_discovered_action: None,
             on_discovered_text: None,
             on_discovered_react: None,
+            grant_effect_on_hit: None,
         }
     }
 }
@@ -155,6 +158,9 @@ pub fn parse_behavior_file(content: &str) -> Vec<BehaviorTemplateDef> {
                     }
                     "perception" => {
                         template.perception = value.parse().ok();
+                    }
+                    "grant_effect_on_hit" | "on_hit_effect" | "venom" => {
+                        template.grant_effect_on_hit = Some(value.to_string());
                     }
                     _ => {}
                 }

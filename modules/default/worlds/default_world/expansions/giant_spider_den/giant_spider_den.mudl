@@ -13,12 +13,24 @@
   integrates=swamp-dry,forest-path,the-void
 @end
 
-# --- Den-specific effects & behaviors ---
+# --- Den-specific conditions & behaviors ---
 
-@effect webbed_slow
+@condition web_snare
+  condition=slow
+  cure_tag=slow
+  tick_on=on_enter
+  duration=6
   mod_encumbrance=1.2
   mod_stat_dexterity=-3
   mod_skill_stealth=-2
+@end
+
+@condition brood_venom
+  condition=poison
+  cure_tag=poison
+  damage_on_tick=3
+  tick_on=on_enter
+  duration=10
 @end
 
 @effect starlight_ward
@@ -37,6 +49,7 @@
   awareness_check=true
   perception=14
   attack_damage=11
+  grant_effect_on_hit=brood_venom
   on_discovered=emote drops from the webbing without a sound.
   on_discovered_react=attack
 @end
@@ -46,6 +59,7 @@
   awareness_check=true
   perception=12
   attack_damage=9
+  grant_effect_on_hit=brood_venom
   on_discovered=emote skitters from a cocoon, legs drumming on stone.
 @end
 
@@ -510,7 +524,7 @@ base_name: spider-entry
 name: Webbed Threshold
 description: You crawl into a tunnel strung with wet silk. The air tastes of copper and old prey. Every sound you make has an answer somewhere above.
 @trigger on_enter narrate The fissure seals behind you with a soft, obscene patience.
-@trigger on_enter when skill stealth below 2 then grant-effect actor webbed_slow
+@trigger on_enter when skill stealth below 2 then grant-effect actor web_snare
 exits:
   north: spider-silk
   east: spider-gloom
@@ -572,7 +586,7 @@ type: area
 base_name: spider-gloom
 name: Gloom Crawl
 description: The dark here has weight. Your lantern — if you had one — would die without argument.
-@trigger on_enter grant-effect actor webbed_slow
+@trigger on_enter grant-effect actor web_snare
 @trigger on_enter damage actor 7
 exits:
   out: spider-entry

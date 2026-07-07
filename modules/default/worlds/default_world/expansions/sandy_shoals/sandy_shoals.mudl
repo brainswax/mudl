@@ -13,26 +13,47 @@
   integrates=the-void,forest-path
 @end
 
-# --- Resort-specific effects ---
+# --- Resort-specific conditions & buffs ---
 
-@effect tipsy
+@condition tipsy
+  condition=drunk
+  cure_tag=drunk
+  duration=10
+  tick_on=on_enter
   mod_stat_dexterity=-1
   mod_stat_charisma=1
   mod_encumbrance=1.02
 @end
 
-@effect beach_buzz
+@condition beach_buzz
+  condition=drunk
+  cure_tag=drunk
+  duration=14
+  tick_on=on_enter
   mod_stat_dexterity=-3
   mod_stat_wisdom=-1
   mod_stat_charisma=2
   mod_encumbrance=1.06
 @end
 
-@effect three_sheets
+@condition three_sheets
+  condition=drunk
+  cure_tag=drunk
+  duration=18
+  tick_on=on_enter
   mod_stat_dexterity=-5
   mod_stat_wisdom=-3
   mod_stat_charisma=3
   mod_encumbrance=1.12
+@end
+
+@condition shore_regeneration
+  condition=regeneration
+  cure_tag=regeneration
+  heal_on_tick=6
+  tick_on=on_enter
+  duration=8
+  mod_stat_wisdom=1
 @end
 
 @effect sun_kissed
@@ -167,6 +188,23 @@
   volume=8.0
   pocketable=false
   alias=hammock
+@end
+
+@prototype coconut-remedy
+  name=Coconut Remedy
+  description=A chilled coconut cracked open and spiked with lime. The menu calls it medicinal. The menu is not wrong.
+  stackable=true
+  stack_count=2
+  consumable=true
+  weight=0.5
+  volume=0.4
+  pocketable=true
+  alias=remedy
+  alias=coconut remedy
+  alias=coconut
+  @trigger on_use narrate Coconut water and lime scour the last of the umbrella drinks from your veins.
+  @trigger on_use cure-tag actor drunk
+  @trigger on_use grant-effect actor shore_regeneration
 @end
 
 @prototype shell-cluster
@@ -453,6 +491,7 @@
   @trigger on_discovered when stat dexterity below 8 then narrate Your pleasantly blurred vision somehow helps you notice the cache first.
   @trigger on_discovered spawn item treasure-map-scroll
   @trigger on_discovered spawn item sunscreen-salve
+  @trigger on_discovered spawn item coconut-remedy
 @end
 
 @item shore-buried-bottle
@@ -646,8 +685,9 @@
   name=Tiki Bartender
   @use-behavior resort_host
   @trigger on_enter say Tonight's special is confidence, served on the rocks.
-  @trigger on_enter when stat dexterity below 8 then say Easy there — I'll cut you off after the next umbrella.
-  @trigger on_enter when stat dexterity below 6 then say How about some water with a heroic lime wedge?
+  @trigger on_enter when condition drunk then say How about some water with a heroic lime wedge?
+  @trigger on_enter when condition drunk then narrate The bartender slides a coconut remedy across the bamboo without breaking eye contact.
+  @trigger on_enter when condition drunk then spawn item coconut-remedy
   @trigger on_enter when stat charisma at_least 12 then say You look like trouble in the best possible way.
 @end
 
@@ -715,6 +755,9 @@ description: Striped hammocks sway between palms. A attendant fans herself with 
 @trigger on_enter narrate Sunlight settles on your shoulders like a blanket someone else already warmed.
 @trigger on_enter when health below 90 then heal actor 8
 @trigger on_enter grant-effect actor sun_kissed
+@trigger on_enter when condition drunk then narrate The hammock sways you sober while the tide counts your pulse back to sensible.
+@trigger on_enter when condition drunk then cure-tag actor drunk
+@trigger on_enter when condition drunk then grant-effect actor shore_regeneration
 exits:
   west: beach-shore
   south: beach-bar
@@ -726,8 +769,8 @@ name: Tiki Bar
 description: Bamboo and shells frame a bar that takes its job seriously but not itself. Paper umbrellas lean in rows. Somewhere, a shaker performs percussion.
 @trigger on_enter narrate Glasses chime — the resort's second language.
 @trigger on_respawn narrate The bartender slides fresh garnishes down the counter.
-@trigger on_enter when stat dexterity below 8 then narrate The floor develops opinions about where your feet belong.
-@trigger on_enter when stat dexterity below 6 then narrate You grip the tiki post and grin at nobody in particular.
+@trigger on_enter when condition drunk then narrate The floor develops opinions about where your feet belong.
+@trigger on_enter when condition drunk then narrate You grip the tiki post and grin at nobody in particular.
 @trigger on_enter when stat charisma at_least 12 then narrate Laughter rises from a corner table in your honor — or someone's honor. Hard to tell. Feels right.
 exits:
   north: beach-sunbeds

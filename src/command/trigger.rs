@@ -76,10 +76,11 @@ pub fn trigger_command_help() -> &'static str {
 Targets: object/creature/place name, here/. (current room), me/self (player)
 
 Events: on_enter, on_leave, on_take, on_drop, on_move, on_break, on_kill,
-        on_discovered, on_harvest, on_unlock, on_open, on_weather, …
+        on_discovered, on_harvest, on_use, on_unlock, on_open, on_weather, …
 
 Scripts: narrate/say/emote/react, damage/heal, mod-stat/mod-skill, set-property,
-         grant-effect, teleport, spawn, when/if conditionals, stop
+         grant-effect, remove-effect, cure-tag, teleport, spawn,
+         when/if conditionals (effect, condition, not), stop
 
 Examples:
   @trigger here on_enter narrate Silver mist clings to the branches.

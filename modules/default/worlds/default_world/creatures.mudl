@@ -36,6 +36,10 @@
   mod_encumbrance=0.95
 @end
 
-@effect regeneration
+@condition regeneration
+  condition=regeneration
+  cure_tag=regeneration
+  heal_on_tick=2
+  tick_on=on_enter
   regen_on_enter=2
 @end

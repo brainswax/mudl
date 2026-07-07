@@ -25,11 +25,37 @@
   mod_skill_survival=2
 @end
 
+@condition swamp_venom
+  condition=poison
+  cure_tag=poison
+  damage_on_tick=3
+  tick_on=on_enter
+  duration=10
+  mod_stat_dexterity=-1
+@end
+
+@condition bog_miasma
+  condition=poison
+  cure_tag=poison
+  damage_on_tick=2
+  tick_on=on_enter
+  duration=6
+@end
+
+@condition bog_bleeding
+  condition=bleed
+  cure_tag=bleed
+  damage_on_tick=2
+  tick_on=on_enter
+  duration=8
+@end
+
 @behavior-template venomous
   react=attack
   awareness_check=true
   perception=11
   attack_damage=9
+  grant_effect_on_hit=swamp_venom
   on_discovered=emote lunges from beneath the scum with startling speed.
 @end
 
@@ -107,6 +133,7 @@
   breakable=true
   break_text=You split the spore pod. Dry curls of fungus spill into your palm.
   @trigger on_break emote bursts in a choking green cloud, then stills.
+  @trigger on_break grant-effect actor bog_miasma
   weight=1.5
   volume=1.5
   pocketable=false
@@ -120,11 +147,14 @@
   description=A clay jar of grey paste that smells of crushed root and river mud.
   stackable=true
   stack_count=2
+  consumable=true
   weight=0.4
   volume=0.3
   pocketable=true
   alias=salve
   alias=antidote
+  @trigger on_use narrate The paste coats your tongue with bitter tannin — the swamp's grip loosens.
+  @trigger on_use cure-tag actor poison
 @end
 
 @prototype bog-heart-chest
@@ -525,7 +555,8 @@ base_name: swamp-gas
 name: Gas Pocket
 description: Green vapors coil at ankle height. The grate below breathes warmth you cannot see.
 @trigger on_weather narrate The pocket belches — the vapors thicken until the stakes vanish.
-@trigger on_enter damage actor 6
+@trigger on_enter when not effect reed_breathing then grant-effect actor bog_miasma
+@trigger on_enter when effect reed_breathing then narrate The reed mask filters the worst of the vapors.
 exits:
   out: swamp-entry
 loop_to: swamp-entry
@@ -535,6 +566,7 @@ base_name: swamp-quicksand
 name: Quicksand Shelf
 description: The peat grips your boots and refuses to explain itself.
 @trigger on_enter damage actor 5
+@trigger on_enter when chance 40 then grant-effect actor bog_bleeding
 exits:
   out: swamp-entry
 loop_to: swamp-entry
@@ -552,6 +584,7 @@ base_name: swamp-snare
 name: Snare Thicket
 description: Knotted vines hang at throat height, beaded with stagnant water.
 @trigger on_enter damage actor 7
+@trigger on_enter when chance 35 then grant-effect actor bog_bleeding
 exits:
   out: swamp-entry
 loop_to: swamp-entry

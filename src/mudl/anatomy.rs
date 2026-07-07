@@ -80,6 +80,39 @@ pub struct EffectDef {
     pub skill_mods: HashMap<String, i64>,
     /// Health restored when the creature enters a new room (equipment-granted effects).
     pub regen_on_enter: i64,
+    /// Condition category for cures and `when condition` checks (e.g. poison, bleed).
+    pub condition_type: Option<String>,
+    /// Tags matched by `cure-tag` scripts (defaults to `condition_type` when set).
+    pub cure_tags: Vec<String>,
+    /// Damage dealt each tick while active (`tick_on` event).
+    pub damage_on_tick: i64,
+    /// Health restored each tick while active (`tick_on` event).
+    pub heal_on_tick: i64,
+    /// Event that advances ticks and applies DOT/HoT (default `on_enter`).
+    pub tick_on: String,
+    /// Ticks until the condition expires (0 = until cured).
+    pub duration_ticks: i64,
+}
+
+impl EffectDef {
+    /// Whether this definition behaves as a timed/DOT condition (not just a passive buff).
+    pub fn is_condition(&self) -> bool {
+        self.condition_type.is_some()
+            || self.damage_on_tick > 0
+            || self.heal_on_tick > 0
+            || self.duration_ticks > 0
+    }
+
+    /// Tags used by `cure-tag` — explicit `cure_tags` plus `condition_type` when present.
+    pub fn all_cure_tags(&self) -> Vec<String> {
+        let mut tags = self.cure_tags.clone();
+        if let Some(kind) = &self.condition_type {
+            if !tags.iter().any(|t| t == kind) {
+                tags.push(kind.clone());
+            }
+        }
+        tags
+    }
 }
 
 /// Backward-compatible alias for creature anatomy definitions.
@@ -184,6 +217,12 @@ fn default_effect(name: String) -> EffectDef {
         stat_mods: HashMap::new(),
         skill_mods: HashMap::new(),
         regen_on_enter: 0,
+        condition_type: None,
+        cure_tags: Vec::new(),
+        damage_on_tick: 0,
+        heal_on_tick: 0,
+        tick_on: "on_enter".to_string(),
+        duration_ticks: 0,
     }
 }
 
@@ -228,7 +267,10 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
             continue;
         }
 
-        if let Some(name) = line.strip_prefix("@effect ") {
+        if let Some(name) = line
+            .strip_prefix("@effect ")
+            .or_else(|| line.strip_prefix("@condition "))
+        {
             current_effect = Some(default_effect(
                 parse_creature_name(name)
                     .ok_or_else(|| anyhow::anyhow!("@effect missing name: {line}"))?,
@@ -336,6 +378,28 @@ pub fn parse_anatomy_file(content: &str) -> anyhow::Result<AnatomyRegistry> {
                             effect.skill_mods.insert(skill.to_string(), v);
                         }
                     }
+                    "condition" | "condition_type" | "kind" => {
+                        effect.condition_type = Some(value.to_string());
+                    }
+                    "cure_tag" | "cure_tags" | "cures" => {
+                        effect.cure_tags = value
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                    "damage_on_tick" | "dot" | "damage_per_tick" => {
+                        effect.damage_on_tick = value.parse().unwrap_or(0).max(0);
+                    }
+                    "heal_on_tick" | "hot" | "heal_per_tick" | "regen_per_tick" => {
+                        effect.heal_on_tick = value.parse().unwrap_or(0).max(0);
+                    }
+                    "tick_on" | "tick_event" => {
+                        effect.tick_on = value.to_string();
+                    }
+                    "duration" | "duration_ticks" | "ticks" => {
+                        effect.duration_ticks = value.parse().unwrap_or(0).max(0);
+                    }
                     _ => {}
                 }
             }
@@ -393,5 +457,31 @@ mod tests {
         let effect = registry.effect("sprained").unwrap();
         assert!((effect.mod_encumbrance - 1.15).abs() < f64::EPSILON);
         assert_eq!(effect.stat_mods.get("dexterity").copied(), Some(-3));
+    }
+
+    #[test]
+    fn parse_condition_effect() {
+        let content = r#"
+@condition swamp_venom
+  condition=poison
+  cure_tag=poison
+  damage_on_tick=4
+  duration=8
+@end
+@condition shore_regeneration
+  condition=regeneration
+  heal_on_tick=6
+  duration=5
+@end
+"#;
+        let registry = parse_anatomy_file(content).unwrap();
+        let venom = registry.effect("swamp_venom").unwrap();
+        assert_eq!(venom.condition_type.as_deref(), Some("poison"));
+        assert_eq!(venom.damage_on_tick, 4);
+        assert_eq!(venom.duration_ticks, 8);
+        assert!(venom.is_condition());
+        let regen = registry.effect("shore_regeneration").unwrap();
+        assert_eq!(regen.heal_on_tick, 6);
+        assert_eq!(regen.duration_ticks, 5);
     }
 }

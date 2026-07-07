@@ -392,14 +392,25 @@ impl Session {
             lines.push(format_room_look_player(room, &ctx));
         }
         if let Some(mut player) = self.objects.get(&self.player_id).cloned() {
+            let mut player_dirty = false;
             if let Some(regen) = crate::creature::apply_equipment_regen_on_enter(
                 &mut player,
                 &self.objects,
                 &self.anatomy,
             ) {
+                lines.push(regen);
+                player_dirty = true;
+            }
+            let tick = crate::creature::tick_conditions(&mut player, &self.anatomy, "on_enter");
+            for line in tick.lines {
+                lines.push(line);
+            }
+            if tick.dirty {
+                player_dirty = true;
+            }
+            if player_dirty {
                 self.objects.insert(self.player_id.clone(), player);
                 self.dirty.mark(&self.player_id);
-                lines.push(regen);
             }
         }
         Ok(lines.join("\n"))

@@ -38,6 +38,7 @@ pub mod events {
     pub const ON_UNLOCK: &str = "on_unlock";
     pub const ON_OPEN: &str = "on_open";
     pub const ON_HARVEST: &str = "on_harvest";
+    pub const ON_USE: &str = "on_use";
     /// Custom timed events — typically fired by `@schedule` jobs.
     pub const ON_WEATHER: &str = "on_weather";
     pub const ON_RESPAWN: &str = "on_respawn";
@@ -58,6 +59,7 @@ pub fn known_events() -> &'static [&'static str] {
         events::ON_UNLOCK,
         events::ON_OPEN,
         events::ON_HARVEST,
+        events::ON_USE,
         events::ON_WEATHER,
         events::ON_RESPAWN,
     ]
@@ -100,6 +102,13 @@ fn is_known_script_verb(verb: &str) -> bool {
             | "grant-effect"
             | "grant_effect"
             | "effect"
+            | "remove-effect"
+            | "remove_effect"
+            | "cure-effect"
+            | "cure_effect"
+            | "cure-tag"
+            | "cure_tag"
+            | "cure"
             | "teleport"
             | "send"
             | "spawn"

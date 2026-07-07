@@ -52,6 +52,7 @@ pub struct MudlRoleProps {
     pub harvestable: Option<bool>,
     pub hidden_until_discovered: Option<bool>,
     pub discovery_stealth: Option<i64>,
+    pub consumable: Option<bool>,
 }
 
 impl MudlRoleProps {
@@ -137,6 +138,7 @@ impl MudlRoleProps {
                 "discovery_stealth" | "stealth" => {
                     props.discovery_stealth = value.parse().ok()
                 }
+                "consumable" | "is_consumable" => props.consumable = Some(*value == "true"),
                 _ => {}
             }
         }
@@ -182,6 +184,9 @@ impl MudlRoleProps {
         }
         if let Some(stealth) = self.discovery_stealth {
             obj.set_property_int("discovery_stealth", stealth);
+        }
+        if let Some(consumable) = self.consumable {
+            obj.set_property_bool("consumable", consumable);
         }
         if self.mod_max_weight.is_some() || self.mod_encumbrance.is_some() {
             obj.apply_carry_modifiers(self.mod_max_weight, self.mod_encumbrance);

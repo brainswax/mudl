@@ -13,7 +13,27 @@
   integrates=forest-path,beach-shore,the-void,beach-trail
 @end
 
-# --- Fey-specific effects ---
+# --- Fey-specific conditions & effects ---
+
+@condition fey_glamour
+  condition=enchantment
+  cure_tag=enchantment
+  heal_on_tick=3
+  tick_on=on_enter
+  duration=12
+  mod_stat_charisma=2
+  mod_stat_wisdom=1
+  mod_encumbrance=0.92
+@end
+
+@condition moon_mist
+  condition=enchantment
+  cure_tag=enchantment
+  tick_on=on_enter
+  duration=8
+  mod_stat_intelligence=2
+  mod_skill_crafting=1
+@end
 
 @effect dewdrop_vigor
   mod_max_health=8
@@ -816,6 +836,7 @@ description: Starlight gathers in a pool that does not ripple when you speak. A 
 @trigger on_enter narrate The vale loosens its hold on your shoulders — you feel permitted to rest.
 @trigger on_enter when health below 100 then heal actor 12
 @trigger on_enter grant-effect actor fey_grace
+@trigger on_enter grant-effect actor fey_glamour
 exits:
   south: fey-rootbridge
   out: fey-threshold
@@ -829,6 +850,8 @@ base_name: fey-mist
 name: Kindly Mist
 description: Silver mist folds the paths into identical kindnesses. You are not lost — only being introduced to patience.
 @trigger on_weather narrate The mist rearranges itself into shapes you almost recognize from dreams.
+@trigger on_enter grant-effect actor moon_mist
+@trigger on_enter narrate Starflowers bloom in your thoughts — briefly, impossibly.
 exits:
   out: fey-threshold
 loop_to: fey-threshold
