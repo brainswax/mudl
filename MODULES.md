@@ -75,7 +75,8 @@ Then one line: `Then go <dir>.`
 - [ ] Full `raw.githubusercontent.com` URL (not a short link)
 - [ ] `door_destination` = entry area `base_name` from the `.mudl`
 - [ ] `@link` direction and `--return` match the portal's `door_direction` and entry room's reciprocal exit
-- [ ] No fourth builder command — no `@dig`, `module reload`, or file edits
+- [ ] Only use commands available via IRC/REPL (@import, @create, @link, @dig, go, etc.)
+- [ ] Must not refer to local runtime environment commands (cargo, make, file edits, etc.)
 
 ### 3. Detailed description
 
