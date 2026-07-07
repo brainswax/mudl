@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use crate::display::{resolve_object, ResolveScope, TargetResolution};
 use crate::inventory::{take_item, InventoryContext, InventoryError};
+use crate::world::DispatchStack;
 use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse, MudlRoleProps};
 use crate::object::{ContainerSpec, Object, ObjectFactory, ObjectId, WearableSpec};
 use crate::persistence::Persistence;
@@ -452,11 +453,13 @@ pub fn take_from_location(
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
 ) -> Result<String, InventoryError> {
+    let mut dispatch = DispatchStack::default();
     let mut ctx = InventoryContext {
         player_id,
         room_id: location_id,
         objects,
         anatomy,
+        dispatch: &mut dispatch,
         dirty: None,
     };
     take_item(&mut ctx, item_name)

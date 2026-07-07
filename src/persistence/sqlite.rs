@@ -99,6 +99,28 @@ impl Persistence for SqlitePersistence {
         Ok(())
     }
 
+    async fn save_objects_batch(&self, objects: &[&Object]) -> Result<()> {
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        for object in objects {
+            let id = object.id.to_string();
+            let data = serde_json::to_string(object)?;
+            sqlx::query(
+                "INSERT OR REPLACE INTO objects (id, data, is_deleted, deleted_at) VALUES (?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&data)
+            .bind(Self::deleted_flag(object))
+            .bind(&object.deleted_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn load_object(&self, id: &ObjectId) -> Result<Option<Object>> {
         let data: Option<String> =
             sqlx::query_scalar::<_, String>("SELECT data FROM objects WHERE id = ?")
@@ -484,11 +506,13 @@ mod tests {
         objects.insert(coins.id.clone(), coins);
         objects.insert(greatsword.id.clone(), greatsword);
 
+        let mut dispatch = crate::world::DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &owner,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 

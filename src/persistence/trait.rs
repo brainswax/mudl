@@ -6,6 +6,15 @@ use crate::object::{Object, ObjectId};
 #[async_trait]
 pub trait Persistence: Send + Sync {
     async fn save_object(&self, object: &Object) -> Result<()>;
+
+    /// Atomically persist multiple objects (SQLite transaction when supported).
+    async fn save_objects_batch(&self, objects: &[&Object]) -> Result<()> {
+        for object in objects {
+            self.save_object(object).await?;
+        }
+        Ok(())
+    }
+
     async fn load_object(&self, id: &ObjectId) -> Result<Option<Object>>;
     async fn get_next_id_counter(&self, obj_type: &str, base_name: &str) -> Result<u32>;
     async fn increment_counter(&self, obj_type: &str, base_name: &str) -> Result<u32>;

@@ -5,7 +5,7 @@ use crate::display::{
 };
 use crate::inventory::InventoryContext;
 use crate::object::ObjectId;
-use crate::world::{resolve_player_location, WorldState};
+use crate::world::{resolve_player_location, WorldMutation, WorldState};
 
 /// One connected player's session state — lightweight and safe to clone the metadata only.
 ///
@@ -92,12 +92,18 @@ impl PlayerSession {
 
     /// Mutable inventory command context wired to world dirty tracking.
     pub fn inventory_context<'a>(&'a self, world: &'a mut WorldState) -> InventoryContext<'a> {
-        let (objects, anatomy, dirty) = world.borrow_for_inventory();
+        let WorldMutation {
+            objects,
+            anatomy,
+            dirty,
+            dispatch,
+        } = world.borrow_mutation();
         InventoryContext {
             player_id: &self.actor_id,
             room_id: self.current_location.as_ref(),
             objects,
             anatomy,
+            dispatch,
             dirty: Some(dirty),
         }
     }

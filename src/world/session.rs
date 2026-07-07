@@ -98,13 +98,11 @@ pub async fn persist_objects<P: Persistence>(
     Ok(())
 }
 
-/// Persist every object in the map.
+/// Persist every object in the map inside one transaction when supported.
 pub async fn persist_all<P: Persistence>(
     persistence: &P,
     objects: &HashMap<ObjectId, Object>,
 ) -> anyhow::Result<()> {
-    for obj in objects.values() {
-        persistence.save_object(obj).await?;
-    }
-    Ok(())
+    let batch: Vec<&Object> = objects.values().collect();
+    persistence.save_objects_batch(&batch).await
 }

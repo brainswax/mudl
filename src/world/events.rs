@@ -1,10 +1,10 @@
 //! Core event bus — `@trigger` scripts on places and objects fire through here.
 
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::mudl::{AnatomyRegistry, TriggerDef};
 use crate::object::{Behavior, LocationRef, Object, ObjectId, PermissionFlags};
+use crate::world::dispatch_guard::{DispatchError, DispatchStack};
 use crate::world::move_manager::MoveResult;
 
 use crate::mudl::trigger_def::events;
@@ -67,55 +67,10 @@ impl EventOutcome {
     }
 }
 
-/// Maximum nested `execute_event` depth (discovery → on_discovered → …).
-const MAX_DISPATCH_DEPTH: usize = 32;
-
-struct DispatchFrame {
-    host_id: ObjectId,
-    event_name: String,
-}
-
-thread_local! {
-    static DISPATCH_STACK: RefCell<Vec<DispatchFrame>> = RefCell::new(Vec::new());
-}
-
-struct DispatchGuard;
-
-impl DispatchGuard {
-    fn enter(host_id: &ObjectId, event_name: &str) -> Result<Self, EventOutcome> {
-        DISPATCH_STACK.with(|stack| {
-            let mut stack = stack.borrow_mut();
-            if stack.len() >= MAX_DISPATCH_DEPTH {
-                let mut outcome = EventOutcome::default();
-                outcome.record_error(format!(
-                    "event '{event_name}' on {host_id}: dispatch depth exceeded ({MAX_DISPATCH_DEPTH})"
-                ));
-                return Err(outcome);
-            }
-            if stack.iter().any(|frame| {
-                frame.host_id == *host_id && frame.event_name == event_name
-            }) {
-                let mut outcome = EventOutcome::default();
-                outcome.record_error(format!(
-                    "event '{event_name}' on {host_id}: cycle detected (already in flight)"
-                ));
-                return Err(outcome);
-            }
-            stack.push(DispatchFrame {
-                host_id: host_id.clone(),
-                event_name: event_name.to_string(),
-            });
-            Ok(Self)
-        })
-    }
-}
-
-impl Drop for DispatchGuard {
-    fn drop(&mut self) {
-        DISPATCH_STACK.with(|stack| {
-            stack.borrow_mut().pop();
-        });
-    }
+fn dispatch_error_outcome(err: DispatchError) -> EventOutcome {
+    let mut outcome = EventOutcome::default();
+    outcome.record_error(err.to_string());
+    outcome
 }
 
 /// Attach MUDL `@trigger` definitions to a live object.
@@ -157,14 +112,15 @@ pub fn run_event_handlers_on(host: &Object, event_name: &str) -> Vec<String> {
 /// 1. Subscribers — scheduler tick, due `@schedule` jobs, spawner modules
 /// 2. Host `@trigger` scripts — registration order; stops early when [`EventOutcome::cancelled`]
 pub fn execute_event(
+    dispatch: &mut DispatchStack,
     event_name: &str,
     ctx: &EventContext,
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: Option<&AnatomyRegistry>,
 ) -> EventOutcome {
-    let _guard = match DispatchGuard::enter(&ctx.host_id, event_name) {
+    let _guard = match dispatch.enter(&ctx.host_id, event_name) {
         Ok(guard) => guard,
-        Err(outcome) => return outcome,
+        Err(err) => return dispatch_error_outcome(err),
     };
 
     if !objects
@@ -194,6 +150,7 @@ pub fn execute_event(
 
 /// Convenience: run death/kill triggers and loot spawners when a creature is slain.
 pub fn execute_kill_events(
+    dispatch: &mut DispatchStack,
     victim_id: &ObjectId,
     killer_id: &ObjectId,
     room_id: &ObjectId,
@@ -209,12 +166,14 @@ pub fn execute_kill_events(
         target_id: Some(killer_id.clone()),
     };
     outcome.append(execute_event(
+        dispatch,
         events::ON_DEATH,
         &victim_ctx,
         objects,
         anatomy,
     ));
     outcome.append(execute_event(
+        dispatch,
         events::ON_KILL,
         &victim_ctx,
         objects,
@@ -229,6 +188,7 @@ pub fn execute_kill_events(
             target_id: Some(victim_id.clone()),
         };
         outcome.append(execute_event(
+            dispatch,
             events::ON_KILL,
             &killer_ctx,
             objects,
@@ -241,6 +201,7 @@ pub fn execute_kill_events(
 
 /// Resolve the room context for a completed move and fire `on_move` on the moved object.
 pub fn emit_on_move_event(
+    dispatch: &mut DispatchStack,
     actor_id: &ObjectId,
     move_result: &MoveResult,
     objects: &mut HashMap<ObjectId, Object>,
@@ -254,6 +215,7 @@ pub fn emit_on_move_event(
         target_id: None,
     };
     execute_event(
+        dispatch,
         crate::mudl::trigger_def::events::ON_MOVE,
         &ctx,
         objects,
@@ -281,6 +243,7 @@ fn room_id_for_location(
 
 #[cfg(test)]
 mod tests {
+    use crate::world::dispatch_guard::MAX_DISPATCH_DEPTH;
     use super::*;
     use std::collections::HashMap;
 
@@ -395,7 +358,9 @@ mod tests {
             (npc_id.clone(), npc),
         ]);
 
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             "on_discovered",
             &EventContext {
                 actor_id: player_id,
@@ -504,7 +469,9 @@ mod tests {
             (proto.id.clone(), proto),
         ]);
 
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             events::ON_OPEN,
             &EventContext {
                 actor_id: player_id.clone(),
@@ -560,7 +527,9 @@ mod tests {
         );
 
         let mut objects = HashMap::from([(room_id.clone(), room)]);
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             "on_enter",
             &EventContext {
                 actor_id: player_id,
@@ -581,7 +550,9 @@ mod tests {
         let player_id = ObjectId::new("player:hero-001");
         let host_id = ObjectId::new("item:gone-001");
         let mut objects = HashMap::new();
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             "on_open",
             &EventContext {
                 actor_id: player_id,
@@ -616,14 +587,11 @@ mod tests {
         };
         let mut objects = HashMap::from([(room_id.clone(), room)]);
 
-        DISPATCH_STACK.with(|stack| {
-            stack.borrow_mut().push(DispatchFrame {
-                host_id: room_id.clone(),
-                event_name: "on_enter".to_string(),
-            });
-        });
+        let mut dispatch = DispatchStack::default();
+        dispatch.test_seed(room_id.clone(), "on_enter");
 
         let outcome = execute_event(
+            &mut dispatch,
             "on_enter",
             &EventContext {
                 actor_id: player_id,
@@ -634,7 +602,6 @@ mod tests {
             &mut objects,
             None,
         );
-        DISPATCH_STACK.with(|stack| stack.borrow_mut().clear());
         assert_eq!(outcome.errors.len(), 1);
         assert!(outcome.errors[0].contains("cycle"));
     }
@@ -659,17 +626,14 @@ mod tests {
         };
         let mut objects = HashMap::from([(room_id.clone(), room)]);
 
-        DISPATCH_STACK.with(|stack| {
-            let mut stack = stack.borrow_mut();
-            for i in 0..MAX_DISPATCH_DEPTH {
-                stack.push(DispatchFrame {
-                    host_id: ObjectId::new(format!("area:depth-{i:03}")),
-                    event_name: "on_enter".to_string(),
-                });
-            }
-        });
+        let mut dispatch = DispatchStack::default();
+        for i in 0..MAX_DISPATCH_DEPTH {
+            let host = ObjectId::new(format!("area:depth-{i:03}"));
+            dispatch.test_seed(host, "on_enter");
+        }
 
         let outcome = execute_event(
+            &mut dispatch,
             "on_enter",
             &EventContext {
                 actor_id: player_id,
@@ -680,7 +644,6 @@ mod tests {
             &mut objects,
             None,
         );
-        DISPATCH_STACK.with(|stack| stack.borrow_mut().clear());
         assert_eq!(outcome.errors.len(), 1);
         assert!(outcome.errors[0].contains("depth exceeded"));
     }
@@ -704,7 +667,9 @@ mod tests {
             deleted_at: None,
         };
         let mut objects = HashMap::from([(room_id.clone(), room)]);
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             "on_open",
             &EventContext {
                 actor_id: player_id,
@@ -778,7 +743,9 @@ mod tests {
             (chest_id.clone(), chest),
         ]);
 
+        let mut dispatch = DispatchStack::default();
         let outcome = execute_event(
+            &mut dispatch,
             events::ON_OPEN,
             &EventContext {
                 actor_id: player_id.clone(),

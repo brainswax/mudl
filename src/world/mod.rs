@@ -1,6 +1,7 @@
 pub mod bootstrap;
 pub mod container_fit;
 pub mod dirty;
+pub mod dispatch_guard;
 pub mod discovery;
 pub mod door;
 pub mod exit_index;
@@ -21,6 +22,7 @@ pub mod world_state;
 
 pub use bootstrap::bootstrap_world;
 pub use dirty::{persist_dirty, DirtyTracker};
+pub use dispatch_guard::{DispatchError, DispatchStack, MAX_DISPATCH_DEPTH};
 pub use discovery::{
     entity_visible_to_player, is_object_hidden_from_player, object_visible_to_player,
     run_discovery_on_look, run_object_discovery_on_look,
@@ -71,7 +73,7 @@ pub use session::{
     hydrate_world, persist_all, persist_objects, resolve_bootstrap_location,
     resolve_player_location, restore_world_graph,
 };
-pub use world_state::WorldState;
+pub use world_state::{SharedWorld, WorldMutation, WorldState};
 pub use stack_transfer::{
     compute_stack_transfer_plan, split_stack_id, stack_merge_key, StackTransferPlan,
 };

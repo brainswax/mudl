@@ -10,7 +10,8 @@ use crate::display::{
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{LocationRef, Object, ObjectId};
 use crate::mudl::trigger_def::events::{ON_BREAK, ON_DROP, ON_HARVEST, ON_TAKE, ON_USE};
-use crate::world::events::{execute_event, emit_on_move_event, EventContext};
+use crate::world::dispatch_guard::DispatchStack;
+use crate::world::events::{emit_on_move_event, execute_event, EventContext};
 use crate::world::move_manager::{
     move_object, move_to_container, move_to_grasp, move_to_room, MoveContext, MoveError, MoveHooks,
 };
@@ -126,6 +127,7 @@ pub struct InventoryContext<'a> {
     pub room_id: Option<&'a ObjectId>,
     pub objects: &'a mut HashMap<ObjectId, Object>,
     pub anatomy: &'a AnatomyRegistry,
+    pub dispatch: &'a mut DispatchStack,
     /// When set, move operations mark touched object IDs for incremental persist.
     pub dirty: Option<&'a mut crate::world::DirtyTracker>,
 }
@@ -536,6 +538,7 @@ pub fn take_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, I
     );
     let actor_id = ctx.player_id.clone();
     let take_outcome = execute_event(
+        ctx.dispatch,
         ON_TAKE,
         &EventContext {
             actor_id: actor_id.clone(),
@@ -546,7 +549,8 @@ pub fn take_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, I
         ctx.objects,
         Some(ctx.anatomy),
     );
-    let move_outcome = emit_on_move_event(&actor_id, &result, ctx.objects, Some(ctx.anatomy));
+    let move_outcome =
+        emit_on_move_event(ctx.dispatch, &actor_id, &result, ctx.objects, Some(ctx.anatomy));
     for line in take_outcome
         .lines
         .into_iter()
@@ -604,6 +608,7 @@ pub fn drop_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, I
     );
     let actor_id = ctx.player_id.clone();
     let drop_outcome = execute_event(
+        ctx.dispatch,
         ON_DROP,
         &EventContext {
             actor_id: actor_id.clone(),
@@ -614,7 +619,8 @@ pub fn drop_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, I
         ctx.objects,
         Some(ctx.anatomy),
     );
-    let move_outcome = emit_on_move_event(&actor_id, &result, ctx.objects, Some(ctx.anatomy));
+    let move_outcome =
+        emit_on_move_event(ctx.dispatch, &actor_id, &result, ctx.objects, Some(ctx.anatomy));
     for line in drop_outcome
         .lines
         .into_iter()
@@ -1133,6 +1139,7 @@ fn unlock_gate(
     }
 
     let unlock_outcome = execute_event(
+        ctx.dispatch,
         crate::mudl::trigger_def::events::ON_UNLOCK,
         &EventContext {
             actor_id: ctx.player_id.clone(),
@@ -1181,6 +1188,7 @@ fn open_gate(
         format!("You open the {display}.")
     }];
     let open_outcome = execute_event(
+        ctx.dispatch,
         crate::mudl::trigger_def::events::ON_OPEN,
         &EventContext {
             actor_id: ctx.player_id.clone(),
@@ -1411,6 +1419,7 @@ pub fn break_item(
         .unwrap_or_else(|| format!("You break the {display}."))];
 
     let break_outcome = execute_event(
+        ctx.dispatch,
         ON_BREAK,
         &EventContext {
             actor_id: ctx.player_id.clone(),
@@ -1470,6 +1479,7 @@ pub fn harvest_item(
 
     let mut lines = vec![format!("You harvest from the {display}.")];
     let harvest_outcome = execute_event(
+        ctx.dispatch,
         ON_HARVEST,
         &EventContext {
             actor_id: ctx.player_id.clone(),
@@ -1528,6 +1538,7 @@ pub fn use_item(
 
     let mut lines = vec![format!("You use the {display}.")];
     let use_outcome = execute_event(
+        ctx.dispatch,
         ON_USE,
         &EventContext {
             actor_id: ctx.player_id.clone(),
@@ -1842,6 +1853,7 @@ pub fn describe_inventory(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::DispatchStack;
     use crate::mudl::load_module;
     use crate::object::ObjectFactory;
     use crate::persistence::SqlitePersistence;
@@ -1949,11 +1961,13 @@ mod tests {
         boulder.set_property_int("weight", 200);
         objects.insert(boulder.id.clone(), boulder.clone());
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2003,11 +2017,13 @@ mod tests {
         objects.insert(heavy.id.clone(), heavy);
         objects.insert(boulder.id.clone(), boulder);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2020,11 +2036,13 @@ mod tests {
     async fn take_allows_item_within_max_weight() {
         let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2061,11 +2079,13 @@ mod tests {
         boulder.set_property_int("weight", 200);
         objects.insert(boulder.id.clone(), boulder);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2101,11 +2121,13 @@ mod tests {
         });
         objects.insert(bars.id.clone(), bars);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2147,11 +2169,13 @@ mod tests {
         });
         objects.insert(bars.id.clone(), bars);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2191,11 +2215,13 @@ mod tests {
             player.set_property_int("max_weight", 100);
         }
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2244,11 +2270,13 @@ mod tests {
         objects.insert(ground_id.clone(), ground);
         objects.insert(sword_id, sword);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2299,11 +2327,13 @@ mod tests {
         objects.insert(held_id.clone(), held);
         objects.insert(ground_id.clone(), ground);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2345,11 +2375,13 @@ mod tests {
         objects.insert(main_id.clone(), main_stack);
         objects.insert(held_id.clone(), held);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2455,11 +2487,13 @@ mod tests {
         objects.insert(ground.id.clone(), ground);
         objects.insert(sword_id, sword);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2483,11 +2517,13 @@ mod tests {
         objects.insert(player_id.clone(), player);
         objects.insert(bars_id.clone(), bars);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2515,11 +2551,13 @@ mod tests {
         bars.location = Some(room_id.clone());
         objects.insert(bars.id.clone(), bars);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2562,11 +2600,13 @@ mod tests {
         objects.insert(main_id.clone(), main_stack);
         objects.insert(held_id.clone(), held);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2610,11 +2650,13 @@ mod tests {
         objects.insert(player_id.clone(), player);
         objects.insert(bars_id.clone(), bars);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2656,11 +2698,13 @@ mod tests {
         }
         objects.insert(area_id.clone(), area);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&area_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2676,11 +2720,13 @@ mod tests {
     async fn take_item_to_hand() {
         let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2696,11 +2742,13 @@ mod tests {
     async fn take_non_pocketable_to_right_hand() {
         let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2718,11 +2766,13 @@ mod tests {
     async fn two_handed_item_occupies_both_hands() {
         let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2744,11 +2794,13 @@ mod tests {
     async fn describe_holding_sword() {
         let (_factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
         take_item(&mut ctx, "rusty").unwrap();
@@ -2778,11 +2830,13 @@ mod tests {
         objects.insert(rusty.id.clone(), rusty);
         objects.insert(wooden.id.clone(), wooden);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2856,11 +2910,13 @@ mod tests {
         objects.insert(sword_held.id.clone(), sword_held);
         objects.insert(sword_ground.id.clone(), sword_ground.clone());
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2893,11 +2949,13 @@ mod tests {
         objects.insert(sword1.id.clone(), sword1.clone());
         objects.insert(sword2.id.clone(), sword2);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2932,11 +2990,13 @@ mod tests {
         objects.insert(sword1.id.clone(), sword1);
         objects.insert(sword2.id.clone(), sword2);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -2975,11 +3035,13 @@ mod tests {
         boots.location = Some(room_id.clone());
         objects.insert(boots.id.clone(), boots);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3010,11 +3072,13 @@ mod tests {
             .id
             .clone();
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3081,11 +3145,13 @@ mod tests {
         objects.insert(purse_id.clone(), purse);
         objects.insert(coins_id.clone(), coins);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3234,11 +3300,13 @@ mod tests {
         coins.location = Some(room_id.clone());
         objects.insert(coins.id.clone(), coins);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3283,11 +3351,13 @@ mod tests {
         chest.location = Some(room_id.clone());
         objects.insert(chest_id.clone(), chest);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3332,11 +3402,13 @@ mod tests {
         chest.location = Some(room_id.clone());
         objects.insert(chest.id.clone(), chest);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3363,11 +3435,13 @@ mod tests {
         objects.insert(player_id.clone(), player);
         objects.insert(coins_id, coins);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3415,11 +3489,13 @@ mod tests {
         objects.insert(purse_id.clone(), purse);
         objects.insert(coins_id.clone(), coins);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3447,11 +3523,13 @@ mod tests {
         bars.location = Some(room_id.clone());
         objects.insert(bars.id.clone(), bars);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3481,11 +3559,13 @@ mod tests {
         let split_id = split.id.clone();
         objects.insert(split_id.clone(), split);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3579,11 +3659,13 @@ mod tests {
             .id
             .clone();
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3655,11 +3737,13 @@ mod tests {
         objects.insert(in_purse_id.clone(), in_purse);
         objects.insert(in_hand_id.clone(), in_hand);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3713,11 +3797,13 @@ mod tests {
         objects.insert(chest_id.clone(), chest);
         objects.insert(bars_id.clone(), bars);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3764,11 +3850,13 @@ mod tests {
         objects.insert(chest_id.clone(), chest);
         objects.insert(lantern_id.clone(), lantern);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3826,11 +3914,13 @@ mod tests {
         objects.insert(purse_id.clone(), purse);
         objects.insert(coins_id.clone(), coins);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3856,11 +3946,13 @@ mod tests {
         let chest_id = chest.id.clone();
         objects.insert(chest_id, chest);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3889,11 +3981,13 @@ mod tests {
         mailbox.location = Some(room_id.clone());
         objects.insert(mailbox.id.clone(), mailbox);
 
+        let mut dispatch = DispatchStack::default();
         let ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3934,11 +4028,13 @@ mod tests {
         objects.insert(chest_id, chest);
         objects.insert(note.id.clone(), note);
 
+        let mut dispatch = DispatchStack::default();
         let ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -3981,11 +4077,13 @@ mod tests {
         objects.insert(chest.id.clone(), chest);
         objects.insert(note.id.clone(), note);
 
+        let mut dispatch = DispatchStack::default();
         let ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4004,11 +4102,13 @@ mod tests {
         sword.location = Some(room_id.clone());
         objects.insert(sword.id.clone(), sword);
 
+        let mut dispatch = DispatchStack::default();
         let ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4052,11 +4152,13 @@ mod tests {
         objects.insert(chest.id.clone(), chest);
         objects.insert(key_id, key);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4114,11 +4216,13 @@ mod tests {
         objects.insert(chest.id.clone(), chest);
         objects.insert(key.id.clone(), key);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4171,11 +4275,13 @@ mod tests {
         objects.insert(chest.id.clone(), chest);
         objects.insert(key.id.clone(), key);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4229,11 +4335,13 @@ mod tests {
         objects.insert(pouch.id.clone(), pouch);
         objects.insert(key.id.clone(), key);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4262,11 +4370,13 @@ mod tests {
         chest.location = Some(room_id.clone());
         objects.insert(chest.id.clone(), chest);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4320,11 +4430,13 @@ mod tests {
         objects.insert(pouch.id.clone(), pouch);
         objects.insert(key.id.clone(), key);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4364,11 +4476,13 @@ mod tests {
         objects.insert(chest.id.clone(), chest);
         objects.insert(key.id.clone(), key.clone());
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4417,11 +4531,13 @@ mod tests {
         objects.insert(chest.id.clone(), chest.clone());
         objects.insert(key.id.clone(), key);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4463,11 +4579,13 @@ mod tests {
         objects.insert(chest.id.clone(), chest.clone());
         objects.insert(key.id.clone(), key);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4526,11 +4644,13 @@ mod tests {
         objects.insert(chest.id.clone(), chest);
         objects.insert(key.id.clone(), key);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4580,11 +4700,13 @@ mod tests {
         objects.insert(key_a.id.clone(), key_a);
         objects.insert(key_b.id.clone(), key_b);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 
@@ -4633,11 +4755,13 @@ mod tests {
         objects.insert(key.id.clone(), key);
         objects.insert(blade.id.clone(), blade);
 
+        let mut dispatch = DispatchStack::default();
         let mut ctx = InventoryContext {
             player_id: &player_id,
             room_id: Some(&room_id),
             objects: &mut objects,
             anatomy: &anatomy,
+            dispatch: &mut dispatch,
             dirty: None,
         };
 

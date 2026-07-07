@@ -173,7 +173,7 @@ async fn run_examine_command(
 
     match resolve_examine_request(
         &request,
-        session.anatomy(),
+        &session.anatomy(),
         session.player_id(),
         session.current_location(),
         &ctx.objects,
@@ -346,7 +346,7 @@ async fn main() -> Result<()> {
                 let exit_index = session
                     .current_location()
                     .and_then(|loc| session.object(loc))
-                    .map(exit_index::ExitIndex::from_place);
+                    .map(|place| exit_index::ExitIndex::from_place(&place));
                 if let Some(dir) = movement_from_line(cmd, &parts[1..], exit_index.as_ref()) {
                     match session.go(&dir) {
                         Ok(msg) => {
@@ -460,7 +460,7 @@ async fn main() -> Result<()> {
                             &parsed.display_name,
                             player_id.clone(),
                             session.current_location(),
-                            session.anatomy(),
+                            &session.anatomy(),
                             parsed.options,
                         )
                         .await
@@ -473,10 +473,11 @@ async fn main() -> Result<()> {
                                     roles = ?obj.roles(),
                                     "object created"
                                 );
+                                let graph = session.objects();
                                 let loc = obj
                                     .location
                                     .as_ref()
-                                    .and_then(|id| location_object(id, session.objects()));
+                                    .and_then(|id| location_object(id, &graph));
                                 println!("{}", narrate_create(&obj, loc));
                                 session.upsert_object(obj);
                             }
@@ -595,15 +596,17 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let target = parts[1..].join(" ");
-                        let ctx = session.inventory_context();
-                        match attack_creature(
-                            ctx.player_id,
-                            ctx.room_id,
-                            ctx.objects,
-                            ctx.anatomy,
-                            ctx.dirty,
-                            &target,
-                        ) {
+                        match session.with_inventory(|ctx| {
+                            attack_creature(
+                                ctx.dispatch,
+                                ctx.player_id,
+                                ctx.room_id,
+                                ctx.objects,
+                                ctx.anatomy,
+                                ctx.dirty.as_deref_mut(),
+                                &target,
+                            )
+                        }) {
                             Ok(outcome) => {
                                 for line in outcome.lines {
                                     println!("{line}");
@@ -622,16 +625,17 @@ async fn main() -> Result<()> {
                         let rest = parts[1..].join(" ");
                         match parse_vital_amount_args(&rest, DEFAULT_DAMAGE_AMOUNT) {
                             Ok(req) => {
-                                let ctx = session.inventory_context();
-                                match damage_creature(
-                                    ctx.player_id,
-                                    ctx.room_id,
-                                    ctx.objects,
-                                    ctx.anatomy,
-                                    ctx.dirty,
-                                    &req.target_name,
-                                    req.amount,
-                                ) {
+                                match session.with_inventory(|ctx| {
+                                    damage_creature(
+                                        ctx.player_id,
+                                        ctx.room_id,
+                                        ctx.objects,
+                                        ctx.anatomy,
+                                        ctx.dirty.as_deref_mut(),
+                                        &req.target_name,
+                                        req.amount,
+                                    )
+                                }) {
                                     Ok(msg) => {
                                         println!("{msg}");
                                         if let Err(e) =
@@ -650,16 +654,17 @@ async fn main() -> Result<()> {
                         let rest = parts[1..].join(" ");
                         match parse_vital_amount_args(&rest, DEFAULT_HEAL_AMOUNT) {
                             Ok(req) => {
-                                let ctx = session.inventory_context();
-                                match heal_creature(
-                                    ctx.player_id,
-                                    ctx.room_id,
-                                    ctx.objects,
-                                    ctx.anatomy,
-                                    ctx.dirty,
-                                    &req.target_name,
-                                    req.amount,
-                                ) {
+                                match session.with_inventory(|ctx| {
+                                    heal_creature(
+                                        ctx.player_id,
+                                        ctx.room_id,
+                                        ctx.objects,
+                                        ctx.anatomy,
+                                        ctx.dirty.as_deref_mut(),
+                                        &req.target_name,
+                                        req.amount,
+                                    )
+                                }) {
                                     Ok(msg) => {
                                         println!("{msg}");
                                         if let Err(e) =
@@ -698,7 +703,7 @@ async fn main() -> Result<()> {
                         };
                         match session.resolve_target(creature_name, ResolveScope::General) {
                             TargetResolution::Found(id) => {
-                                let Some(creature) = session.object_mut(&id) else {
+                                let Some(creature) = session.object(&id) else {
                                     println!("{}", narrate_wizard_not_found());
                                     continue;
                                 };
@@ -706,21 +711,26 @@ async fn main() -> Result<()> {
                                     println!("{} is not a creature.", creature.name);
                                     continue;
                                 }
-                                if add_behavior_template(creature, template) {
-                                    println!(
-                                        "Attached behavior template '{template_name}' to {}.",
-                                        creature.name
-                                    );
-                                    if let Err(e) =
-                                        persist_session(&mut session, &persistence).await
-                                    {
-                                        error!(error = %e, "persist after addbehavior failed");
+                                let creature_name = creature.name.clone();
+                                match session
+                                    .object_mut(&id, |creature| add_behavior_template(creature, template))
+                                {
+                                    Some(true) => {
+                                        println!(
+                                            "Attached behavior template '{template_name}' to {creature_name}."
+                                        );
+                                        if let Err(e) =
+                                            persist_session(&mut session, &persistence).await
+                                        {
+                                            error!(error = %e, "persist after addbehavior failed");
+                                        }
                                     }
-                                } else {
-                                    println!(
-                                        "{} already has behavior template '{template_name}'.",
-                                        creature.name
-                                    );
+                                    Some(false) => {
+                                        println!(
+                                            "{creature_name} already has behavior template '{template_name}'."
+                                        );
+                                    }
+                                    None => println!("{}", narrate_wizard_not_found()),
                                 }
                             }
                             TargetResolution::NotFound => {
@@ -738,7 +748,7 @@ async fn main() -> Result<()> {
                         match session.resolve_target(creature_name, ResolveScope::General) {
                             TargetResolution::Found(id) => {
                                 if let Some(creature) = session.object(&id) {
-                                    println!("{}", format_creature_behavior_list(creature));
+                                    println!("{}", format_creature_behavior_list(&creature));
                                 } else {
                                     println!("{}", narrate_wizard_not_found());
                                 }
@@ -782,7 +792,7 @@ async fn main() -> Result<()> {
                         match resolve_in_session(&mut session, &persistence, Some(&resolved)).await
                         {
                             Ok(TargetResolution::Found(id)) => {
-                                let mut obj = match session.object(&id).cloned() {
+                                let mut obj = match session.object(&id) {
                                     Some(obj) => obj,
                                     None => {
                                         println!("{}", narrate_wizard_not_found());
@@ -895,13 +905,18 @@ async fn main() -> Result<()> {
                             &target,
                             session.current_location(),
                             Some(session.player_id()),
-                            session.objects(),
+                            &session.objects(),
                         ) {
                             Some(id) => {
-                                match soft_delete_object(&persistence, &id, session.objects_mut())
-                                    .await
+                                let mut scratch = HashMap::new();
+                                match soft_delete_object(&persistence, &id, &mut scratch).await
                                 {
-                                    Ok(msg) => println!("{msg}"),
+                                    Ok(msg) => {
+                                        if let Some(obj) = scratch.remove(&id) {
+                                            session.upsert_object(obj);
+                                        }
+                                        println!("{msg}");
+                                    }
                                     Err(e) => {
                                         error!(error = %e, "soft delete failed");
                                         println!("The unraveling fails — something resists.");
@@ -917,8 +932,14 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let id = ObjectId::new(parts[1]);
-                        match undelete_object(&persistence, &id, session.objects_mut()).await {
-                            Ok(msg) => println!("{msg}"),
+                        let mut scratch = HashMap::new();
+                        match undelete_object(&persistence, &id, &mut scratch).await {
+                            Ok(msg) => {
+                                if let Some(obj) = scratch.remove(&id) {
+                                    session.upsert_object(obj);
+                                }
+                                println!("{msg}");
+                            }
                             Err(e) => {
                                 error!(error = %e, id = %id, "undelete failed");
                                 println!("Restoration fails — the threads won't reweave.");
@@ -927,9 +948,10 @@ async fn main() -> Result<()> {
                     }
                     "inventory" | "i" => {
                         if let Some(player) = session.object(session.player_id()) {
+                            let graph = session.objects();
                             println!(
                                 "{}",
-                                describe_inventory(player, session.objects(), session.anatomy())
+                                describe_inventory(&player, &graph, &session.anatomy())
                             );
                         } else {
                             println!("You seem to have lost yourself.");
@@ -941,8 +963,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match take_item(&mut ctx, &item_name) {
+                        match session.with_inventory(|ctx| take_item(ctx, &item_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -958,8 +979,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match drop_item(&mut ctx, &item_name) {
+                        match session.with_inventory(|ctx| drop_item(ctx, &item_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -973,13 +993,14 @@ async fn main() -> Result<()> {
                         let rest = parts[1..].join(" ");
                         match parse_put_args(&rest) {
                             Ok(req) => {
-                                let mut ctx = session.inventory_context();
-                                match put_item(
-                                    &mut ctx,
-                                    &req.item_name,
-                                    &req.container_name,
-                                    req.quantity,
-                                ) {
+                                match session.with_inventory(|ctx| {
+                                    put_item(
+                                        ctx,
+                                        &req.item_name,
+                                        &req.container_name,
+                                        req.quantity,
+                                    )
+                                }) {
                                     Ok(msg) => {
                                         println!("{msg}");
                                         if let Err(e) =
@@ -997,8 +1018,9 @@ async fn main() -> Result<()> {
                     "remove" => {
                         let rest = parts[1..].join(" ");
                         if let Some((item, container)) = rest.split_once(" from ") {
-                            let mut ctx = session.inventory_context();
-                            match remove_item(&mut ctx, item.trim(), container.trim()) {
+                            match session.with_inventory(|ctx| {
+                                remove_item(ctx, item.trim(), container.trim())
+                            }) {
                                 Ok(msg) => {
                                     println!("{msg}");
                                     if let Err(e) =
@@ -1019,8 +1041,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let container_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match open_container(&mut ctx, &container_name) {
+                        match session.with_inventory(|ctx| open_container(ctx, &container_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -1036,8 +1057,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let container_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match close_container(&mut ctx, &container_name) {
+                        match session.with_inventory(|ctx| close_container(ctx, &container_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -1053,8 +1073,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let ctx = session.inventory_context();
-                        match read_item(&ctx, &item_name) {
+                        match session.with_inventory(|ctx| read_item(ctx, &item_name)) {
                             Ok(msg) => println!("{msg}"),
                             Err(e) => println!("{e}"),
                         }
@@ -1065,8 +1084,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match break_item(&mut ctx, &item_name) {
+                        match session.with_inventory(|ctx| break_item(ctx, &item_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -1082,8 +1100,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match harvest_item(&mut ctx, &item_name) {
+                        match session.with_inventory(|ctx| harvest_item(ctx, &item_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -1099,8 +1116,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match use_item(&mut ctx, &item_name) {
+                        match session.with_inventory(|ctx| use_item(ctx, &item_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -1116,8 +1132,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let container_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match lock_container(&mut ctx, &container_name) {
+                        match session.with_inventory(|ctx| lock_container(ctx, &container_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -1131,8 +1146,9 @@ async fn main() -> Result<()> {
                         let rest = parts[1..].join(" ");
                         match parse_unlock_args(&rest) {
                             Ok((container, key)) => {
-                                let mut ctx = session.inventory_context();
-                                match unlock_container(&mut ctx, &container, key.as_deref()) {
+                                match session.with_inventory(|ctx| {
+                                    unlock_container(ctx, &container, key.as_deref())
+                                }) {
                                     Ok(msg) => {
                                         println!("{msg}");
                                         if let Err(e) =
@@ -1162,7 +1178,7 @@ async fn main() -> Result<()> {
                             &container_name,
                             session.player_id(),
                             session.current_location(),
-                            session.objects(),
+                            &session.objects(),
                         ) {
                             Some(id) => id,
                             None => {
@@ -1172,7 +1188,6 @@ async fn main() -> Result<()> {
                         };
                         let mut container = session
                             .object(&container_id)
-                            .cloned()
                             .expect("resolved container");
                         let location = session.current_location().cloned();
                         match create_key_for_container(
@@ -1205,8 +1220,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match wield_item(&mut ctx, &item_name) {
+                        match session.with_inventory(|ctx| wield_item(ctx, &item_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -1295,8 +1309,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
-                        match wear_item(&mut ctx, &item_name) {
+                        match session.with_inventory(|ctx| wear_item(ctx, &item_name)) {
                             Ok(msg) => {
                                 println!("{msg}");
                                 if let Err(e) = persist_session(&mut session, &persistence).await {
@@ -1439,19 +1452,20 @@ async fn main() -> Result<()> {
                             .await
                         {
                             Ok(TargetResolution::Found(id)) => {
-                                let mut obj = match session.object(&id).cloned() {
+                                let mut obj = match session.object(&id) {
                                     Some(obj) => obj,
                                     None => {
                                         println!("{}", narrate_wizard_not_found());
                                         continue;
                                     }
                                 };
+                                let graph = session.objects();
                                 match apply_set(
                                     &mut obj,
                                     &set_cmd.key,
                                     &set_cmd.value,
                                     session.player_id(),
-                                    session.objects(),
+                                    &graph,
                                 ) {
                                     Ok(()) => {
                                         info!(
@@ -1496,7 +1510,7 @@ async fn main() -> Result<()> {
                         .await
                         {
                             Ok(TargetResolution::Found(id)) => {
-                                let mut obj = match session.object(&id).cloned() {
+                                let mut obj = match session.object(&id) {
                                     Some(obj) => obj,
                                     None => match persistence.load_object(&id).await {
                                         Ok(Some(o)) => o,
@@ -1571,7 +1585,7 @@ async fn main() -> Result<()> {
                         let id = ObjectId::new(parts[1]);
                         if let Some(obj) = session.object(&id) {
                             let name = obj.name.clone();
-                            match persistence.save_object(obj).await {
+                            match persistence.save_object(&obj).await {
                                 Ok(()) => {
                                     info!(id = %id, name = %name, "object saved");
                                     println!("{}", narrate_saved(&name));

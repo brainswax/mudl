@@ -51,10 +51,12 @@ pub async fn persist_dirty<P: Persistence>(
 ) -> anyhow::Result<usize> {
     let ids = dirty.take_dirty();
     let count = ids.len();
-    for id in ids {
-        if let Some(obj) = objects.get(&id) {
-            persistence.save_object(obj).await?;
-        }
+    let batch: Vec<&crate::object::Object> = ids
+        .iter()
+        .filter_map(|id| objects.get(id))
+        .collect();
+    if !batch.is_empty() {
+        persistence.save_objects_batch(&batch).await?;
     }
     Ok(count)
 }
