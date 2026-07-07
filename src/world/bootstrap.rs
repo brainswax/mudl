@@ -1137,6 +1137,57 @@ mod tests {
             "Pale Heart of the Wood"
         );
 
+        let heart_location = session.current_location().unwrap().clone();
+        let reward_chest_id = session
+            .objects()
+            .values()
+            .find(|o| {
+                o.name == "Rootbound Chest"
+                    && o.is_container()
+                    && !o.is_deleted
+                    && o.location.as_ref() == Some(&heart_location)
+            })
+            .map(|o| o.id.clone())
+            .expect("heart reward chest at Pale Heart");
+        assert_eq!(
+            session
+                .objects()
+                .get(&reward_chest_id)
+                .unwrap()
+                .location
+                .as_ref(),
+            Some(&heart_location)
+        );
+
+        let mut ctx = session.inventory_context();
+        let reward_msg = open_container(&mut ctx, "reward chest").unwrap();
+        drop(ctx);
+        assert!(
+            reward_msg.contains("find"),
+            "opening reward chest should spawn loot: {reward_msg}"
+        );
+        let reward_chest = session.objects().get(&reward_chest_id).unwrap();
+        assert!(reward_chest.gate_is_open());
+        let reward_names = [
+            "Trail Rations",
+            "Tinderbox",
+            "Iron Lantern",
+            "Chipped Blade",
+            "Brass Key Ring",
+            "Boots of Carrying",
+        ];
+        let spawned: Vec<_> = reward_chest
+            .container_contents()
+            .iter()
+            .filter_map(|id| session.objects().get(id))
+            .collect();
+        assert!(
+            spawned
+                .iter()
+                .any(|item| reward_names.contains(&item.name.as_str())),
+            "reward chest should hold a weighted loot drop"
+        );
+
         let heart = session
             .object(session.current_location().unwrap())
             .unwrap()
