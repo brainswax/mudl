@@ -7,6 +7,7 @@
 @import expansions/poisonous_swamp.mudl
 @import expansions/giant_spider_den.mudl
 @import expansions/beach_resort.mudl
+@import expansions/fey_glade.mudl
 @include behaviors.mudl
 @include creatures.mudl
 @include npcs.mudl
