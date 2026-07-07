@@ -24,6 +24,7 @@ use crate::world::place_builder::{
 use crate::world::portal::{
     passable_portal_for_direction, portal_passage_block, portal_permits_exit,
 };
+use crate::gateway::{authorize_meta_command, authorize_plain_command, AuthError};
 use crate::world::{EventContext, SharedWorld, WorldState};
 
 /// Errors from session-level navigation and state operations.
@@ -115,6 +116,26 @@ impl Session {
 
     pub fn shared_world(&self) -> &SharedWorld {
         &self.world
+    }
+
+    /// Enforce RBAC for an `@`-prefixed meta verb (verb without `@`).
+    pub fn authorize_meta(&self, verb: &str) -> Result<(), AuthError> {
+        self.with_world(|world, player| {
+            let actor = world
+                .object(player.actor_id())
+                .ok_or(AuthError::ActorNotFound)?;
+            authorize_meta_command(actor, verb)
+        })
+    }
+
+    /// Enforce RBAC for privileged plain verbs (`load`, `save`, `module …`).
+    pub fn authorize_plain(&self, cmd: &str, subcommand: Option<&str>) -> Result<(), AuthError> {
+        self.with_world(|world, player| {
+            let actor = world
+                .object(player.actor_id())
+                .ok_or(AuthError::ActorNotFound)?;
+            authorize_plain_command(actor, cmd, subcommand)
+        })
     }
 
     /// Read-only access under the world mutex.
@@ -748,6 +769,29 @@ mod tests {
             session2.current_location().map(|id| id.as_str()),
             Some("room:void-001")
         );
+    }
+
+    #[tokio::test]
+    async fn authorize_meta_denies_player_tier_for_wizard_verbs() {
+        let (_persistence, mut session) = sample_session().await;
+        let hero_id = session.player_id().clone();
+
+        session.object_mut(&hero_id, |player| {
+            player.permissions = PermissionFlags::player_default();
+        });
+        assert!(session.authorize_meta("examine").is_err());
+        assert!(session.authorize_meta("set").is_err());
+
+        session.object_mut(&hero_id, |player| {
+            player.permissions = PermissionFlags::builder_role();
+        });
+        assert!(session.authorize_meta("examine").is_ok());
+        assert!(session.authorize_meta("set").is_err());
+
+        session.object_mut(&hero_id, |player| {
+            player.permissions = PermissionFlags::wizard_role();
+        });
+        assert!(session.authorize_meta("set").is_ok());
     }
 
     #[tokio::test]

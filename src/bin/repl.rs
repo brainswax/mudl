@@ -6,13 +6,13 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 use mudl::command::{
     apply_set, apply_trigger_add, apply_trigger_clear, apply_trigger_remove, apply_trigger_set,
     apply_unset, bootstrap_active_universe, create_at_location_with_options,
-    create_key_for_container, format_trigger_list, has_wizard_permission, narrate_trigger_added,
+    create_key_for_container, format_trigger_list, narrate_trigger_added,
     narrate_trigger_cleared, narrate_trigger_removed, narrate_trigger_set,
     narrate_trigger_test_empty, package_module, parse_command_line, parse_create_command,
     parse_dig_command, parse_link_command, parse_set_command, parse_trigger_command,
     parse_unlink_command, parse_unset_command, preview_trigger_test, reload_universe,
     resolve_container_target, resolve_trigger_target_name, soft_delete_object, trigger_command_help,
-    undelete_object, validate_trigger_host, wizard_access_denied, TriggerCommand, TriggerError,
+    undelete_object, validate_trigger_host, TriggerCommand, TriggerError,
 };
 use mudl::creature::{
     add_behavior_template, attack_creature, damage_creature, format_creature_behavior_list,
@@ -331,13 +331,21 @@ async fn main() -> Result<()> {
                 let _ = rl.add_history_entry(line.as_str());
 
                 let parsed = parse_command_line(input);
-                if parsed.is_meta && !has_wizard_permission(session.player_id()) {
-                    println!("{}", wizard_access_denied());
-                    continue;
-                }
 
                 let parts: Vec<&str> = input.split_whitespace().collect();
                 let cmd = parts[0];
+
+                if parsed.is_meta {
+                    if let Err(err) = session.authorize_meta(&parsed.verb) {
+                        println!("{err}");
+                        continue;
+                    }
+                } else if let Err(err) =
+                    session.authorize_plain(cmd, parts.get(1).copied())
+                {
+                    println!("{err}");
+                    continue;
+                }
 
                 if cmd == "go" && parts.len() < 2 {
                     println!("Usage: go <direction>  (or just: north, around, in, …)");

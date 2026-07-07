@@ -1,4 +1,5 @@
 pub mod command;
+pub mod gateway;
 pub mod creature;
 pub mod display;
 pub mod inventory;

@@ -9,8 +9,9 @@ pub use editor::{
     apply_set, apply_unset, parse_set_command, parse_unset_command, ParsedSetCommand,
     ParsedUnsetCommand,
 };
-pub use parse::{
-    has_wizard_permission, is_meta_command, parse_command_line, wizard_access_denied, CommandLine,
+pub use parse::{is_meta_command, parse_command_line, CommandLine};
+pub use crate::gateway::{
+    authorize_meta_command, authorize_plain_command, ActorTier, AuthError,
 };
 pub use place::{
     parse_dig_command, parse_link_command, parse_unlink_command, ParsedDigCommand,

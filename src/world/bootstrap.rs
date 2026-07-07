@@ -612,19 +612,23 @@ pub async fn bootstrap_world<P: Persistence>(
     bootstrap_world_resource_spawners(factory, &owner, world, &loot_targets).await?;
     bootstrap_world_schedules(factory, world, &loot_targets).await?;
 
-    if factory.load_object(&owner).await?.is_none() {
-        let mut player = factory
+    let mut player = if let Some(existing) = factory.load_object(&owner).await? {
+        existing
+    } else {
+        let mut created = factory
             .create_player("admin", owner.clone(), &world.anatomy)
             .await?;
-        player.name = "Admin".to_string();
+        created.name = "Admin".to_string();
         if let Some(start_base) = &world.starting_location {
             if let Some(start_id) = name_to_id.get(start_base) {
-                player.location = Some(start_id.clone());
-                player.set_property_object_ref("home_location", start_id.clone());
+                created.location = Some(start_id.clone());
+                created.set_property_object_ref("home_location", start_id.clone());
             }
         }
-        crate::persistence::save_and_sync(factory.persistence(), &mut player).await?;
-    }
+        created
+    };
+    player.permissions = PermissionFlags::wizard_role();
+    crate::persistence::save_and_sync(factory.persistence(), &mut player).await?;
 
     let start_id = if let Some(start_base) = &world.starting_location {
         if let Some(def) = find_location_def(world, start_base) {
