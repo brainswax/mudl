@@ -1,12 +1,11 @@
 # Poisonous Swamp — self-contained expansion pack for Project MUDL.
 #
-# Drop this file into any compatible world. From world.mudl:
-#   @import expansions/poisonous_swamp.mudl
+# Docs: expansions/poisonous_swamp/README.md
 #
-# Host world integration (map hooks the expansion expects):
-#   - forest-path with exit `down: swamp-entry` (and return `up: forest-path`)
-#   - the-void optional — scatter exit from swamp-heart can land here
-#   - swamp-dry with exit `in: spider-entry` when Giant Spider Den expansion is loaded
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp.mudl
+# @import expansions/poisonous_swamp.mudl
+#
+# Host hooks: forest-path (down → swamp-entry), the-void optional — see README.
 
 @expansion poisonous_swamp
   name=Poisonous Swamp

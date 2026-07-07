@@ -253,7 +253,7 @@ MUDL_MODULE=examples/my-universe MUDL_WORLD=my_world cargo run --bin repl
 
 Add a new creature in `creatures.mudl`, reference it from a `@player-template`, and reload with `module reload` in the REPL. Verbs and event handlers can be added in MUDL (as the interpreter matures) or live via `add_verb`.
 
-Module layout reference: [modules/default/README.md](modules/default/README.md) · Adventure modules: [MODULES.md](MODULES.md) · Example packs: [examples/README.md](examples/README.md)
+Module layout: [modules/default/README.md](modules/default/README.md) · Expansion install: [expansions/README.md](modules/default/worlds/default_world/expansions/README.md) · Overview: [MODULES.md](MODULES.md)
 
 ---
 

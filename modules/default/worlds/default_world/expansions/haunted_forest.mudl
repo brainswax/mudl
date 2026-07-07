@@ -1,13 +1,11 @@
 # Haunted Forest — self-contained expansion pack for Project MUDL.
 #
-# Drop this file (or fetch by URL) into any compatible world. From world.mudl:
-#   @import expansions/haunted_forest.mudl
-#   @import https://example.com/mudl/expansions/haunted_forest.mudl
+# Docs: expansions/haunted_forest/README.md
 #
-# Host world integration (map hooks the expansion expects):
-#   - forest-path with exit `in: haunted-entry`
-#   - the-void (West Clearing) for the mossy boulder clue
-#   - scene-chest (travel chest) to hold the whisper charm
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest.mudl
+# @import expansions/haunted_forest.mudl
+#
+# Host hooks: forest-path (in → haunted-entry), the-void, scene-chest — see README.
 
 @expansion haunted_forest
   name=Haunted Forest

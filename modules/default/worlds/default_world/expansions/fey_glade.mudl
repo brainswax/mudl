@@ -1,12 +1,11 @@
 # Glimmerfen — self-contained fey realm expansion for Project MUDL.
 #
-# Drop into any compatible world. From world.mudl:
-#   @import expansions/fey_glade.mudl
+# Docs: expansions/fey_glade/README.md
 #
-# Host world integration (map hooks the expansion expects):
-#   - forest-path — mushroom ring portal (`through: fey-threshold`)
-#   - beach-shore — moonmist arch portal (`mist: fey-threshold`)
-#   - the-void, forest-path, beach-trail optional — scatter exit from fey-grace
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/fey_glade.mudl
+# @import expansions/fey_glade.mudl
+#
+# Host hooks: forest-path (through), beach-shore (mist), scatter from fey-grace — see README.
 
 @expansion fey_glade
   name=Glimmerfen

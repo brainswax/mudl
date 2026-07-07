@@ -1,11 +1,11 @@
 # Sandy Shoals Resort — self-contained restorative expansion for Project MUDL.
 #
-# Drop into any compatible world. From world.mudl:
-#   @import expansions/beach_resort.mudl
+# Docs: expansions/beach_resort/README.md
 #
-# Host world integration (map hooks the expansion expects):
-#   - the-void (West Clearing) with exit `south: beach-trail` (and return `north: the-void`)
-#   - forest-path optional — scatter exit from beach-pearl can land here
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/beach_resort.mudl
+# @import expansions/beach_resort.mudl
+#
+# Host hooks: the-void (south → beach-trail), forest-path optional — see README.
 
 @expansion beach_resort
   name=Sandy Shoals Resort
