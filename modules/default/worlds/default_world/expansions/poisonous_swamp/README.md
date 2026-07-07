@@ -1,73 +1,128 @@
 # Poisonous Swamp
 
-**File:** [../poisonous_swamp.mudl](../poisonous_swamp.mudl) · **Expansion ID:** `poisonous_swamp`
+**Pack:** `poisonous_swamp.mudl` · **ID:** `poisonous_swamp` · **Entry:** `swamp-entry`
 
-## Teaser
+---
 
-A stinking sink of bitter fen, sweet reeds, and black water that keeps what it steals. Survival-horror adjacent — green fog, leeches, gas pockets, and a warden at the deep heart. The bog teaches through pressure; antidotes and masks are worth finding.
+## 1. Theme teaser
 
-**Danger:** High (environmental damage, creatures, boss fight). **Spoilers:** None below.
+A stinking sink where bitter fen, sweet reeds, and black water teach hard lessons. Green fog beads on your sleeves; leeches ripple without breaking the surface. The bog keeps what it steals — and something warden-sized waits where the peat runs deepest.
 
-## Install
+---
 
-### Import from GitHub
+## 2. Quick install
+
+### Import (GitHub)
 
 ```mudl
 @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp.mudl
 ```
 
-### Host map (minimum)
+### Minimal host map
+
+The pack places a **warning post** on `forest-path`. Link downward into the bog:
 
 ```mudl
 type: area
+base_name: my-hub
+name: My Hub
+description: A path north leads into pine trees.
+exits:
+  north: forest-path
+exit_returns:
+  north: south
+
+type: area
 base_name: forest-path
 name: Forest Path
-description: A path into the trees. The ground sounds hollow to the east.
+description: The ground sounds hollow toward the east.
 exits:
+  south: my-hub
   down: swamp-entry
 exit_returns:
+  south: north
   down: up
 ```
 
-The pack places a **warning post** on `forest-path` and defines all `swamp-*` areas.
+Optional: a clearing named `the-void` — the heart's scatter exit can return you there.
 
-### Optional host
+### Run
 
-| Hook | Purpose |
-|------|---------|
-| `the-void` | Scatter exit from swamp heart can land here |
-| `swamp-dry` exit `in: spider-entry` | Links to Giant Spider Den when that pack is loaded |
+```bash
+cargo run --bin repl
+```
 
-### Link at runtime (wizard)
+### Link (wizard, in-game)
 
 ```text
 > go forest-path
 > @link down swamp-entry --return up
 ```
 
-### Play (default world)
+No door object required — this module uses a map descent. To use a custom hub name, stand there and:
 
 ```text
-> go north
+> @link down swamp-entry --return up
+```
+
+### Play
+
+```text
 > look
+> go north
 > read warning
 > go down
 > look
 > examine marker
 > harvest root
+> examine cache
 ```
 
-Carry salves when you find them; `examine` stakes and signs; avoid rushing — wrong turns loop to the threshold.
+---
 
-## Extension ideas
+## 3. What to expect
 
-- `@effect` mudwalking boots reducing `on_enter` damage in gas rooms.
-- `@resource-spawner` new harvestables for an alchemy chain.
-- Replace warden with `react=warn` NPC for a pacifist variant.
-- Point `swamp-dry` `in` at your own dungeon alongside the spider den.
+**Tone & danger:** High. Environmental damage on harsh rooms, creature ambushes, antidote scarcity, and a **fixed warden NPC** at the deep heart with attack behavior. Defeating the warden grants a lasting resilience effect.
 
-## See also
+**The bog:**
 
-- [Expansions index](../README.md)
-- [Giant Spider Den](../giant_spider_den/README.md) (optional sequel)
-- [MODULES.md](../../../../../MODULES.md)
+- A **threshold** bowl of stagnant air — wrong paths loop back to the entry.
+- **Carved stakes** and a warning post whose text hints at tastes and textures (read everything; the fen rewards attention, not speed).
+- **Bitter, sweet, dry, and deep** themed regions — each with distinct ground, harvestables, and spawn tables.
+- **Gas pockets** with scheduled weather belches; **quicksand**, snares, and drowned-glare wrong turns.
+
+**Gear & effects:**
+
+- **Reed breather mask** and **reed-walker boots** as wearable rewards.
+- **Antidote salve** (stackable) from harvests, hidden caches, and breakables.
+- `@effect` **reed_breathing** and **bog_resilience** defined in the pack.
+
+**Objects & interactions:**
+
+- **Harvestable** bitter roots and sweet reed beds.
+- **Breakable** spore pods with choking break text and loot spawners.
+- **Hidden mossy cache** in the sweet stand — discovered via perception.
+- **Gas grate** (readable) in the gas pocket.
+- **Heartwood coffer** at the deep heart — weighted loot on open.
+
+**Creatures:**
+
+- Gas wisps, bog leeches, mire crawlers — weighted spawns on enter and periodic ticks in fen rooms.
+
+**Leaving:**
+
+- **Up** from the heart scatters to forest or clearing; wrong turns use silent `loop_to` back to the threshold.
+
+**Commands to know:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `attack`, `wear` (mask/boots when found).
+
+*Puzzle order and safe routes stay in-game — stakes and warnings tease the logic without this doc solving it.*
+
+---
+
+## 4. Extension ideas
+
+- `@effect` mudwalking boots that soften `on_enter` damage in gas rooms.
+- `@resource-spawner` on new harvest nodes for an alchemy crafting chain.
+- Swap the warden for `react=warn` dialogue and a quest item instead of combat.
+- Add `@trigger on_kill` on the warden that opens a gate in your own world.
+- Extra `@schedule` on the gas pocket for louder weather every N room ticks.

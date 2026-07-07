@@ -1,6 +1,6 @@
 # Poisonous Swamp — self-contained expansion pack for Project MUDL.
 #
-# Docs: expansions/poisonous_swamp/README.md
+# Docs: poisonous_swamp/README.md (teaser · install · expect · extensions)
 #
 # @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp.mudl
 # @import expansions/poisonous_swamp.mudl

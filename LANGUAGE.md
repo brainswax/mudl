@@ -257,7 +257,7 @@ Import from `world.mudl`:
 
 The host world keeps minimal map hooks (e.g. `forest-path` with `in: haunted-entry`); the expansion places items and defines puzzle areas.
 
-Per-module docs (GitHub `@import` URLs, install, extensions): [expansions/README.md](modules/default/worlds/default_world/expansions/README.md) · Overview: [MODULES.md](MODULES.md).
+Per-module docs (self-contained install & play guides): [expansions/README.md](modules/default/worlds/default_world/expansions/README.md).
 
 Places may set `loop_to: <base_name>` so entering that room silently returns the player to another place (no movement message). Useful for maze wrong turns.
 - Set `MUDL_MODULE=modules/default` (or `MUDL_UNIVERSE` to a specific file) to load a universe.

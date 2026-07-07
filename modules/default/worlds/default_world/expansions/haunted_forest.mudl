@@ -1,6 +1,6 @@
 # Haunted Forest — self-contained expansion pack for Project MUDL.
 #
-# Docs: expansions/haunted_forest/README.md
+# Docs: haunted_forest/README.md (teaser · install · expect · extensions)
 #
 # @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest.mudl
 # @import expansions/haunted_forest.mudl

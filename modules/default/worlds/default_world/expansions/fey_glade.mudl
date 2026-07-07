@@ -1,6 +1,6 @@
 # Glimmerfen — self-contained fey realm expansion for Project MUDL.
 #
-# Docs: expansions/fey_glade/README.md
+# Docs: fey_glade/README.md (teaser · install · expect · extensions)
 #
 # @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/fey_glade.mudl
 # @import expansions/fey_glade.mudl

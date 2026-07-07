@@ -38,5 +38,5 @@ Self-contained adventures live in `worlds/default_world/expansions/*.mudl`. Each
 @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest.mudl
 ```
 
-- **Quick-start (map, portal, `@link`, play commands):** [worlds/default_world/expansions/README.md](worlds/default_world/expansions/README.md)
-- **Spoiler-free overview:** [MODULES.md](../../MODULES.md)
+- **Pack index:** [worlds/default_world/expansions/README.md](worlds/default_world/expansions/README.md)
+- **Per-module docs** (self-contained): `worlds/default_world/expansions/<name>/README.md`
