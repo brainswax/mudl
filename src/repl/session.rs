@@ -124,7 +124,7 @@ impl Session {
         f: impl FnOnce(&mut WorldState, &mut PlayerSession) -> R,
     ) -> R {
         let mut guard = self.world.lock_blocking();
-        f(&mut *guard, &mut self.player)
+        f(&mut guard, &mut self.player)
     }
 
     pub fn mutate_player<R>(
@@ -258,7 +258,7 @@ impl Session {
         request: DigRequest,
     ) -> Result<DigResult, PlaceBuildError> {
         let mut guard = self.world.lock_blocking();
-        dig_place_impl(factory, request, &mut *guard, &mut self.player).await
+        dig_place_impl(factory, request, &mut guard, &self.player).await
     }
 
     pub fn link_exit(

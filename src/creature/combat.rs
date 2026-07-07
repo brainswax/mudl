@@ -418,16 +418,27 @@ fn strip_creature_gear(
     outcome.mark_dirty(creature_id);
 }
 
+struct NpcDeathContext<'a> {
+    dispatch: &'a mut DispatchStack,
+    victim_id: &'a ObjectId,
+    killer_id: &'a ObjectId,
+    room_id: &'a ObjectId,
+    owner: &'a ObjectId,
+}
+
 fn handle_npc_death(
-    dispatch: &mut DispatchStack,
-    victim_id: &ObjectId,
-    killer_id: &ObjectId,
-    room_id: &ObjectId,
-    owner: &ObjectId,
+    ctx: NpcDeathContext<'_>,
     objects: &mut HashMap<ObjectId, Object>,
     anatomy: &AnatomyRegistry,
     outcome: &mut AttackOutcome,
 ) {
+    let NpcDeathContext {
+        dispatch,
+        victim_id,
+        killer_id,
+        room_id,
+        owner,
+    } = ctx;
     let victim = objects.get(victim_id).cloned().unwrap();
     let display = victim.name.to_lowercase();
     let had_gear = !victim.carried_body_items().is_empty();
@@ -745,11 +756,13 @@ pub fn attack_creature(
         if after == 0 {
             if target.object_type() == "npc" {
                 handle_npc_death(
-                    dispatch,
-                    &target_id,
-                    actor_id,
-                    room_id,
-                    &owner,
+                    NpcDeathContext {
+                        dispatch,
+                        victim_id: &target_id,
+                        killer_id: actor_id,
+                        room_id,
+                        owner: &owner,
+                    },
                     objects,
                     anatomy,
                     &mut outcome,

@@ -6,6 +6,9 @@ edition = "2021"
 [lints.rust]
 warnings = "deny"
 
+[lints.clippy]
+all = "deny"
+
 [dependencies]
 anyhow = "1.0.103"
 async-trait = "0.1.80"
