@@ -45,7 +45,10 @@ pub struct SpawnerEntryDef {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpawnerDef {
     pub base_name: String,
+    /// Area base name when the spawner is room-attached.
     pub location: String,
+    /// Item instance base name when the spawner is object-attached (ethereal).
+    pub target: String,
     pub trigger: SpawnerTrigger,
     /// For `periodic`: attempt every N room entries (default 5).
     pub periodic_interval: u32,
@@ -123,6 +126,7 @@ pub fn parse_spawner_file(content: &str) -> (Vec<SpawnTemplateDef>, Vec<SpawnerD
             current_spawner = Some(SpawnerDef {
                 base_name: name.trim().to_string(),
                 location: String::new(),
+                target: String::new(),
                 trigger: SpawnerTrigger::OnEnter,
                 periodic_interval: 5,
                 chance: 1.0,
@@ -173,6 +177,7 @@ pub fn parse_spawner_file(content: &str) -> (Vec<SpawnTemplateDef>, Vec<SpawnerD
             if let Some(spawner) = &mut current_spawner {
                 match key.as_str() {
                     "location" => spawner.location = value.to_string(),
+                    "target" | "attach" => spawner.target = value.to_string(),
                     "trigger" => spawner.trigger = SpawnerTrigger::parse(value),
                     "periodic_interval" => {
                         spawner.periodic_interval = value.parse().unwrap_or(5).max(1)

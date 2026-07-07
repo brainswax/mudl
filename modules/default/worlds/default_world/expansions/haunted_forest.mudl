@@ -85,6 +85,18 @@
   alias=rootbound chest
 @end
 
+@prototype haunted-clay-pot
+  name=Clay Pot
+  description=A squat earthen pot glazed with silver dust. Pale motes coil inside, restless.
+  breakable=true
+  break_text=You smash the clay pot. The silver motes scatter and the wood grows quiet.
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=pot
+  alias=clay pot
+@end
+
 # --- Integration items (placed in host world locations) ---
 
 @item scene-boulder
@@ -155,6 +167,11 @@
   location=haunted-heart
 @end
 
+@item haunted-moon-pot
+  prototype=haunted-clay-pot
+  location=haunted-moon
+@end
+
 # --- Creature spawners (weighted, on-enter only in haunted rooms) ---
 
 @spawn-template mist-wisp
@@ -176,6 +193,14 @@
   max_active=1
   @entry mist-wisp weight=3
   @entry pale-lurker weight=1
+@end
+
+@spawner pot-mist-spawner
+  target=haunted-moon-pot
+  trigger=on_enter
+  chance=1.0
+  max_active=1
+  @entry mist-wisp weight=1
 @end
 
 @spawner haunted-mirror-phantoms
@@ -202,6 +227,20 @@
   chance=1.0
   max_active=1
   @entry shrine-rations weight=1
+@end
+
+@loot-template pot-spill-rations
+  prototype=trail-rations
+  count=2
+@end
+
+@loot-spawner pot-break-loot
+  target=haunted-moon-pot
+  trigger=on_break
+  once=true
+  chance=1.0
+  max_active=1
+  @entry pot-spill-rations weight=1
 @end
 
 # --- Reward chest (weighted loot at the successful exit) ---

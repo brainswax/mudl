@@ -274,6 +274,8 @@ impl<P: Persistence> ObjectFactory<P> {
             "door_direction",
             "door_destination_base",
             "allowed_types",
+            "is_breakable",
+            "break_text",
         ] {
             if let Some(prop) = prototype.get_property(key) {
                 target.add_property(prop.clone());

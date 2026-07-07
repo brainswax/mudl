@@ -120,6 +120,13 @@ impl KeySpec {
     }
 }
 
+/// Configuration for a breakable prop — smashing it can disable spawners and drop loot.
+#[derive(Debug, Clone, Default)]
+pub struct BreakableSpec {
+    /// Optional custom narrative when the object is broken.
+    pub break_text: Option<String>,
+}
+
 /// Kind of exit portal — doors, windows, and future teleporters share one model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortalKind {
@@ -464,6 +471,22 @@ impl Object {
         }
         if self.get_numeric_property("volume").is_none() {
             self.set_property_numeric("volume", 0.1);
+        }
+    }
+
+    pub fn is_breakable(&self) -> bool {
+        self.get_bool_property("is_breakable").unwrap_or(false)
+    }
+
+    pub fn break_text(&self) -> Option<String> {
+        self.get_string_property("break_text")
+            .filter(|text| !text.trim().is_empty())
+    }
+
+    pub fn apply_breakable_role(&mut self, spec: &BreakableSpec) {
+        self.set_property_bool("is_breakable", true);
+        if let Some(text) = &spec.break_text {
+            self.set_property_string("break_text", text);
         }
     }
 

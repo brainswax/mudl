@@ -11,6 +11,7 @@ pub enum LootSpawnerTrigger {
     OnEnter,
     OnOpen,
     OnKill,
+    OnBreak,
     Timer,
 }
 
@@ -19,6 +20,7 @@ impl LootSpawnerTrigger {
         match s.to_lowercase().as_str() {
             "on_open" | "open" => Self::OnOpen,
             "on_kill" | "kill" => Self::OnKill,
+            "on_break" | "break" => Self::OnBreak,
             "timer" | "periodic" => Self::Timer,
             _ => Self::OnEnter,
         }
@@ -29,6 +31,7 @@ impl LootSpawnerTrigger {
             Self::OnEnter => "on_enter",
             Self::OnOpen => "on_open",
             Self::OnKill => "on_kill",
+            Self::OnBreak => "on_break",
             Self::Timer => "timer",
         }
     }

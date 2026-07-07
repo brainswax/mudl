@@ -51,6 +51,10 @@ pub enum InventoryError {
     InvalidTarget(String),
     /// Object has no readable text.
     NotReadable(String),
+    /// Object cannot be broken.
+    NotBreakable(String),
+    /// Breakable object was already destroyed.
+    AlreadyBroken(String),
 }
 
 impl fmt::Display for InventoryError {
@@ -97,6 +101,8 @@ impl fmt::Display for InventoryError {
             Self::NotReadable(name) => {
                 write!(f, "There's nothing to read on the {name}.")
             }
+            Self::NotBreakable(name) => write!(f, "The {name} can't be broken."),
+            Self::AlreadyBroken(name) => write!(f, "The {name} is already broken."),
         }
     }
 }
@@ -1319,6 +1325,91 @@ pub fn read_item(ctx: &InventoryContext<'_>, item_name: &str) -> Result<String, 
 
     crate::display::format_read_message(&item)
         .ok_or_else(|| InventoryError::NotReadable(item.name.to_lowercase()))
+}
+
+/// Break a breakable object in the room or in your possession.
+///
+/// Destroys attached creature spawners, despawns their creatures, and fires `on_break` loot spawners.
+pub fn break_item(
+    ctx: &mut InventoryContext<'_>,
+    item_name: &str,
+) -> Result<String, InventoryError> {
+    let room_id = ctx.room_id.cloned();
+    let item_id = resolve_inventory_target(
+        item_name,
+        room_id.as_ref(),
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::CarriedOrGround,
+    )?;
+
+    let item = ctx
+        .objects
+        .get(&item_id)
+        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?
+        .clone();
+
+    if let Some(room) = ctx.room_id {
+        if !is_carried_by(ctx.player_id, &item_id, ctx.objects)
+            && !crate::display::resolve::is_accessible_in_room(
+                &item_id,
+                room,
+                ctx.player_id,
+                ctx.objects,
+            )
+        {
+            return Err(InventoryError::NotFound(item_name.to_string()));
+        }
+    }
+
+    let display = item.name.to_lowercase();
+    if !item.is_active() {
+        return Err(InventoryError::AlreadyBroken(display));
+    }
+    if !item.is_breakable() {
+        return Err(InventoryError::NotBreakable(display));
+    }
+
+    let owner = ctx
+        .objects
+        .get(ctx.player_id)
+        .map(|player| player.owner.clone())
+        .unwrap_or_else(|| ctx.player_id.clone());
+
+    let mut lines = vec![item
+        .break_text()
+        .unwrap_or_else(|| format!("You break the {display}."))];
+
+    let spawner_ids = crate::creature::destroy_spawners_for_target(&item_id, ctx.objects);
+    for spawner_id in &spawner_ids {
+        mark_dirty(ctx, spawner_id);
+    }
+
+    if let Some(item) = ctx.objects.get_mut(&item_id) {
+        item.soft_delete();
+        mark_dirty(ctx, &item_id);
+    }
+
+    let loot_spawner_ids: Vec<ObjectId> = crate::loot::loot_spawners_for_target(&item_id, ctx.objects)
+        .into_iter()
+        .map(|spawner| spawner.id.clone())
+        .collect();
+    for loot in crate::loot::run_on_break_loot_spawners(
+        &item_id,
+        ctx.player_id,
+        &owner,
+        ctx.objects,
+    ) {
+        mark_dirty(ctx, &loot.item_id);
+        if let Some(message) = loot.message {
+            lines.push(message);
+        }
+    }
+    for spawner_id in loot_spawner_ids {
+        mark_dirty(ctx, &spawner_id);
+    }
+
+    Ok(lines.join("\n"))
 }
 
 pub fn wield_item(

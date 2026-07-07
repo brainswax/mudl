@@ -28,9 +28,13 @@ pub fn is_spawner_infrastructure(obj: &Object) -> bool {
     is_spawner(obj)
 }
 
-/// Spawners attached to `room_id` (spawner objects live in the room).
-pub fn spawners_in_room<'a>(
-    room_id: &ObjectId,
+fn spawner_target_id(obj: &Object) -> Option<ObjectId> {
+    obj.get_object_ref_property("spawner_target")
+}
+
+/// Creature spawners whose `target` resolves to `target_id`.
+pub fn spawners_for_target<'a>(
+    target_id: &ObjectId,
     objects: &'a HashMap<ObjectId, Object>,
 ) -> Vec<&'a Object> {
     objects
@@ -38,7 +42,43 @@ pub fn spawners_in_room<'a>(
         .filter(|obj| {
             obj.is_active()
                 && is_spawner(obj)
-                && obj.location.as_ref() == Some(room_id)
+                && spawner_target_id(obj).as_ref() == Some(target_id)
+        })
+        .collect()
+}
+
+/// Resolve the room where creatures from this spawner should appear.
+pub fn spawner_room_id(spawner: &Object, objects: &HashMap<ObjectId, Object>) -> Option<ObjectId> {
+    if let Some(room_id) = spawner.location.clone() {
+        return Some(room_id);
+    }
+    spawner_target_id(spawner).and_then(|target_id| {
+        objects
+            .get(&target_id)
+            .filter(|target| target.is_active())
+            .and_then(|target| target.location.clone())
+    })
+}
+
+/// Spawners active in `room_id` — room-attached and object-attached (via targets in the room).
+pub fn spawners_in_room<'a>(
+    room_id: &ObjectId,
+    objects: &'a HashMap<ObjectId, Object>,
+) -> Vec<&'a Object> {
+    objects
+        .values()
+        .filter(|obj| {
+            if !obj.is_active() || !is_spawner(obj) {
+                return false;
+            }
+            if obj.location.as_ref() == Some(room_id) {
+                return true;
+            }
+            spawner_target_id(obj).is_some_and(|target_id| {
+                objects
+                    .get(&target_id)
+                    .is_some_and(|target| target.is_active() && target.location.as_ref() == Some(room_id))
+            })
         })
         .collect()
 }
@@ -482,6 +522,49 @@ fn spawn_message(template: &SpawnTemplateDef) -> String {
     )
 }
 
+/// Soft-delete NPCs spawned by `spawner_id`.
+pub fn despawn_creatures_from_spawner(
+    spawner_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> Vec<ObjectId> {
+    let npc_ids: Vec<ObjectId> = objects
+        .values()
+        .filter(|obj| {
+            obj.is_active()
+                && obj.object_type() == "npc"
+                && obj
+                    .get_object_ref_property("spawned_by")
+                    .as_ref()
+                    == Some(spawner_id)
+        })
+        .map(|obj| obj.id.clone())
+        .collect();
+    for npc_id in &npc_ids {
+        if let Some(npc) = objects.get_mut(npc_id) {
+            npc.soft_delete();
+        }
+    }
+    npc_ids
+}
+
+/// Destroy creature spawners attached to `target_id` and despawn their active creatures.
+pub fn destroy_spawners_for_target(
+    target_id: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> Vec<ObjectId> {
+    let spawner_ids: Vec<ObjectId> = spawners_for_target(target_id, objects)
+        .into_iter()
+        .map(|spawner| spawner.id.clone())
+        .collect();
+    for spawner_id in &spawner_ids {
+        despawn_creatures_from_spawner(spawner_id, objects);
+        if let Some(spawner) = objects.get_mut(spawner_id) {
+            spawner.soft_delete();
+        }
+    }
+    spawner_ids
+}
+
 /// Run `on_enter` spawners in `room_id`. Only locations with spawner objects spawn creatures.
 pub fn run_on_enter_spawners(
     room_id: &ObjectId,
@@ -498,6 +581,9 @@ pub fn run_on_enter_spawners(
     let mut results = Vec::new();
     for spawner_id in spawner_ids {
         let Some(spawner_snapshot) = objects.get(&spawner_id).cloned() else {
+            continue;
+        };
+        let Some(spawn_room_id) = spawner_room_id(&spawner_snapshot, objects) else {
             continue;
         };
         let enter_count = spawner_enter_count(&spawner_snapshot) + 1;
@@ -521,7 +607,7 @@ pub fn run_on_enter_spawners(
         }
 
         let max_active = spawner_max_active(&spawner_snapshot);
-        if count_active_spawns(&spawner_id, room_id, objects) >= max_active as usize {
+        if count_active_spawns(&spawner_id, &spawn_room_id, objects) >= max_active as usize {
             continue;
         }
 
@@ -543,7 +629,7 @@ pub fn run_on_enter_spawners(
         let npc = spawn_creature(
             &spawner_snapshot,
             &template,
-            room_id,
+            &spawn_room_id,
             owner,
             anatomy,
             spawn_index,
@@ -605,6 +691,7 @@ mod tests {
             &SpawnerDef {
                 base_name: "test".to_string(),
                 location: "room".to_string(),
+                target: String::new(),
                 trigger: SpawnerTrigger::OnEnter,
                 periodic_interval: 5,
                 chance: 1.0,

@@ -266,6 +266,12 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.mod_encumbrance.is_some() {
         target.mod_encumbrance = extra.mod_encumbrance;
     }
+    if extra.breakable.is_some() {
+        target.breakable = extra.breakable;
+    }
+    if extra.break_text.is_some() {
+        target.break_text = extra.break_text.clone();
+    }
 }
 
 #[cfg(test)]

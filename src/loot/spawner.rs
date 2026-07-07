@@ -214,9 +214,10 @@ fn trigger_fires(spawner: &Object, trigger: LootSpawnerTrigger, tick: u64) -> bo
         return false;
     }
     match actual {
-        LootSpawnerTrigger::OnEnter | LootSpawnerTrigger::OnOpen | LootSpawnerTrigger::OnKill => {
-            true
-        }
+        LootSpawnerTrigger::OnEnter
+        | LootSpawnerTrigger::OnOpen
+        | LootSpawnerTrigger::OnKill
+        | LootSpawnerTrigger::OnBreak => true,
         LootSpawnerTrigger::Timer => {
             let interval = u64::from(loot_spawner_periodic_interval(spawner));
             tick % interval == 0
@@ -638,6 +639,28 @@ pub fn run_on_open_loot_spawners(
         spawner_ids,
         target_id,
         LootSpawnerTrigger::OnOpen,
+        player_id,
+        owner,
+        objects,
+    )
+}
+
+/// Run `on_break` loot spawners attached to a breakable object.
+pub fn run_on_break_loot_spawners(
+    target_id: &ObjectId,
+    player_id: &ObjectId,
+    owner: &ObjectId,
+    objects: &mut HashMap<ObjectId, Object>,
+) -> Vec<LootSpawnResult> {
+    let spawner_ids: Vec<ObjectId> = loot_spawners_for_target(target_id, objects)
+        .into_iter()
+        .filter(|s| loot_spawner_trigger(s) == LootSpawnerTrigger::OnBreak)
+        .map(|s| s.id.clone())
+        .collect();
+    run_loot_spawners(
+        spawner_ids,
+        target_id,
+        LootSpawnerTrigger::OnBreak,
         player_id,
         owner,
         objects,

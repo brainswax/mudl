@@ -1,8 +1,8 @@
 //! Apply composable object roles from MUDL property definitions.
 
 use crate::object::{
-    ContainerSpec, ItemPhysSpec, KeySpec, Object, PortalKind, PortalSpec, ReadableSpec,
-    StackableSpec, WearableSpec,
+    BreakableSpec, ContainerSpec, ItemPhysSpec, KeySpec, Object, PortalKind, PortalSpec,
+    ReadableSpec, StackableSpec, WearableSpec,
 };
 
 /// Key-value role properties parsed from MUDL item/object blocks.
@@ -41,6 +41,8 @@ pub struct MudlRoleProps {
     pub portal_transparent: Option<bool>,
     pub mod_max_weight: Option<i64>,
     pub mod_encumbrance: Option<f64>,
+    pub breakable: Option<bool>,
+    pub break_text: Option<String>,
 }
 
 impl MudlRoleProps {
@@ -98,6 +100,8 @@ impl MudlRoleProps {
                 "mod_encumbrance" | "encumbrance_factor" | "encumbrance_reduction" => {
                     props.mod_encumbrance = value.parse::<f64>().ok().filter(|n| n.is_finite())
                 }
+                "breakable" | "is_breakable" => props.breakable = Some(*value == "true"),
+                "break_text" | "on_break" => props.break_text = Some(value.to_string()),
                 _ => {}
             }
         }
@@ -267,6 +271,12 @@ impl MudlRoleProps {
                 obj.apply_key_role(&spec);
             }
         }
+
+        if self.breakable == Some(true) {
+            obj.apply_breakable_role(&BreakableSpec {
+                break_text: self.break_text.clone(),
+            });
+        }
     }
 }
 
@@ -423,6 +433,20 @@ mod tests {
         assert!(!obj.portal_passable());
         assert!(obj.portal_transparent());
         assert!(obj.portal_allows_view());
+    }
+
+    #[test]
+    fn mudl_role_props_apply_breakable() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("breakable", "true"),
+            ("break_text", "Shards everywhere."),
+            ("weight", "2"),
+            ("volume", "2"),
+        ]);
+        let mut obj = bare("item:pot-001");
+        props.apply_to(&mut obj);
+        assert!(obj.is_breakable());
+        assert_eq!(obj.break_text().as_deref(), Some("Shards everywhere."));
     }
 
     #[test]

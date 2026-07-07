@@ -223,7 +223,7 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
     factory: &ObjectFactory<P>,
     owner: &ObjectId,
     world: &LoadedWorld,
-    area_ids: &HashMap<String, ObjectId>,
+    target_ids: &HashMap<String, ObjectId>,
 ) -> anyhow::Result<()> {
     use crate::creature::{apply_spawner_def, spawn_templates_to_property};
     use std::collections::HashMap as StdHashMap;
@@ -235,29 +235,42 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
         .collect();
 
     for def in &world.spawner_defs {
-        if def.location.is_empty() {
-            anyhow::bail!("Spawner '{}' missing location", def.base_name);
+        if def.location.is_empty() && def.target.is_empty() {
+            anyhow::bail!(
+                "Spawner '{}' missing location or target",
+                def.base_name
+            );
         }
         let spawner_id = ObjectId::new(format!("spawner:{}-001", def.base_name));
         if factory.load_object(&spawner_id).await?.is_some() {
             continue;
         }
-        let location = area_ids
-            .get(&def.location)
-            .cloned()
-            .ok_or_else(|| {
+
+        let (location, target_id) = if !def.target.is_empty() {
+            let target_id = target_ids.get(&def.target).cloned().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Spawner '{}' targets unknown object '{}'",
+                    def.base_name,
+                    def.target
+                )
+            })?;
+            (None, Some(target_id))
+        } else {
+            let location = target_ids.get(&def.location).cloned().ok_or_else(|| {
                 anyhow::anyhow!(
                     "Spawner '{}' targets unknown location '{}'",
                     def.base_name,
                     def.location
                 )
             })?;
+            (Some(location), None)
+        };
 
         let mut spawner = Object {
             id: spawner_id,
             name: format!("{} spawner", def.base_name),
             aliases: Vec::new(),
-            location: Some(location),
+            location,
             prototype: None,
             owner: owner.clone(),
             permissions: PermissionFlags::EVERYONE,
@@ -268,6 +281,9 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
             deleted_at: None,
         };
         apply_spawner_def(&mut spawner, def, &template_map)?;
+        if let Some(target_id) = target_id {
+            spawner.set_property_object_ref("spawner_target", target_id);
+        }
         spawner.add_property(spawn_templates_to_property(&world.spawn_template_defs));
         factory.persistence().save_object(&spawner).await?;
     }
@@ -461,7 +477,7 @@ pub async fn bootstrap_world<P: Persistence>(
     })?;
 
     let placements = bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
-    bootstrap_world_spawners(factory, &owner, world, &name_to_id).await?;
+    bootstrap_world_spawners(factory, &owner, world, &placements).await?;
     bootstrap_world_loot_spawners(factory, &owner, world, &placements).await?;
     bootstrap_world_npcs(factory, &owner, world, &name_to_id).await?;
 
@@ -508,7 +524,7 @@ mod tests {
     use crate::repl::session::Session;
     use crate::world::exits::validate_world_places;
     use crate::inventory::{
-        close_container, open_container, read_item, take_item,
+        break_item, close_container, open_container, read_item, take_item,
         InventoryContext,
     };
     use crate::mudl::load_module;
@@ -1369,6 +1385,131 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn breakable_pot_disables_spawner_and_drops_loot() {
+        use crate::creature::{is_spawner, spawners_for_target};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let moon = ObjectId::new("area:haunted-moon-001");
+        let pot_id = objects
+            .values()
+            .find(|o| o.id.as_str().contains("haunted-moon-pot"))
+            .map(|o| o.id.clone())
+            .expect("clay pot instance in haunted moon");
+        assert_eq!(
+            objects.get(&pot_id).unwrap().location.as_ref(),
+            Some(&moon)
+        );
+
+        let pot_spawners: Vec<_> = objects
+            .values()
+            .filter(|o| is_spawner(o))
+            .filter(|o| o.id.as_str().contains("pot-mist"))
+            .collect();
+        assert_eq!(pot_spawners.len(), 1, "pot mist spawner should bootstrap");
+        assert_eq!(
+            spawners_for_target(&pot_id, &objects).len(),
+            1,
+            "pot should have an attached creature spawner (pot_id={})",
+            pot_id.as_str()
+        );
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(start),
+        );
+
+        let mut ctx = session.inventory_context();
+        open_container(&mut ctx, "mailbox").unwrap();
+        take_item(&mut ctx, "brass key").unwrap();
+        open_container(&mut ctx, "chest").unwrap();
+        take_item(&mut ctx, "whisper charm").unwrap();
+        drop(ctx);
+
+        session.go("north").unwrap();
+        session.go("in").unwrap();
+        session.go("north").unwrap();
+        assert_eq!(
+            session.object(session.current_location().unwrap()).unwrap().name,
+            "Moonlit Glade"
+        );
+
+        let wisp_count_before = session
+            .objects()
+            .values()
+            .filter(|o| {
+                o.object_type() == "npc"
+                    && o.is_active()
+                    && o.location.as_ref() == Some(&moon)
+                    && o.name == "Mist Wisp"
+            })
+            .count();
+        assert!(wisp_count_before >= 1, "pot spawner should seed a mist wisp on enter");
+
+        let mut ctx = session.inventory_context();
+        let break_msg = break_item(&mut ctx, "pot").unwrap();
+        drop(ctx);
+
+        assert!(break_msg.contains("smash the clay pot"));
+        assert!(break_msg.contains("find") || break_msg.contains("rations"));
+        assert!(
+            session.objects().get(&pot_id).is_some_and(|o| o.is_deleted),
+            "broken pot should be removed from play"
+        );
+        assert!(
+            spawners_for_target(&pot_id, session.objects()).is_empty(),
+            "pot creature spawner should be destroyed"
+        );
+
+        let moon_rations = session
+            .objects()
+            .values()
+            .filter(|o| {
+                o.is_active()
+                    && o.name == "Trail Rations"
+                    && o.location.as_ref() == Some(&moon)
+            })
+            .count();
+        assert!(moon_rations >= 1, "breaking pot should spill loot into the glade");
+
+        session.go("south").unwrap();
+        session.go("north").unwrap();
+        let wisp_count_after = session
+            .objects()
+            .values()
+            .filter(|o| {
+                o.object_type() == "npc"
+                    && o.is_active()
+                    && o.location.as_ref() == Some(&moon)
+                    && o.name == "Mist Wisp"
+                    && o.get_object_ref_property("spawned_by")
+                        .is_some_and(|id| id.as_str().contains("pot-mist"))
+            })
+            .count();
+        assert_eq!(
+            wisp_count_after, 0,
+            "pot spawner should not respawn wisps after the pot is broken"
+        );
+    }
+
     async fn creature_spawner_attached_to_haunted_moon() {
         use crate::creature::spawners_in_room;
 
@@ -1395,7 +1536,7 @@ mod tests {
             spawners_in_room(&clearing, &objects).is_empty(),
             "starting clearing has no spawners"
         );
-        assert_eq!(spawners_in_room(&moon, &objects).len(), 1);
+        assert_eq!(spawners_in_room(&moon, &objects).len(), 2);
 
         let mut session = Session::test_session(
             player_id.clone(),

@@ -21,7 +21,7 @@ use mudl::display::{
     TargetResolution,
 };
 use mudl::inventory::{
-    close_container, describe_inventory, drop_item, lock_container, open_container,
+    break_item, close_container, describe_inventory, drop_item, lock_container, open_container,
     parse_put_args, parse_unlock_args, put_item, read_item, remove_item, take_item,
     unlock_container, wear_item, wield_item,
 };
@@ -725,6 +725,24 @@ async fn main() -> Result<()> {
                         let ctx = session.inventory_context();
                         match read_item(&ctx, &item_name) {
                             Ok(msg) => println!("{msg}"),
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "break" | "smash" => {
+                        if parts.len() < 2 {
+                            println!("Usage: break <item>");
+                            continue;
+                        }
+                        let item_name = parts[1..].join(" ");
+                        let mut ctx = session.inventory_context();
+                        match break_item(&mut ctx, &item_name) {
+                            Ok(msg) => {
+                                println!("{msg}");
+                                if let Err(e) = persist_session(&mut session, &persistence).await
+                                {
+                                    error!(error = %e, "persist after break failed");
+                                }
+                            }
                             Err(e) => println!("{e}"),
                         }
                     }
