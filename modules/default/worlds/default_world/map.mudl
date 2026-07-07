@@ -5,12 +5,15 @@ description: A small clearing at the edge of nowhere. Packed earth shows recent 
 exits:
   north: forest-path
   east: cottage-rear
+  south: beach-trail
 exit_aliases:
   n: north
   e: east
+  s: south
 exit_returns:
   north: south
   east: west
+  south: north
 
 type: area
 base_name: forest-path
