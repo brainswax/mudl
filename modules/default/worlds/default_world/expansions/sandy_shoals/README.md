@@ -1,6 +1,6 @@
 # Sandy Shoals Resort
 
-**Pack:** `beach_resort.mudl` · **ID:** `beach_resort` · **Entry:** `beach-trail` (via `beach-gate`)
+**Pack:** `sandy_shoals/sandy_shoals.mudl` · **ID:** `beach_resort` · **Entry:** `beach-trail` (via `beach-gate`)
 
 ---
 
@@ -15,7 +15,7 @@ Whimsical tropical resort — tiki bar, tidepools, striped hammocks, and a pearl
 ### Import (GitHub)
 
 ```mudl
-@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/beach_resort.mudl
+@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/sandy_shoals/sandy_shoals.mudl
 ```
 
 ### Minimal host map

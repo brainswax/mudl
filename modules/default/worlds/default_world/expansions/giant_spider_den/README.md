@@ -1,6 +1,6 @@
 # Giant Spider Den
 
-**Pack:** `giant_spider_den.mudl` · **ID:** `giant_spider_den` · **Entry:** `spider-entry`
+**Pack:** `giant_spider_den/giant_spider_den.mudl` · **ID:** `giant_spider_den` · **Entry:** `spider-entry`
 
 ---
 
@@ -15,7 +15,7 @@ A brood crawl beneath the earth — silk galleries, egg chambers, iron gates, an
 ### Import (GitHub)
 
 ```mudl
-@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/giant_spider_den.mudl
+@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/giant_spider_den/giant_spider_den.mudl
 ```
 
 ### Minimal host map

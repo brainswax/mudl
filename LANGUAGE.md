@@ -225,7 +225,7 @@ Each world uses a flat set of `.mudl` files under `worlds/<name>/`, composed fro
   starting_location=the-void
 @end
 @include map.mudl
-@import expansions/haunted_forest.mudl
+@import expansions/haunted_forest/haunted_forest.mudl
 @include creatures.mudl
 @include players.mudl
 @include items.mudl
@@ -251,8 +251,8 @@ Self-contained `.mudl` files bundle areas, items, and hooks for drop-in world ex
 Import from `world.mudl`:
 
 ```mudl
-@import expansions/haunted_forest.mudl
-@import https://example.com/mudl/expansions/haunted_forest.mudl
+@import expansions/haunted_forest/haunted_forest.mudl
+@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl
 ```
 
 The host world keeps minimal map hooks (e.g. `forest-path` with `in: haunted-entry`); the expansion places items and defines puzzle areas.

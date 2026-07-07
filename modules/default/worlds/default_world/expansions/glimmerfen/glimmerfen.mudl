@@ -1,9 +1,9 @@
 # Glimmerfen — self-contained fey realm expansion for Project MUDL.
 #
-# Docs: fey_glade/README.md (teaser · install · expect · extensions)
+# Docs: glimmerfen/README.md (teaser · install · expect · extensions)
 #
-# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/fey_glade.mudl
-# @import expansions/fey_glade.mudl
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/glimmerfen/glimmerfen.mudl
+# @import expansions/glimmerfen/glimmerfen.mudl
 #
 # Host hooks: forest-path (through), beach-shore (mist), scatter from fey-grace — see README.
 

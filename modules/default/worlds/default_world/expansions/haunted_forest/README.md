@@ -1,6 +1,6 @@
 # Haunted Forest
 
-**Pack:** `haunted_forest.mudl` · **ID:** `haunted_forest` · **Entry:** `haunted-entry`
+**Pack:** `haunted_forest/haunted_forest.mudl` · **ID:** `haunted_forest` · **Entry:** `haunted-entry`
 
 ---
 
@@ -17,7 +17,7 @@ Silver mist, moonlit glades, and a wood that remembers those who listen. Gothic 
 Add to your `world.mudl`:
 
 ```mudl
-@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest.mudl
+@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl
 ```
 
 ### Minimal host map

@@ -1,6 +1,6 @@
 # Poisonous Swamp
 
-**Pack:** `poisonous_swamp.mudl` · **ID:** `poisonous_swamp` · **Entry:** `swamp-entry`
+**Pack:** `poisonous_swamp/poisonous_swamp.mudl` · **ID:** `poisonous_swamp` · **Entry:** `swamp-entry`
 
 ---
 
@@ -15,7 +15,7 @@ A stinking sink where bitter fen, sweet reeds, and black water teach hard lesson
 ### Import (GitHub)
 
 ```mudl
-@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp.mudl
+@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp/poisonous_swamp.mudl
 ```
 
 ### Minimal host map

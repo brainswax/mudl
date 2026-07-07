@@ -373,7 +373,7 @@ mod tests {
     #[test]
     fn parse_haunted_forest_consumable_prototypes() {
         let content = include_str!(
-            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+            "../../modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl"
         );
         let (prototypes, _) = parse_item_file(content);
         let charm = prototypes

@@ -2,8 +2,8 @@
 #
 # Docs: giant_spider_den/README.md (teaser · install · expect · extensions)
 #
-# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/giant_spider_den.mudl
-# @import expansions/giant_spider_den.mudl
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/giant_spider_den/giant_spider_den.mudl
+# @import expansions/giant_spider_den/giant_spider_den.mudl
 #
 # Host hooks: swamp-dry (in → spider-entry), forest-path optional — see README.
 

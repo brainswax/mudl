@@ -1,9 +1,9 @@
 # Sandy Shoals Resort — self-contained restorative expansion for Project MUDL.
 #
-# Docs: beach_resort/README.md (teaser · install · expect · extensions)
+# Docs: sandy_shoals/README.md (teaser · install · expect · extensions)
 #
-# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/beach_resort.mudl
-# @import expansions/beach_resort.mudl
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/sandy_shoals/sandy_shoals.mudl
+# @import expansions/sandy_shoals/sandy_shoals.mudl
 #
 # Host hooks: the-void (south → beach-trail), forest-path optional — see README.
 

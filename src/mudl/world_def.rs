@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn parse_haunted_map_scatter_and_dead_ends() {
         let content = include_str!(
-            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+            "../../modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl"
         );
         let (defs, _) = parse_world_file(content);
         assert_eq!(defs.len(), 13);
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn parse_haunted_moon_on_enter_trigger() {
         let content = include_str!(
-            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+            "../../modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl"
         );
         let (defs, _) = parse_world_file(content);
         let moon = defs.iter().find(|d| d.base_name == "haunted-moon").unwrap();

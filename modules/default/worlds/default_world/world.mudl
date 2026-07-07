@@ -3,11 +3,11 @@
   starting_location=the-void
 @end
 @include map.mudl
-@import expansions/haunted_forest.mudl
-@import expansions/poisonous_swamp.mudl
-@import expansions/giant_spider_den.mudl
-@import expansions/beach_resort.mudl
-@import expansions/fey_glade.mudl
+@import expansions/haunted_forest/haunted_forest.mudl
+@import expansions/poisonous_swamp/poisonous_swamp.mudl
+@import expansions/giant_spider_den/giant_spider_den.mudl
+@import expansions/sandy_shoals/sandy_shoals.mudl
+@import expansions/glimmerfen/glimmerfen.mudl
 @include behaviors.mudl
 @include creatures.mudl
 @include npcs.mudl

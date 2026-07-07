@@ -1,6 +1,6 @@
 # Glimmerfen
 
-**Pack:** `fey_glade.mudl` · **ID:** `fey_glade` · **Display name:** Glimmerfen · **Entry:** `fey-threshold`
+**Pack:** `glimmerfen/glimmerfen.mudl` · **ID:** `fey_glade` · **Entry:** `fey-threshold`
 
 ---
 
@@ -15,7 +15,7 @@ A pristine fey vale — silver grass, singing reeds, glowcap counsel, and starli
 ### Import (GitHub)
 
 ```mudl
-@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/fey_glade.mudl
+@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/glimmerfen/glimmerfen.mudl
 ```
 
 ### Minimal host map (forest entrance)

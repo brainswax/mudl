@@ -263,7 +263,7 @@ mod tests {
     #[test]
     fn parse_pale_lurker_on_discovered_triggers() {
         let content = include_str!(
-            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+            "../../modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl"
         );
         let (templates, _) = parse_spawner_file(content);
         let lurker = templates

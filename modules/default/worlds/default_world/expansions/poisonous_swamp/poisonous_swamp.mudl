@@ -2,8 +2,8 @@
 #
 # Docs: poisonous_swamp/README.md (teaser · install · expect · extensions)
 #
-# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp.mudl
-# @import expansions/poisonous_swamp.mudl
+# @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp/poisonous_swamp.mudl
+# @import expansions/poisonous_swamp/poisonous_swamp.mudl
 #
 # Host hooks: forest-path (down → swamp-entry), the-void optional — see README.
 

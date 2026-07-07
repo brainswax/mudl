@@ -662,14 +662,14 @@ mod tests {
         let universe = load_module("modules/default").unwrap();
         let world = universe.active_world().unwrap();
         assert!(world.sources.iter().any(
-            |s| matches!(s, MudlSource::File(p) if p.ends_with("expansions/haunted_forest.mudl"))
+            |s| matches!(s, MudlSource::File(p) if p.ends_with("expansions/haunted_forest/haunted_forest.mudl"))
         ));
     }
 
     #[test]
     fn import_file_url_loads_expansion() {
         let expansion =
-            PathBuf::from("modules/default/worlds/default_world/expansions/haunted_forest.mudl")
+            PathBuf::from("modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl")
                 .canonicalize()
                 .unwrap();
         let url = format!("file://{}", expansion.display());
