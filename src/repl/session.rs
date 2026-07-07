@@ -826,6 +826,7 @@ mod tests {
             open: false,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });

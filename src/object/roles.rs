@@ -39,6 +39,8 @@ pub struct ContainerSpec {
     pub lock_id: Option<String>,
     /// Whether the container starts locked (requires `lock_id`).
     pub locked: bool,
+    /// When true, the lock mechanism is spent after a successful unlock and cannot be used again.
+    pub lock_consumable: bool,
     /// When set, only items matching at least one type tag may be placed inside (e.g. `key`).
     pub allowed_types: Option<Vec<String>>,
 }
@@ -54,6 +56,7 @@ impl Default for ContainerSpec {
             open: true,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             allowed_types: None,
         }
     }
@@ -99,6 +102,22 @@ pub fn parse_allowed_types(value: &str) -> Vec<String> {
 #[derive(Debug, Clone)]
 pub struct KeySpec {
     pub lock_id: String,
+    /// When true, the key is destroyed after a successful unlock.
+    pub consumable: bool,
+}
+
+impl KeySpec {
+    pub fn new(lock_id: impl Into<String>) -> Self {
+        Self {
+            lock_id: lock_id.into(),
+            consumable: false,
+        }
+    }
+
+    pub fn consumable(mut self) -> Self {
+        self.consumable = true;
+        self
+    }
 }
 
 /// Kind of exit portal — doors, windows, and future teleporters share one model.
@@ -157,10 +176,28 @@ pub struct PortalSpec {
     pub open: bool,
     pub lock_id: Option<String>,
     pub locked: bool,
+    /// When true, the lock mechanism is spent after a successful unlock.
+    pub lock_consumable: bool,
     /// When set, overrides the kind default (windows are not passable by default).
     pub passable: Option<bool>,
     /// When set, overrides the kind default (windows are transparent by default).
     pub transparent: Option<bool>,
+}
+
+impl PortalSpec {
+    pub fn new(kind: PortalKind, direction: impl Into<String>, destination: impl Into<String>) -> Self {
+        Self {
+            kind,
+            direction: direction.into(),
+            destination: destination.into(),
+            open: false,
+            lock_id: None,
+            locked: false,
+            lock_consumable: false,
+            passable: None,
+            transparent: None,
+        }
+    }
 }
 
 /// Configuration for a door — convenience wrapper around [`PortalSpec`].
@@ -174,6 +211,21 @@ pub struct DoorSpec {
     pub open: bool,
     pub lock_id: Option<String>,
     pub locked: bool,
+    /// When true, the lock mechanism is spent after a successful unlock.
+    pub lock_consumable: bool,
+}
+
+impl DoorSpec {
+    pub fn new(direction: impl Into<String>, destination: impl Into<String>) -> Self {
+        Self {
+            direction: direction.into(),
+            destination: destination.into(),
+            open: false,
+            lock_id: None,
+            locked: false,
+            lock_consumable: false,
+        }
+    }
 }
 
 /// Configuration for a wearable role.
@@ -392,9 +444,20 @@ impl Object {
             .filter(|id| !id.trim().is_empty())
     }
 
+    pub fn key_consumable(&self) -> bool {
+        self.get_bool_property("key_consumable").unwrap_or(false)
+    }
+
+    pub fn lock_consumable(&self) -> bool {
+        self.get_bool_property("lock_consumable").unwrap_or(false)
+    }
+
     pub fn apply_key_role(&mut self, spec: &KeySpec) {
         self.set_property_bool("is_key", true);
         self.set_property_string("lock_id", &spec.lock_id);
+        if spec.consumable {
+            self.set_property_bool("key_consumable", true);
+        }
         self.set_property_bool("is_pocketable", true);
         if self.get_numeric_property("weight").is_none() {
             self.set_property_numeric("weight", 0.1);
@@ -517,6 +580,9 @@ impl Object {
         if let Some(ref lock_id) = spec.lock_id {
             self.set_container_lock_id(lock_id);
             self.set_container_locked(spec.locked);
+            if spec.lock_consumable {
+                self.set_property_bool("lock_consumable", true);
+            }
         }
         let (default_weight, default_volume) = match spec.kind {
             PortalKind::Window => (2.0, 1.0),
@@ -539,6 +605,7 @@ impl Object {
             open: spec.open,
             lock_id: spec.lock_id.clone(),
             locked: spec.locked,
+            lock_consumable: spec.lock_consumable,
             passable: None,
             transparent: None,
         });
@@ -613,6 +680,9 @@ impl Object {
         if let Some(ref lock_id) = spec.lock_id {
             self.set_container_lock_id(lock_id);
             self.set_container_locked(spec.locked);
+            if spec.lock_consumable {
+                self.set_property_bool("lock_consumable", true);
+            }
         }
         if let Some(ref types) = spec.allowed_types {
             if !types.is_empty() {
@@ -1086,6 +1156,27 @@ mod tests {
     }
 
     #[test]
+    fn consumable_key_and_lock_flags() {
+        let mut key = bare_object("item:charm-001");
+        key.apply_key_role(&KeySpec::new("oak-whisper").consumable());
+        assert!(key.key_consumable());
+
+        let mut oak = bare_object("item:oak-001");
+        oak.apply_portal_role(&PortalSpec {
+            kind: PortalKind::Door,
+            direction: "in".to_string(),
+            destination: "haunted-entry".to_string(),
+            open: false,
+            lock_id: Some("oak-whisper".to_string()),
+            locked: true,
+            lock_consumable: true,
+            passable: None,
+            transparent: None,
+        });
+        assert!(oak.lock_consumable());
+    }
+
+    #[test]
     fn container_lock_and_key_matching() {
         let mut chest = bare_object("item:chest-001");
         chest.apply_container_role(&ContainerSpec {
@@ -1097,21 +1188,15 @@ mod tests {
         assert!(chest.container_is_locked());
 
         let mut key_a = bare_object("item:key-a-001");
-        key_a.apply_key_role(&KeySpec {
-            lock_id: "chest-lock".to_string(),
-        });
+        key_a.apply_key_role(&KeySpec::new("chest-lock"));
         let mut key_b = bare_object("item:key-b-001");
-        key_b.apply_key_role(&KeySpec {
-            lock_id: "chest-lock".to_string(),
-        });
+        key_b.apply_key_role(&KeySpec::new("chest-lock"));
 
         assert!(Object::key_unlocks_container(&key_a, &chest));
         assert!(Object::key_unlocks_container(&key_b, &chest));
 
         let mut wrong = bare_object("item:key-wrong-001");
-        wrong.apply_key_role(&KeySpec {
-            lock_id: "other-lock".to_string(),
-        });
+        wrong.apply_key_role(&KeySpec::new("other-lock"));
         assert!(!Object::key_unlocks_container(&wrong, &chest));
     }
 
@@ -1142,9 +1227,7 @@ mod tests {
         );
 
         let mut key = bare_object("item:key-001");
-        key.apply_key_role(&KeySpec {
-            lock_id: "demo".to_string(),
-        });
+        key.apply_key_role(&KeySpec::new("demo"));
         let mut blade = bare_object("item:blade-001");
 
         assert!(ring.container_accepts_item(&key));

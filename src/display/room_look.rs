@@ -267,6 +267,7 @@ mod tests {
             open: false,
             lock_id: Some("cottage-door".to_string()),
             locked: true,
+            lock_consumable: false,
         });
         locked_door.set_portal_destination(dest_id);
 
@@ -304,6 +305,7 @@ mod tests {
             open: false,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });
@@ -340,6 +342,7 @@ mod tests {
             open: false,
             lock_id: Some("shutters".to_string()),
             locked: true,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });

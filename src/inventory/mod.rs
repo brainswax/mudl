@@ -13,7 +13,8 @@ use crate::world::move_manager::{
     move_object, move_to_container, move_to_grasp, move_to_room, MoveContext, MoveError, MoveHooks,
 };
 use crate::world::possession::{
-    grasp_action_phrase, is_carried_by as possession_is_carried_by, PossessionError,
+    clear_creature_slots_for_item, grasp_action_phrase, is_carried_by as possession_is_carried_by,
+    PossessionError,
 };
 
 /// Errors returned by inventory operations.
@@ -129,6 +130,58 @@ fn mark_dirty(ctx: &mut InventoryContext<'_>, id: &ObjectId) {
     if let Some(dirty) = ctx.dirty.as_deref_mut() {
         dirty.mark(id);
     }
+}
+
+/// Soft-delete a one-time key and remove it from possession graphs.
+fn consume_key(ctx: &mut InventoryContext<'_>, key_id: &ObjectId) {
+    let Some(mut key) = ctx.objects.get(key_id).cloned() else {
+        return;
+    };
+    key.soft_delete();
+    ctx.objects.insert(key_id.clone(), key);
+    mark_dirty(ctx, key_id);
+
+    let creature_ids: Vec<ObjectId> = ctx
+        .objects
+        .values()
+        .filter(|obj| obj.is_active() && obj.has_creature_role())
+        .map(|obj| obj.id.clone())
+        .collect();
+    for creature_id in creature_ids {
+        clear_creature_slots_for_item(&creature_id, key_id, ctx.objects);
+        mark_dirty(ctx, &creature_id);
+    }
+
+    let container_ids: Vec<ObjectId> = ctx
+        .objects
+        .values()
+        .filter(|obj| obj.is_active() && obj.is_container())
+        .map(|obj| obj.id.clone())
+        .collect();
+    for container_id in container_ids {
+        let contains_key = ctx
+            .objects
+            .get(&container_id)
+            .is_some_and(|container| container.container_contents().contains(key_id));
+        if contains_key {
+            let mut container = ctx.objects.get(&container_id).unwrap().clone();
+            container.remove_from_list_property("contents", key_id);
+            ctx.objects.insert(container_id.clone(), container);
+            mark_dirty(ctx, &container_id);
+        }
+    }
+}
+
+/// Remove a spent lock mechanism from a gate so it cannot be secured again.
+fn consume_gate_lock(ctx: &mut InventoryContext<'_>, gate_id: &ObjectId) {
+    let Some(mut gate) = ctx.objects.get(gate_id).cloned() else {
+        return;
+    };
+    gate.properties.remove("lock_id");
+    gate.set_gate_locked(false);
+    gate.properties.remove("lock_consumable");
+    ctx.objects.insert(gate_id.clone(), gate);
+    mark_dirty(ctx, gate_id);
 }
 
 fn player_body_plan<'a>(
@@ -1014,16 +1067,33 @@ fn unlock_gate(
         return Err(InventoryError::WrongKey(key.name.to_lowercase()));
     }
 
+    let key_consumable = key.key_consumable();
+    let lock_consumable = gate.lock_consumable();
+    let key_display = key.name.to_lowercase();
+    let gate_display = gate.name.to_lowercase();
+
     let mut gate = gate;
     gate.set_gate_locked(false);
     ctx.objects.insert(gate_id.clone(), gate.clone());
     mark_dirty(ctx, gate_id);
 
     let mut lines = vec![format!(
-        "You unlock the {} with the {}.",
-        gate.name.to_lowercase(),
-        key.name.to_lowercase()
+        "You unlock the {gate_display} with the {key_display}."
     )];
+
+    if key_consumable {
+        consume_key(ctx, &key_id);
+        lines.push(format!(
+            "The {key_display} crumbles away as its magic is spent."
+        ));
+    }
+    if lock_consumable {
+        consume_gate_lock(ctx, gate_id);
+        lines.push(format!(
+            "The binding on the {gate_display} dissolves — it cannot be secured again."
+        ));
+    }
+
     lines.extend(crate::world::gate_events::run_gate_event_handlers(&gate, "on_unlock"));
     Ok(lines)
 }
@@ -3972,6 +4042,100 @@ mod tests {
 
         let err = unlock_container(&mut ctx, "chest", None).unwrap_err();
         assert_eq!(err, InventoryError::NoMatchingKey("chest".to_string()));
+    }
+
+    #[tokio::test]
+    async fn consumable_key_is_destroyed_on_unlock() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let mut key = factory
+            .create_key("whisper charm", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+        key.apply_key_role(&crate::object::KeySpec::new("chest-lock").consumable());
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(key.id.clone(), key.clone());
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = unlock_container(&mut ctx, "chest", None).unwrap();
+        assert!(msg.contains("crumbles away"));
+        let key = ctx.objects.get(&key.id).unwrap();
+        assert!(key.is_deleted);
+        assert!(!ctx.objects.get(&player_id).unwrap().body_slots().values().any(|id| id == &key.id));
+    }
+
+    #[tokio::test]
+    async fn consumable_lock_is_removed_on_unlock() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    lock_consumable: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest.clone());
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = unlock_container(&mut ctx, "chest", None).unwrap();
+        assert!(msg.contains("cannot be secured again"));
+        let chest = ctx.objects.get(&chest.id).unwrap();
+        assert!(!chest.gate_has_lock());
+        assert!(!chest.gate_is_locked());
     }
 
     #[tokio::test]

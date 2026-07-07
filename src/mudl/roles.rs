@@ -29,6 +29,8 @@ pub struct MudlRoleProps {
     pub locked: Option<bool>,
     pub lock_id: Option<String>,
     pub is_key: Option<bool>,
+    pub key_consumable: Option<bool>,
+    pub lock_consumable: Option<bool>,
     pub allowed_types: Option<String>,
     pub is_door: Option<bool>,
     pub is_window: Option<bool>,
@@ -68,6 +70,12 @@ impl MudlRoleProps {
                 "locked" | "is_locked" => props.locked = Some(*value == "true"),
                 "lock_id" => props.lock_id = Some(value.to_string()),
                 "is_key" | "key" => props.is_key = Some(*value == "true"),
+                "key_consumable" | "consumable_key" => {
+                    props.key_consumable = Some(*value == "true")
+                }
+                "lock_consumable" | "consumable_lock" => {
+                    props.lock_consumable = Some(*value == "true")
+                }
                 "allowed_types" => props.allowed_types = Some(value.to_string()),
                 "is_door" | "door" => props.is_door = Some(*value == "true"),
                 "is_window" | "window" => props.is_window = Some(*value == "true"),
@@ -170,6 +178,10 @@ impl MudlRoleProps {
                     .locked
                     .or_else(|| obj.get_bool_property("is_locked"))
                     .unwrap_or(false),
+                lock_consumable: self
+                    .lock_consumable
+                    .or_else(|| obj.get_bool_property("lock_consumable"))
+                    .unwrap_or(false),
                 passable: self.portal_passable,
                 transparent: self.portal_transparent,
             });
@@ -189,6 +201,7 @@ impl MudlRoleProps {
                 open: self.is_open.unwrap_or(true),
                 lock_id: self.lock_id.clone(),
                 locked: self.locked.unwrap_or(false),
+                lock_consumable: self.lock_consumable.unwrap_or(false),
                 allowed_types: self
                     .allowed_types
                     .as_ref()
@@ -247,9 +260,11 @@ impl MudlRoleProps {
 
         if self.is_key == Some(true) {
             if let Some(ref lock_id) = self.lock_id {
-                obj.apply_key_role(&KeySpec {
-                    lock_id: lock_id.clone(),
-                });
+                let mut spec = KeySpec::new(lock_id.clone());
+                if self.key_consumable == Some(true) {
+                    spec = spec.consumable();
+                }
+                obj.apply_key_role(&spec);
             }
         }
     }
@@ -327,6 +342,31 @@ mod tests {
             obj.container_allowed_types(),
             Some(vec!["key".to_string()])
         );
+    }
+
+    #[test]
+    fn mudl_role_props_apply_consumable_key_and_lock() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("is_key", "true"),
+            ("lock_id", "oak-whisper"),
+            ("key_consumable", "true"),
+        ]);
+        let mut key = bare("item:charm-001");
+        props.apply_to(&mut key);
+        assert!(key.is_key());
+        assert!(key.key_consumable());
+
+        let portal_props = MudlRoleProps::from_pairs(&[
+            ("is_door", "true"),
+            ("door_direction", "in"),
+            ("door_destination", "haunted-entry"),
+            ("locked", "true"),
+            ("lock_id", "oak-whisper"),
+            ("lock_consumable", "true"),
+        ]);
+        let mut oak = bare("item:oak-001");
+        portal_props.apply_to(&mut oak);
+        assert!(oak.lock_consumable());
     }
 
     #[test]

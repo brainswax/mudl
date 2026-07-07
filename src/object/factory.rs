@@ -171,9 +171,7 @@ impl<P: Persistence> ObjectFactory<P> {
         let slug = id_base_from_display_name(display_name);
         let mut key = self.allocate_named("item", &slug, display_name, owner).await?;
         self.attach_prototype(&mut key, prototype).await?;
-        key.apply_key_role(&KeySpec {
-            lock_id: lock_id.to_string(),
-        });
+        key.apply_key_role(&KeySpec::new(lock_id));
         Self::fill_item_defaults(&mut key, true);
         self.commit(&key).await?;
         Ok(key)
@@ -262,7 +260,9 @@ impl<P: Persistence> ObjectFactory<P> {
             "write_text",
             "lock_id",
             "is_locked",
+            "lock_consumable",
             "is_key",
+            "key_consumable",
             "is_portal",
             "is_door",
             "is_window",

@@ -34,6 +34,7 @@
   description=A chip of bark bound with copper wire. It hums faintly when the lantern is near.
   is_key=true
   lock_id=oak-whisper
+  key_consumable=true
   weight=0.1
   volume=0.1
   pocketable=true
@@ -60,6 +61,7 @@
   is_open=false
   locked=true
   lock_id=oak-whisper
+  lock_consumable=true
   weight=80.0
   volume=60.0
   pocketable=false

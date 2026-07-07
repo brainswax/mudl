@@ -161,6 +161,7 @@ mod tests {
             open: false,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
         });
         door.set_portal_destination(dest);
 
@@ -189,6 +190,7 @@ mod tests {
             open: false,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });
@@ -215,6 +217,7 @@ mod tests {
             open: false,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });
@@ -241,6 +244,7 @@ mod tests {
             open: false,
             lock_id: Some("shutters".to_string()),
             locked: true,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });
@@ -265,6 +269,7 @@ mod tests {
             open: false,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });

@@ -230,6 +230,12 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.is_key.is_some() {
         target.is_key = extra.is_key;
     }
+    if extra.key_consumable.is_some() {
+        target.key_consumable = extra.key_consumable;
+    }
+    if extra.lock_consumable.is_some() {
+        target.lock_consumable = extra.lock_consumable;
+    }
     if extra.allowed_types.is_some() {
         target.allowed_types = extra.allowed_types.clone();
     }
@@ -265,6 +271,25 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_haunted_forest_consumable_prototypes() {
+        let content = include_str!(
+            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+        );
+        let (prototypes, _) = parse_item_file(content);
+        let charm = prototypes
+            .iter()
+            .find(|p| p.base_name == "whisper-charm")
+            .expect("whisper-charm prototype");
+        assert_eq!(charm.props.key_consumable, Some(true));
+
+        let oak = prototypes
+            .iter()
+            .find(|p| p.base_name == "hollow-oak-portal")
+            .expect("hollow-oak-portal prototype");
+        assert_eq!(oak.props.lock_consumable, Some(true));
+    }
 
     #[test]
     fn parse_starting_scene_prototypes_and_instances() {

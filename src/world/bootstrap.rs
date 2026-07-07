@@ -941,6 +941,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn haunted_forest_whisper_charm_and_oak_are_consumable() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        bootstrap_world(&factory, player_id, &world).await.unwrap();
+
+        let objects: Vec<Object> = persistence.list_objects(false).await.unwrap();
+        let charm = objects
+            .iter()
+            .find(|o| o.name == "Whisper Charm" && o.id.as_str().contains("chest-whisper"))
+            .or_else(|| {
+                objects
+                    .iter()
+                    .find(|o| o.name == "Whisper Charm" && o.key_consumable())
+            })
+            .expect("whisper charm instance spawned");
+        assert!(
+            charm.key_consumable(),
+            "whisper charm should mark key_consumable"
+        );
+
+        let oak = objects
+            .iter()
+            .find(|o| o.name == "Hollow Oak")
+            .expect("hollow oak spawned");
+        assert!(
+            oak.lock_consumable(),
+            "hollow oak should mark lock_consumable"
+        );
+    }
+
+    #[tokio::test]
     async fn haunted_forest_full_adventure() {
         use crate::inventory::read_item;
         use crate::world::exits::{apply_scatter_exit, pick_scatter_destination};
@@ -990,11 +1024,35 @@ mod tests {
         );
 
         session.go("north").unwrap();
+        let charm_id = session
+            .objects()
+            .get(&player_id)
+            .and_then(|player| {
+                player.carried_body_items().into_iter().find(|id| {
+                    session
+                        .objects()
+                        .get(id)
+                        .is_some_and(|o| o.name == "Whisper Charm" && o.is_key())
+                })
+            })
+            .expect("carried whisper charm");
 
         let entry_msg = session.go("in").unwrap();
         assert!(entry_msg.contains("unlock"));
         assert!(entry_msg.contains("open"));
+        assert!(entry_msg.contains("crumbles away"));
+        assert!(entry_msg.contains("cannot be secured again"));
         assert!(entry_msg.contains("Tangled Threshold") || entry_msg.contains("held breath"));
+        assert!(
+            session.objects().get(&charm_id).is_some_and(|o| o.is_deleted),
+            "whisper charm should be consumed opening the hollow oak"
+        );
+        let oak = session
+            .objects()
+            .values()
+            .find(|o| o.name == "Hollow Oak" && o.id.as_str().contains("forest-hollow"))
+            .expect("forest hollow oak portal");
+        assert!(!oak.gate_has_lock(), "oak lock should be spent after entry");
 
         let wrong_turn = session.go("east").unwrap();
         assert_eq!(
