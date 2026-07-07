@@ -1,4 +1,3 @@
-use anyhow::Result;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
@@ -7,6 +6,10 @@ use std::str::FromStr;
 
 use sqlx::sqlite::SqliteConnectOptions;
 
+use anyhow::{anyhow, Result};
+
+use super::error::PersistenceError;
+use super::metadata::SaveMetadata;
 use super::r#trait::Persistence;
 use crate::object::{Object, ObjectId};
 
@@ -51,7 +54,9 @@ impl SqlitePersistence {
                 id TEXT PRIMARY KEY,
                 data TEXT NOT NULL,
                 is_deleted INTEGER NOT NULL DEFAULT 0,
-                deleted_at TEXT
+                deleted_at TEXT,
+                revision INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT
             );
             CREATE TABLE IF NOT EXISTS counters (
                 type_base TEXT PRIMARY KEY,
@@ -71,6 +76,14 @@ impl SqlitePersistence {
             .execute(&pool)
             .await
             .ok();
+        sqlx::query("ALTER TABLE objects ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+            .execute(&pool)
+            .await
+            .ok();
+        sqlx::query("ALTER TABLE objects ADD COLUMN updated_at TEXT")
+            .execute(&pool)
+            .await
+            .ok();
 
         Ok(Self { pool })
     }
@@ -78,58 +91,187 @@ impl SqlitePersistence {
     fn deleted_flag(object: &Object) -> i32 {
         i32::from(object.is_deleted)
     }
+
+    fn now_epoch_secs() -> String {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_else(|_| "0".to_string())
+    }
+
+    async fn read_revision(&self, id: &str) -> Result<Option<u64>> {
+        let revision: Option<i64> =
+            sqlx::query_scalar::<_, i64>("SELECT revision FROM objects WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(revision.map(|r| r as u64))
+    }
 }
 
 #[async_trait]
 impl Persistence for SqlitePersistence {
-    async fn save_object(&self, object: &Object) -> Result<()> {
+    async fn save_object(&self, object: &Object) -> Result<SaveMetadata> {
         let id = object.id.to_string();
+        let expected = object.revision;
+        let updated_at = Self::now_epoch_secs();
         let data = serde_json::to_string(object)?;
 
-        sqlx::query(
-            "INSERT OR REPLACE INTO objects (id, data, is_deleted, deleted_at) VALUES (?, ?, ?, ?)",
+        if let Some(actual) = self.read_revision(&id).await? {
+            let rows = sqlx::query(
+                r#"
+                UPDATE objects
+                SET data = ?, is_deleted = ?, deleted_at = ?, revision = revision + 1, updated_at = ?
+                WHERE id = ? AND revision = ?
+                "#,
+            )
+            .bind(&data)
+            .bind(Self::deleted_flag(object))
+            .bind(&object.deleted_at)
+            .bind(&updated_at)
+            .bind(&id)
+            .bind(expected as i64)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+
+            if rows == 1 {
+                return Ok(SaveMetadata {
+                    revision: expected + 1,
+                    updated_at,
+                });
+            }
+            return Err(anyhow!(PersistenceError::RevisionConflict {
+                id: object.id.clone(),
+                expected,
+                actual,
+            }));
+        }
+
+        let inserted = sqlx::query(
+            r#"
+            INSERT INTO objects (id, data, is_deleted, deleted_at, revision, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?)
+            "#,
         )
         .bind(&id)
         .bind(&data)
         .bind(Self::deleted_flag(object))
         .bind(&object.deleted_at)
+        .bind(&updated_at)
         .execute(&self.pool)
-        .await?;
+        .await?
+        .rows_affected();
 
-        Ok(())
+        if inserted == 1 {
+            return Ok(SaveMetadata {
+                revision: 1,
+                updated_at,
+            });
+        }
+
+        let actual = self.read_revision(&id).await?.unwrap_or(0);
+        Err(anyhow!(PersistenceError::RevisionConflict {
+            id: object.id.clone(),
+            expected,
+            actual,
+        }))
     }
 
-    async fn save_objects_batch(&self, objects: &[&Object]) -> Result<()> {
+    async fn save_objects_batch(&self, objects: &[&Object]) -> Result<Vec<SaveMetadata>> {
         if objects.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let mut tx = self.pool.begin().await?;
+        let mut metas = Vec::with_capacity(objects.len());
         for object in objects {
             let id = object.id.to_string();
+            let expected = object.revision;
+            let updated_at = Self::now_epoch_secs();
             let data = serde_json::to_string(object)?;
-            sqlx::query(
-                "INSERT OR REPLACE INTO objects (id, data, is_deleted, deleted_at) VALUES (?, ?, ?, ?)",
-            )
-            .bind(&id)
-            .bind(&data)
-            .bind(Self::deleted_flag(object))
-            .bind(&object.deleted_at)
-            .execute(&mut *tx)
-            .await?;
+
+            let row: Option<(i64,)> = sqlx::query_as("SELECT revision FROM objects WHERE id = ?")
+                .bind(&id)
+                .fetch_optional(&mut *tx)
+                .await?;
+
+            if let Some((actual,)) = row {
+                let rows = sqlx::query(
+                    r#"
+                    UPDATE objects
+                    SET data = ?, is_deleted = ?, deleted_at = ?, revision = revision + 1, updated_at = ?
+                    WHERE id = ? AND revision = ?
+                    "#,
+                )
+                .bind(&data)
+                .bind(Self::deleted_flag(object))
+                .bind(&object.deleted_at)
+                .bind(&updated_at)
+                .bind(&id)
+                .bind(expected as i64)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+
+                if rows != 1 {
+                    tx.rollback().await?;
+                    return Err(anyhow!(PersistenceError::RevisionConflict {
+                        id: object.id.clone(),
+                        expected,
+                        actual: actual as u64,
+                    }));
+                }
+                metas.push(SaveMetadata {
+                    revision: expected + 1,
+                    updated_at,
+                });
+            } else {
+                let inserted = sqlx::query(
+                    r#"
+                    INSERT INTO objects (id, data, is_deleted, deleted_at, revision, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?)
+                    "#,
+                )
+                .bind(&id)
+                .bind(&data)
+                .bind(Self::deleted_flag(object))
+                .bind(&object.deleted_at)
+                .bind(&updated_at)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+
+                if inserted != 1 {
+                    tx.rollback().await?;
+                    let actual = self.read_revision(&id).await?.unwrap_or(0);
+                    return Err(anyhow!(PersistenceError::RevisionConflict {
+                        id: object.id.clone(),
+                        expected,
+                        actual,
+                    }));
+                }
+                metas.push(SaveMetadata {
+                    revision: 1,
+                    updated_at,
+                });
+            }
         }
         tx.commit().await?;
-        Ok(())
+        Ok(metas)
     }
 
     async fn load_object(&self, id: &ObjectId) -> Result<Option<Object>> {
-        let data: Option<String> =
-            sqlx::query_scalar::<_, String>("SELECT data FROM objects WHERE id = ?")
-                .bind(id.to_string())
-                .fetch_optional(&self.pool)
-                .await?;
+        let row: Option<(String, i64, Option<String>)> = sqlx::query_as(
+            "SELECT data, revision, updated_at FROM objects WHERE id = ?",
+        )
+        .bind(id.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
 
-        if let Some(data) = data {
-            let object: Object = serde_json::from_str(&data)?;
+        if let Some((data, revision, updated_at)) = row {
+            let mut object: Object = serde_json::from_str(&data)?;
+            object.revision = revision as u64;
+            object.updated_at = updated_at;
             Ok(Some(object))
         } else {
             Ok(None)
@@ -164,20 +306,25 @@ impl Persistence for SqlitePersistence {
     }
 
     async fn list_objects(&self, include_deleted: bool) -> Result<Vec<Object>> {
-        let rows: Vec<String> = if include_deleted {
-            sqlx::query_scalar::<_, String>("SELECT data FROM objects ORDER BY id")
+        let rows: Vec<(String, i64, Option<String>)> = if include_deleted {
+            sqlx::query_as("SELECT data, revision, updated_at FROM objects ORDER BY id")
                 .fetch_all(&self.pool)
                 .await?
         } else {
-            sqlx::query_scalar::<_, String>(
-                "SELECT data FROM objects WHERE is_deleted = 0 ORDER BY id",
+            sqlx::query_as(
+                "SELECT data, revision, updated_at FROM objects WHERE is_deleted = 0 ORDER BY id",
             )
             .fetch_all(&self.pool)
             .await?
         };
 
         rows.into_iter()
-            .map(|data| serde_json::from_str(&data).map_err(Into::into))
+            .map(|(data, revision, updated_at)| {
+                let mut object: Object = serde_json::from_str(&data)?;
+                object.revision = revision as u64;
+                object.updated_at = updated_at;
+                Ok(object)
+            })
             .collect()
     }
 }
@@ -203,6 +350,8 @@ mod tests {
             properties: Default::default(),
             verbs: Default::default(),
             event_handlers: Default::default(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         }
@@ -584,7 +733,8 @@ mod tests {
         let stored_coins_id = before.get(&backpack_id).unwrap().container_contents()[0].clone();
         assert_eq!(before.get(&stored_coins_id).unwrap().stack_count(), 5);
 
-        persist_all(&persistence, &before).await.unwrap();
+        let mut before = before;
+        persist_all(&persistence, &mut before).await.unwrap();
 
         let after = hydrate_world(&persistence).await.unwrap();
         assert_graph_references_resolve(&after);
@@ -638,7 +788,7 @@ mod tests {
         ]);
         advance_tick(&room_id, "on_enter", &mut objects);
 
-        persist_all(&persistence, &objects).await.unwrap();
+        persist_all(&persistence, &mut objects).await.unwrap();
         let after = hydrate_world(&persistence).await.unwrap();
 
         let reloaded_player = after.get(&player_id).unwrap();
@@ -660,5 +810,65 @@ mod tests {
             Some(1)
         );
         assert!(reloaded_room.get_property("scheduler_jobs").is_some());
+    }
+
+    #[tokio::test]
+    async fn save_object_assigns_revision_on_first_write() {
+        let persistence = memory_persistence().await;
+        let boots = sample_object("item:boots-001", "boots");
+
+        let meta = persistence.save_object(&boots).await.unwrap();
+        assert_eq!(meta.revision, 1);
+        assert!(!meta.updated_at.is_empty());
+
+        let loaded = persistence.load_object(&boots.id).await.unwrap().unwrap();
+        assert_eq!(loaded.revision, 1);
+        assert_eq!(loaded.updated_at.as_deref(), Some(meta.updated_at.as_str()));
+    }
+
+    #[tokio::test]
+    async fn save_object_rejects_stale_revision() {
+        use crate::persistence::PersistenceError;
+
+        let persistence = memory_persistence().await;
+        let mut local = sample_object("item:boots-001", "boots");
+        local.name = "local".to_string();
+
+        let mut stale = sample_object("item:boots-001", "boots");
+        stale.name = "stale".to_string();
+        persistence.save_object(&stale).await.unwrap();
+
+        let err = persistence.save_object(&local).await.unwrap_err();
+        let pe = err
+            .downcast_ref::<PersistenceError>()
+            .expect("revision conflict");
+        assert!(pe.is_revision_conflict());
+
+        let loaded = persistence.load_object(&local.id).await.unwrap().unwrap();
+        assert_eq!(loaded.name, "stale");
+        assert_eq!(loaded.revision, 1);
+    }
+
+    #[tokio::test]
+    async fn save_object_with_retry_commits_local_changes_after_conflict() {
+        use crate::persistence::save_object_with_retry;
+
+        let persistence = memory_persistence().await;
+        let mut local = sample_object("item:boots-001", "boots");
+        local.name = "local".to_string();
+
+        let mut stale = sample_object("item:boots-001", "boots");
+        stale.name = "stale".to_string();
+        persistence.save_object(&stale).await.unwrap();
+
+        let meta = save_object_with_retry(&persistence, &mut local, 5)
+            .await
+            .unwrap();
+        assert_eq!(meta.revision, 2);
+        assert_eq!(local.revision, 2);
+
+        let loaded = persistence.load_object(&local.id).await.unwrap().unwrap();
+        assert_eq!(loaded.name, "local");
+        assert_eq!(loaded.revision, 2);
     }
 }

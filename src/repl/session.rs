@@ -295,8 +295,8 @@ impl Session {
         world.persist(persistence).await
     }
 
-    pub async fn persist_all<P: Persistence>(&self, persistence: &P) -> anyhow::Result<()> {
-        let world = self.world.lock_blocking();
+    pub async fn persist_all<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
+        let mut world = self.world.lock_blocking();
         world.persist_all(persistence).await
     }
 
@@ -616,6 +616,8 @@ mod tests {
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         }

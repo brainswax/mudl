@@ -197,15 +197,15 @@ impl WorldState {
         &mut self,
         persistence: &P,
     ) -> anyhow::Result<usize> {
-        persist_dirty(persistence, &self.objects, &mut self.dirty).await
+        persist_dirty(persistence, &mut self.objects, &mut self.dirty).await
     }
 
     pub async fn persist<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
-        persist_inventory_dirty(persistence, &self.objects, &mut self.dirty).await
+        persist_inventory_dirty(persistence, &mut self.objects, &mut self.dirty).await
     }
 
-    pub async fn persist_all<P: Persistence>(&self, persistence: &P) -> anyhow::Result<()> {
-        persist_all(persistence, &self.objects).await
+    pub async fn persist_all<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
+        persist_all(persistence, &mut self.objects).await
     }
 
     pub fn len(&self) -> usize {

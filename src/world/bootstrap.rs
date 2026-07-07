@@ -79,7 +79,7 @@ async fn spawn_prototype<P: Persistence>(
         )
         .await?;
     attach_triggers(&mut obj, &def.triggers);
-    factory.persistence().save_object(&obj).await?;
+    crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
     ids.insert(def.base_name.clone(), obj.id);
     Ok(())
 }
@@ -156,7 +156,7 @@ async fn spawn_instance<P: Persistence>(
 
     if parent.is_container() {
         parent.add_to_list_property("contents", obj.id.clone());
-        factory.persistence().save_object(&parent).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut parent).await?;
         objects.insert(parent_id.clone(), parent);
     }
 
@@ -173,7 +173,7 @@ async fn spawn_instance<P: Persistence>(
         }
     }
 
-    factory.persistence().save_object(&obj).await?;
+    crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
     objects.insert(obj.id.clone(), obj.clone());
     placements.insert(def.base_name.clone(), obj.id);
     Ok(())
@@ -283,6 +283,8 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
@@ -294,7 +296,7 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
         spawner.add_property(behavior_templates_to_property(
             &world.behavior_template_defs,
         ));
-        factory.persistence().save_object(&spawner).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut spawner).await?;
     }
     Ok(())
 }
@@ -342,13 +344,15 @@ pub async fn bootstrap_world_loot_spawners<P: Persistence>(
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
         apply_loot_spawner_def(&mut spawner, def, &template_map)?;
         spawner.set_property_object_ref("loot_spawner_target", target_id);
         spawner.add_property(loot_templates_to_property(&world.loot_template_defs));
-        factory.persistence().save_object(&spawner).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut spawner).await?;
     }
     Ok(())
 }
@@ -396,13 +400,15 @@ pub async fn bootstrap_world_resource_spawners<P: Persistence>(
             properties: HashMap::new(),
             verbs: HashMap::new(),
             event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
             is_deleted: false,
             deleted_at: None,
         };
         apply_resource_spawner_def(&mut spawner, def, &template_map)?;
         spawner.set_property_object_ref("resource_spawner_target", target_id);
         spawner.add_property(resource_templates_to_property(&world.resource_template_defs));
-        factory.persistence().save_object(&spawner).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut spawner).await?;
     }
     Ok(())
 }
@@ -437,7 +443,7 @@ pub async fn bootstrap_world_schedules<P: Persistence>(
             );
         };
         register_schedule_job(&mut target, def, &target_id);
-        factory.persistence().save_object(&target).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut target).await?;
     }
     Ok(())
 }
@@ -506,7 +512,7 @@ pub async fn bootstrap_world<P: Persistence>(
                 behavior: None,
             });
         }
-        factory.persistence().save_object(&obj).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
         name_to_id.insert(def.base_name.clone(), obj.id.clone());
     }
 
@@ -578,7 +584,7 @@ pub async fn bootstrap_world<P: Persistence>(
                 }
             }
             attach_triggers(&mut obj, &def.triggers);
-            factory.persistence().save_object(&obj).await?;
+            crate::persistence::save_and_sync(factory.persistence(), &mut obj).await?;
         }
     }
 
@@ -617,7 +623,7 @@ pub async fn bootstrap_world<P: Persistence>(
                 player.set_property_object_ref("home_location", start_id.clone());
             }
         }
-        factory.persistence().save_object(&player).await?;
+        crate::persistence::save_and_sync(factory.persistence(), &mut player).await?;
     }
 
     let start_id = if let Some(start_base) = &world.starting_location {
@@ -1192,7 +1198,8 @@ mod tests {
         session.go("east").unwrap();
         assert_eq!(session.current_location(), Some(&pantry_id));
 
-        persist_all(&persistence, &session.objects()).await.unwrap();
+        let mut graph = session.objects();
+        persist_all(&persistence, &mut graph).await.unwrap();
 
         let reloaded = hydrate_world(&persistence).await.unwrap();
         let restored = resolve_player_location(&player_id, &reloaded, Some(start));

@@ -1586,7 +1586,7 @@ async fn main() -> Result<()> {
                         if let Some(obj) = session.object(&id) {
                             let name = obj.name.clone();
                             match persistence.save_object(&obj).await {
-                                Ok(()) => {
+                                Ok(_) => {
                                     info!(id = %id, name = %name, "object saved");
                                     println!("{}", narrate_saved(&name));
                                 }

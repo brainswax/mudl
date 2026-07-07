@@ -87,22 +87,31 @@ pub async fn resolve_bootstrap_location<P: Persistence>(
 /// Persist a batch of objects (e.g. after inventory or movement changes).
 pub async fn persist_objects<P: Persistence>(
     persistence: &P,
-    objects: &HashMap<ObjectId, Object>,
+    objects: &mut HashMap<ObjectId, Object>,
     ids: &[ObjectId],
 ) -> anyhow::Result<()> {
-    for id in ids {
-        if let Some(obj) = objects.get(id) {
-            persistence.save_object(obj).await?;
-        }
-    }
+    crate::persistence::save_objects_batch_with_retry(
+        persistence,
+        objects,
+        ids,
+        crate::persistence::DEFAULT_SAVE_RETRIES,
+    )
+    .await?;
     Ok(())
 }
 
 /// Persist every object in the map inside one transaction when supported.
 pub async fn persist_all<P: Persistence>(
     persistence: &P,
-    objects: &HashMap<ObjectId, Object>,
+    objects: &mut HashMap<ObjectId, Object>,
 ) -> anyhow::Result<()> {
-    let batch: Vec<&Object> = objects.values().collect();
-    persistence.save_objects_batch(&batch).await
+    let ids: Vec<ObjectId> = objects.keys().cloned().collect();
+    crate::persistence::save_objects_batch_with_retry(
+        persistence,
+        objects,
+        &ids,
+        crate::persistence::DEFAULT_SAVE_RETRIES,
+    )
+    .await?;
+    Ok(())
 }
