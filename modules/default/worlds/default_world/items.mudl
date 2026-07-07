@@ -47,6 +47,7 @@
   weight=4.0
   volume=3.0
   hand_slot=right
+  @mod-stat strength 2
   alias=sword
   alias=blade
 @end
@@ -57,8 +58,37 @@
   weight=2.5
   volume=2.0
   hand_slot=right
+  @grant-effect iron_lantern_aura
   alias=lantern
   alias=lamp
+@end
+
+@prototype leather-vest
+  name=Leather Vest
+  description=A boiled-leather vest, scarred but serviceable.
+  is_wearable=true
+  wear_slot=torso
+  mod_max_health=5
+  @mod-stat constitution 2
+  @mod-skill survival 1
+  weight=4.0
+  volume=4.0
+  pocketable=false
+  alias=vest
+  alias=leather vest
+@end
+
+@prototype vitality-band
+  name=Vitality Band
+  description=A braided copper band warm to the touch.
+  is_wearable=true
+  wear_slot=torso
+  @grant-effect regeneration
+  weight=0.3
+  volume=0.2
+  pocketable=true
+  alias=band
+  alias=vitality band
 @end
 
 @prototype trail-rations
@@ -214,6 +244,11 @@
   location=cottage-bedroom
 @end
 
+@item cottage-leather-vest
+  prototype=leather-vest
+  location=cottage-bedroom
+@end
+
 # --- Cottage doors (lockable exits) ---
 
 @item cottage-front-door
@@ -237,5 +272,21 @@
   location=cottage-interior
   door_direction=rear
   door_destination=cottage-rear
+@end
+
+# --- Loot spawners (weighted drops on open / enter / kill / timer) ---
+
+@loot-template chest-bonus-rations
+  prototype=trail-rations
+  count=2
+@end
+
+@loot-spawner travel-chest-bonus
+  target=scene-chest
+  trigger=on_open
+  once=true
+  chance=1.0
+  max_active=1
+  @entry chest-bonus-rations weight=1
 @end
 

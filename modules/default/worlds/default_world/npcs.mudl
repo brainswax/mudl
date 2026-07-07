@@ -1,0 +1,26 @@
+# NPC instances — creatures with simple scripted behaviors.
+
+@npc path-watcher
+  name=Path Watcher
+  creature=human
+  location=forest-path
+  @use-behavior guard
+  @trigger on_enter say The trees seem to lean closer when you pass.
+  @trigger on_kill narrate The forest exhales as the watcher falls.
+  @trigger on_death emote crumples among the roots.
+@end
+
+# Loot dropped when the Path Watcher is defeated in combat.
+
+@loot-template watcher-rations
+  prototype=trail-rations
+  count=1
+@end
+
+@loot-spawner path-watcher-kill
+  target=path-watcher
+  trigger=on_kill
+  chance=1.0
+  max_active=2
+  @entry watcher-rations weight=1
+@end

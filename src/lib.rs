@@ -1,6 +1,9 @@
 pub mod command;
+pub mod creature;
 pub mod display;
 pub mod inventory;
+pub mod loot;
+pub mod resource;
 pub mod mudl;
 pub mod object;
 pub mod persistence;

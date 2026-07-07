@@ -1,6 +1,7 @@
 //! Item prototypes and spawn instances from MUDL `items.mudl` / `objects.mudl`.
 
-use crate::mudl::MudlRoleProps;
+use crate::mudl::trigger_def::parse_trigger_line;
+use crate::mudl::{MudlRoleProps, TriggerDef};
 
 /// Shared template for identical items (stored as a real object for inheritance).
 #[derive(Debug, Clone, PartialEq)]
@@ -10,6 +11,7 @@ pub struct ItemPrototypeDef {
     pub description: Option<String>,
     pub aliases: Vec<String>,
     pub props: MudlRoleProps,
+    pub triggers: Vec<TriggerDef>,
 }
 
 /// A concrete item placed in the world at bootstrap.
@@ -22,6 +24,7 @@ pub struct ItemInstanceDef {
     pub aliases: Vec<String>,
     pub location: String,
     pub props: MudlRoleProps,
+    pub triggers: Vec<TriggerDef>,
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -33,6 +36,7 @@ fn parse_kv_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_lowercase(), value.trim().to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_kv(
     key: &str,
     value: &str,
@@ -54,8 +58,22 @@ fn apply_kv(
 }
 
 fn pairs_to_props(pairs: &[(String, String)]) -> MudlRoleProps {
-    let refs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let refs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     MudlRoleProps::from_pairs(&refs)
+}
+
+fn parse_mod_stat_line(rest: &str) -> Option<(String, i64)> {
+    let rest = rest.trim();
+    if let Some((name, value)) = rest.split_once('=') {
+        return Some((name.trim().to_string(), value.trim().parse().ok()?));
+    }
+    let mut parts = rest.split_whitespace();
+    let name = parts.next()?.to_string();
+    let value = parts.next()?.parse().ok()?;
+    Some((name, value))
 }
 
 /// Parse `@prototype` and `@item` blocks from MUDL source.
@@ -93,6 +111,7 @@ pub fn parse_item_file(content: &str) -> (Vec<ItemPrototypeDef>, Vec<ItemInstanc
                 description: None,
                 aliases: Vec::new(),
                 props: MudlRoleProps::default(),
+                triggers: Vec::new(),
             });
             continue;
         }
@@ -110,7 +129,57 @@ pub fn parse_item_file(content: &str) -> (Vec<ItemPrototypeDef>, Vec<ItemInstanc
                 aliases: Vec::new(),
                 location: String::new(),
                 props: MudlRoleProps::default(),
+                triggers: Vec::new(),
             });
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("@trigger ") {
+            if let Some(trigger) = parse_trigger_line(rest) {
+                if let Some(proto) = &mut current_proto {
+                    proto.triggers.push(trigger);
+                } else if let Some(item) = &mut current_item {
+                    item.triggers.push(trigger);
+                }
+            }
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("@mod-stat ") {
+            if let Some((name, value)) = parse_mod_stat_line(rest) {
+                if let Some(proto) = &mut current_proto {
+                    proto.props.stat_mods.insert(name, value);
+                } else if let Some(item) = &mut current_item {
+                    item.props.stat_mods.insert(name, value);
+                }
+            }
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("@mod-skill ") {
+            if let Some((name, value)) = parse_mod_stat_line(rest) {
+                if let Some(proto) = &mut current_proto {
+                    proto.props.skill_mods.insert(name, value);
+                } else if let Some(item) = &mut current_item {
+                    item.props.skill_mods.insert(name, value);
+                }
+            }
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("@grant-effect ") {
+            let effect = rest.trim().to_string();
+            if !effect.is_empty() {
+                if let Some(proto) = &mut current_proto {
+                    if !proto.props.grant_effects.contains(&effect) {
+                        proto.props.grant_effects.push(effect);
+                    }
+                } else if let Some(item) = &mut current_item {
+                    if !item.props.grant_effects.contains(&effect) {
+                        item.props.grant_effects.push(effect);
+                    }
+                }
+            }
             continue;
         }
 
@@ -230,6 +299,12 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.is_key.is_some() {
         target.is_key = extra.is_key;
     }
+    if extra.key_consumable.is_some() {
+        target.key_consumable = extra.key_consumable;
+    }
+    if extra.lock_consumable.is_some() {
+        target.lock_consumable = extra.lock_consumable;
+    }
     if extra.allowed_types.is_some() {
         target.allowed_types = extra.allowed_types.clone();
     }
@@ -260,11 +335,67 @@ fn merge_props(target: &mut MudlRoleProps, extra: &MudlRoleProps) {
     if extra.mod_encumbrance.is_some() {
         target.mod_encumbrance = extra.mod_encumbrance;
     }
+    if extra.mod_max_health.is_some() {
+        target.mod_max_health = extra.mod_max_health;
+    }
+    for (stat, value) in &extra.stat_mods {
+        target.stat_mods.insert(stat.clone(), *value);
+    }
+    for (skill, value) in &extra.skill_mods {
+        target.skill_mods.insert(skill.clone(), *value);
+    }
+    for effect in &extra.grant_effects {
+        if !target.grant_effects.contains(effect) {
+            target.grant_effects.push(effect.clone());
+        }
+    }
+    if extra.breakable.is_some() {
+        target.breakable = extra.breakable;
+    }
+    if extra.break_text.is_some() {
+        target.break_text = extra.break_text.clone();
+    }
+    if extra.harvestable.is_some() {
+        target.harvestable = extra.harvestable;
+    }
+    if extra.hidden_until_discovered.is_some() {
+        target.hidden_until_discovered = extra.hidden_until_discovered;
+    }
+    if extra.discovery_stealth.is_some() {
+        target.discovery_stealth = extra.discovery_stealth;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_haunted_forest_consumable_prototypes() {
+        let content = include_str!(
+            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+        );
+        let (prototypes, _) = parse_item_file(content);
+        let charm = prototypes
+            .iter()
+            .find(|p| p.base_name == "whisper-charm")
+            .expect("whisper-charm prototype");
+        assert_eq!(charm.props.key_consumable, Some(true));
+
+        let oak = prototypes
+            .iter()
+            .find(|p| p.base_name == "hollow-oak-portal")
+            .expect("hollow-oak-portal prototype");
+        assert_eq!(oak.props.lock_consumable, Some(true));
+
+        let pot = prototypes
+            .iter()
+            .find(|p| p.base_name == "haunted-clay-pot")
+            .expect("haunted-clay-pot prototype");
+        assert_eq!(pot.triggers.len(), 1);
+        assert_eq!(pot.triggers[0].event, "on_break");
+        assert_eq!(pot.triggers[0].code, "emote shatters into pale dust.");
+    }
 
     #[test]
     fn parse_starting_scene_prototypes_and_instances() {
@@ -333,6 +464,38 @@ mod tests {
             .find(|i| i.base_name == "cottage-key-ring")
             .unwrap();
         assert_eq!(ring.location, "cottage-interior");
+
+        let blade_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "chipped-blade")
+            .unwrap();
+        assert_eq!(
+            blade_proto.props.stat_mods.get("strength").copied(),
+            Some(2)
+        );
+
+        let vest_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "leather-vest")
+            .unwrap();
+        assert_eq!(vest_proto.props.mod_max_health, Some(5));
+        assert_eq!(
+            vest_proto.props.stat_mods.get("constitution").copied(),
+            Some(2)
+        );
+        assert_eq!(
+            vest_proto.props.skill_mods.get("survival").copied(),
+            Some(1)
+        );
+
+        let lantern_proto = prototypes
+            .iter()
+            .find(|p| p.base_name == "iron-lantern")
+            .unwrap();
+        assert_eq!(
+            lantern_proto.props.grant_effects,
+            vec!["iron_lantern_aura".to_string()]
+        );
 
         let note_proto = prototypes
             .iter()

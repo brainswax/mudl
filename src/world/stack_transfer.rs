@@ -379,11 +379,7 @@ pub fn compute_inventory_fit(
         .map(merge_room_in_stack)
         .unwrap_or(0);
 
-    let new_stack_room = if free_grasp_slot {
-        item.max_stack()
-    } else {
-        0
-    };
+    let new_stack_room = if free_grasp_slot { item.max_stack() } else { 0 };
 
     let merge_units = if merge_room > 0 && merge_target.is_some() {
         units_requested.min(merge_room)
@@ -462,11 +458,7 @@ pub fn compute_stack_transfer_plan(
             let anatomy = anatomy.ok_or(MoveError::NoBodyPlan)?;
             let player = objects.get(player_id).ok_or(MoveError::NotCarried)?;
             let body_plan = anatomy
-                .body_plan(
-                    &player
-                        .body_plan_name()
-                        .ok_or(MoveError::NoBodyPlan)?,
-                )
+                .body_plan(&player.body_plan_name().ok_or(MoveError::NoBodyPlan)?)
                 .ok_or(MoveError::NoBodyPlan)?;
             StackTransferPlan::from_inventory_fit(compute_inventory_fit(
                 player,

@@ -136,13 +136,11 @@ fn resolve_by_object_id(
         })
         .map(|(id, obj)| ResolvedMatch {
             id: id.clone(),
-            location_hint: Some(disambiguation_hint(
-                obj, id, player_id, objects, room_id,
-            )),
+            location_hint: Some(disambiguation_hint(obj, id, player_id, objects, room_id)),
         })
         .collect();
 
-    matches.sort_by(|a, b| short_id(&a.id).cmp(&short_id(&b.id)));
+    matches.sort_by_key(|a| short_id(&a.id));
 
     Some(match matches.len() {
         0 => TargetResolution::NotFound,
@@ -270,10 +268,7 @@ fn collect_open_container_matches(
             }
         }
 
-        if obj.is_container()
-            && obj.container_is_open()
-            && !visited.contains_key(&item_id)
-        {
+        if obj.is_container() && obj.container_is_open() && !visited.contains_key(&item_id) {
             visited.insert(item_id.clone(), ());
             let inner_hint = obj.name.to_lowercase();
             for inner_id in obj.container_contents() {
@@ -313,9 +308,7 @@ fn collect_possession_matches(
         }
         immediate.push(ResolvedMatch {
             id: item_id.clone(),
-            location_hint: Some(disambiguation_hint(
-                obj, &item_id, player_id, objects, None,
-            )),
+            location_hint: Some(disambiguation_hint(obj, &item_id, player_id, objects, None)),
         });
     }
 
@@ -355,10 +348,7 @@ fn collect_possession_matches(
             });
         }
 
-        if obj.is_container()
-            && obj.container_is_open()
-            && !visited.contains_key(&item_id)
-        {
+        if obj.is_container() && obj.container_is_open() && !visited.contains_key(&item_id) {
             visited.insert(item_id.clone(), ());
             let hint = obj.name.to_lowercase();
             for inner_id in obj.container_contents() {
@@ -383,13 +373,20 @@ fn collect_room_matches(
         if !obj.is_active() || !name_matches(needle, obj) {
             continue;
         }
+        if !crate::world::entity_visible_to_player(obj) {
+            continue;
+        }
         if !is_on_ground_in_room(obj, obj_id, room_id, player_id, objects) {
             continue;
         }
         let m = ResolvedMatch {
             id: obj_id.clone(),
             location_hint: Some(disambiguation_hint(
-                obj, obj_id, player_id, objects, Some(room_id),
+                obj,
+                obj_id,
+                player_id,
+                objects,
+                Some(room_id),
             )),
         };
         if obj.owner == *player_id {
@@ -527,6 +524,9 @@ fn id_in_scope(
         ResolveScope::PossessionOnly => is_in_player_possession(player_id, id, objects),
         ResolveScope::RoomOnly => room_id.is_some_and(|room| {
             is_accessible_in_room(id, room, player_id, objects)
+                && objects
+                    .get(id)
+                    .is_none_or(crate::world::entity_visible_to_player)
         }),
         ResolveScope::PossessionOrRoom => {
             is_in_player_possession(player_id, id, objects)
@@ -557,9 +557,7 @@ pub fn resolve_object(
             .unwrap_or(TargetResolution::NotFound);
     }
 
-    if let Some(result) =
-        resolve_by_object_id(name, player_id, room_id, objects, scope)
-    {
+    if let Some(result) = resolve_by_object_id(name, player_id, room_id, objects, scope) {
         return result;
     }
 
@@ -636,7 +634,10 @@ mod tests {
         player.set_body_slot("back", Some(backpack.id.clone()));
 
         let mut objects = HashMap::new();
-        objects.insert(room_id.clone(), bare("room:test-001", "Test Room", &player_id));
+        objects.insert(
+            room_id.clone(),
+            bare("room:test-001", "Test Room", &player_id),
+        );
         objects.insert(player_id.clone(), player);
         objects.insert(purse.id.clone(), purse);
         objects.insert(backpack.id.clone(), backpack);
@@ -912,7 +913,10 @@ mod tests {
             &objects,
             ResolveScope::RoomOnly,
         );
-        assert_eq!(result, TargetResolution::Found(ObjectId::new("item:sword-001")));
+        assert_eq!(
+            result,
+            TargetResolution::Found(ObjectId::new("item:sword-001"))
+        );
     }
 
     #[test]
@@ -920,10 +924,7 @@ mod tests {
         let player_id = ObjectId::new("player:hero-001");
         let room_id = ObjectId::new("room:test-001");
 
-        let objects = HashMap::from([(
-            room_id.clone(),
-            bare("room:test-001", "Test", &player_id),
-        )]);
+        let objects = HashMap::from([(room_id.clone(), bare("room:test-001", "Test", &player_id))]);
 
         let result = resolve_object(
             "missing-item-999",

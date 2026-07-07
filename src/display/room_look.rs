@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::object::{Object, ObjectId};
+use crate::world::exit_index::ExitIndex;
 use crate::world::portal::{
     portal_for_direction, portal_kind_label, portal_passage_block, portals_in_room, PortalBlock,
 };
@@ -23,26 +24,38 @@ fn passable_portal_exit_suffix(portal: &Object) -> Option<String> {
     }
 }
 
-fn exit_label(direction: &str, room: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let Some(portal) = portal_for_direction(&room.id, direction, objects) else {
-        return direction.to_string();
-    };
-    if let Some(suffix) = passable_portal_exit_suffix(portal) {
-        return format!("{direction} ({suffix})");
+fn exit_label(
+    direction: &str,
+    index: &ExitIndex,
+    room: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> String {
+    if let Some(portal) = portal_for_direction(&room.id, direction, objects) {
+        if let Some(suffix) = passable_portal_exit_suffix(portal) {
+            return format!("{direction} ({suffix})");
+        }
     }
-    direction.to_string()
+    let aliases: Vec<String> = index
+        .aliases_for(direction)
+        .into_iter()
+        .map(|a| a.to_string())
+        .collect();
+    if aliases.is_empty() {
+        return direction.to_string();
+    }
+    format!("{} ({})", direction, join_natural_list(&aliases))
 }
 
 fn format_exits(room: &Object, objects: &HashMap<ObjectId, Object>) -> String {
-    let exits = room.get_exits();
-    if exits.is_empty() {
+    let index = ExitIndex::from_place(room);
+    let names = index.exit_names();
+    if names.is_empty() {
         return String::new();
     }
-    let mut dirs: Vec<String> = exits
-        .keys()
-        .map(|dir| exit_label(dir, room, objects))
+    let dirs: Vec<String> = names
+        .into_iter()
+        .map(|dir| exit_label(dir, &index, room, objects))
         .collect();
-    dirs.sort_unstable();
     format!("Obvious exits: {}", dirs.join(", "))
 }
 
@@ -102,9 +115,15 @@ fn visible_content_phrases(room: &Object, ctx: &DisplayContext) -> Vec<String> {
     let mut items: Vec<&Object> = room
         .contents(&ctx.objects)
         .into_iter()
-        .filter(|item| item.id != ctx.observer)
+        .filter(|item| {
+            item.id != ctx.observer
+                && !crate::creature::is_spawner_infrastructure(item)
+                && !crate::loot::is_loot_spawner_infrastructure(item)
+                && !crate::resource::is_resource_spawner_infrastructure(item)
+                && crate::world::entity_visible_to_player(item)
+        })
         .collect();
-    items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    items.sort_by_key(|a| a.name.to_lowercase());
     items.iter().map(|item| room_item_phrase(item)).collect()
 }
 
@@ -115,7 +134,10 @@ fn format_you_see_line(phrases: &[String]) -> String {
     format!("You see {} here.", join_natural_list(phrases))
 }
 
-fn format_room_parent_context(room: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
+fn format_room_parent_context(
+    room: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<String> {
     let parent = room.parent_place(objects)?;
     Some(format!("Inside {}.", parent.name))
 }
@@ -158,7 +180,9 @@ pub fn format_room_look_player(room: &Object, ctx: &DisplayContext) -> String {
 mod tests {
     use super::*;
     use crate::display::DisplayMode;
-    use crate::object::{DoorSpec, PermissionFlags, PortalKind, PortalSpec, Property, StackableSpec, Value};
+    use crate::object::{
+        DoorSpec, PermissionFlags, PortalKind, PortalSpec, Property, StackableSpec, Value,
+    };
 
     fn bare_room(id: &str, name: &str, desc: &str) -> Object {
         let mut room = Object {
@@ -265,6 +289,7 @@ mod tests {
             open: false,
             lock_id: Some("cottage-door".to_string()),
             locked: true,
+            lock_consumable: false,
         });
         locked_door.set_portal_destination(dest_id);
 
@@ -302,6 +327,7 @@ mod tests {
             open: false,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });
@@ -323,7 +349,11 @@ mod tests {
     fn room_look_hides_view_through_locked_window() {
         let room_id = ObjectId::new("area:cottage-interior-001");
         let dest_id = ObjectId::new("area:cottage-rear-001");
-        let room = bare_room("area:cottage-interior-001", "Cottage Interior", "A warm room.");
+        let room = bare_room(
+            "area:cottage-interior-001",
+            "Cottage Interior",
+            "A warm room.",
+        );
         let rear = bare_room(
             "area:cottage-rear-001",
             "Behind the Cottage",
@@ -338,6 +368,7 @@ mod tests {
             open: false,
             lock_id: Some("shutters".to_string()),
             locked: true,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });
@@ -374,6 +405,22 @@ mod tests {
         let output = format_room_look_player(&room, &ctx);
         assert!(output.starts_with("Inside Cottage Interior."));
         assert!(output.contains("narrow bedroom"));
+    }
+
+    #[test]
+    fn room_look_lists_exit_aliases_naturally() {
+        let mut room = bare_room("area:cottage-rear-001", "Behind the Cottage", "Clutter.");
+        room.add_exit("around", ObjectId::new("area:cottage-front-001"));
+        room.add_exit("west", ObjectId::new("area:the-void-001"));
+        room.set_exit_alias("path", "around");
+
+        let mut objects = HashMap::new();
+        objects.insert(room.id.clone(), room.clone());
+
+        let ctx = DisplayContext::new(ObjectId::new("player:hero-001"), DisplayMode::Player)
+            .with_objects(objects);
+        let output = format_room_look_player(&room, &ctx);
+        assert!(output.contains("Obvious exits: around (path), west"));
     }
 
     #[test]

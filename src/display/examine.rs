@@ -4,8 +4,7 @@ use std::collections::HashMap;
 
 use crate::object::{
     format_weight_amount, is_state_property, is_unlimited_weight, player_carried_weight,
-    player_effective_max_weight, Object,
-    ObjectId,
+    player_effective_max_weight, Object, ObjectId,
 };
 
 use super::body_plan::format_anatomy_section;
@@ -119,9 +118,8 @@ fn format_config_properties(obj: &Object, objects: &HashMap<ObjectId, Object>) -
         .filter(|name| !is_state_property(name))
         .collect();
 
-    let needs_weight = !obj.is_location()
-        && obj.object_type() != "player"
-        && !names.contains(&"weight");
+    let needs_weight =
+        !obj.is_location() && obj.object_type() != "player" && !names.contains(&"weight");
     if needs_weight {
         names.push("weight");
     }
@@ -148,10 +146,7 @@ fn format_object_state_entries(obj: &Object, ctx: &DisplayContext) -> Vec<String
     )];
 
     if let Some(loc) = &obj.location {
-        entries.push(format!(
-            "location: {}",
-            location_label(loc, &ctx.objects)
-        ));
+        entries.push(format!("location: {}", location_label(loc, &ctx.objects)));
     }
 
     if let Some(proto) = &obj.prototype {
@@ -162,7 +157,18 @@ fn format_object_state_entries(obj: &Object, ctx: &DisplayContext) -> Vec<String
         entries.push(format!("aliases: {}", obj.aliases.join(", ")));
     }
 
-    for name in ["contents", "body_slots", "stack_count", "carried_slot"] {
+    for name in [
+        "contents",
+        "body_slots",
+        "stack_count",
+        "carried_slot",
+        "health",
+        "max_health",
+        "stats",
+        "skills",
+        "active_effects",
+        "stat_mods",
+    ] {
         if let Some(prop) = obj.get_property(name) {
             entries.push(format!(
                 "{name}: {}",
@@ -197,9 +203,7 @@ fn format_carried_weight_status(obj: &Object, objects: &HashMap<ObjectId, Object
 fn format_status_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> Vec<String> {
     let mut entries = Vec::new();
 
-    if obj.is_stackable() {
-        entries.push(format!("weight: {}", format_weight_amount(obj.weight())));
-    } else if !obj.is_location() && obj.object_type() != "player" {
+    if obj.is_stackable() || (!obj.is_location() && obj.object_type() != "player") {
         entries.push(format!("weight: {}", format_weight_amount(obj.weight())));
     }
 
@@ -214,11 +218,16 @@ fn format_status_entries(obj: &Object, objects: &HashMap<ObjectId, Object>) -> V
         }
     }
 
-    if obj.object_type() == "player" {
+    if obj.object_type() == "player" || obj.object_type() == "npc" {
         entries.push(format!(
             "carried_weight: {}",
             format_carried_weight_status(obj, objects)
         ));
+        if obj.has_creature_role() {
+            let health = crate::creature::creature_health(obj);
+            let max = crate::creature::creature_max_health(obj, None);
+            entries.push(format!("health: {health}/{max}"));
+        }
     }
 
     entries
@@ -314,9 +323,7 @@ pub fn format_prototype_examine_player(
     let mut lines = vec![header];
 
     for key in PROTOTYPE_PROPERTY_KEYS {
-        if let Some(line) =
-            format_prototype_property_line(key, prototype, instance, &ctx.objects)
-        {
+        if let Some(line) = format_prototype_property_line(key, prototype, instance, &ctx.objects) {
             lines.push(line);
         }
     }
@@ -342,9 +349,7 @@ pub fn format_prototype_examine_builder(
 
     let mut inherited = Vec::new();
     for key in PROTOTYPE_PROPERTY_KEYS {
-        if let Some(line) =
-            format_prototype_property_line(key, prototype, instance, &ctx.objects)
-        {
+        if let Some(line) = format_prototype_property_line(key, prototype, instance, &ctx.objects) {
             inherited.push(line);
         }
     }

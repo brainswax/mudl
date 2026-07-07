@@ -34,6 +34,7 @@
   description=A chip of bark bound with copper wire. It hums faintly when the lantern is near.
   is_key=true
   lock_id=oak-whisper
+  key_consumable=true
   weight=0.1
   volume=0.1
   pocketable=true
@@ -60,12 +61,68 @@
   is_open=false
   locked=true
   lock_id=oak-whisper
+  lock_consumable=true
   weight=80.0
   volume=60.0
   pocketable=false
   alias=oak
   alias=split oak
   alias=hollow oak
+@end
+
+@prototype heart-reward-chest
+  name=Rootbound Chest
+  description=A small chest grown from pale roots and lacquered wood. The lid sits shut but bears no lock — as if the wood itself decided you earned this.
+  is_container=true
+  is_open=false
+  locked=false
+  capacity=4
+  max_weight=50
+  weight=12.0
+  volume=16.0
+  pocketable=false
+  alias=reward chest
+  alias=rootbound chest
+@end
+
+@prototype haunted-clay-pot
+  name=Clay Pot
+  description=A squat earthen pot glazed with silver dust. Pale motes coil inside, restless.
+  breakable=true
+  break_text=You smash the clay pot. The silver motes scatter and the wood grows quiet.
+  @trigger on_break emote shatters into pale dust.
+  weight=2.0
+  volume=2.0
+  pocketable=false
+  alias=pot
+  alias=clay pot
+@end
+
+@prototype moss-patch
+  name=Moss Patch
+  description=A damp patch of green moss clinging to a fallen log.
+  harvestable=true
+  weight=5.0
+  volume=4.0
+  pocketable=false
+  alias=moss
+  alias=moss patch
+@end
+
+@prototype hidden-supply-cache
+  name=Supply Cache
+  description=A bundle wrapped in oiled cloth, wedged behind a root.
+  hidden_until_discovered=true
+  discovery_stealth=6
+  is_container=true
+  is_open=true
+  capacity=2
+  max_weight=20
+  weight=3.0
+  volume=2.0
+  pocketable=false
+  alias=cache
+  alias=supply cache
 @end
 
 # --- Integration items (placed in host world locations) ---
@@ -133,6 +190,162 @@
   read_text=The order held. The wood yields only one exit, and it will not be gentle.
 @end
 
+@item haunted-heart-chest
+  prototype=heart-reward-chest
+  location=haunted-heart
+@end
+
+@item haunted-moon-pot
+  prototype=haunted-clay-pot
+  location=haunted-moon
+@end
+
+@item haunted-moss-patch
+  prototype=moss-patch
+  location=haunted-moss
+@end
+
+@item haunted-hidden-cache
+  prototype=hidden-supply-cache
+  location=haunted-moss
+  @trigger on_discovered narrate You kneel to inspect the bundle more closely.
+@end
+
+# --- Resource spawners (renewable harvest nodes) ---
+
+@resource-template forest-moss
+  prototype=trail-rations
+  count=1
+@end
+
+@resource-spawner moss-harvest
+  target=haunted-moss-patch
+  trigger=on_harvest
+  chance=1.0
+  max_active=2
+  @entry forest-moss weight=1
+@end
+
+# --- Creature spawners (weighted, on-enter only in haunted rooms) ---
+
+@spawn-template mist-wisp
+  name=Mist Wisp
+  creature=human
+  @trigger on_enter emote drifts through the silvered air without sound.
+@end
+
+@spawn-template pale-lurker
+  name=Pale Lurker
+  creature=human
+  @use-behavior lurker
+  @trigger on_enter emote watches you from between the trees.
+  @trigger on_discovered react attack
+  @trigger on_discovered emote lunges from the shadows.
+@end
+
+@spawner haunted-moon-phantoms
+  location=haunted-moon
+  trigger=on_enter
+  chance=1.0
+  max_active=1
+  @entry mist-wisp weight=3
+  @entry pale-lurker weight=1
+@end
+
+@spawner pot-mist-spawner
+  target=haunted-moon-pot
+  trigger=on_enter
+  chance=1.0
+  max_active=1
+  @entry mist-wisp weight=1
+@end
+
+@spawner haunted-mirror-phantoms
+  location=haunted-mirror
+  trigger=periodic
+  periodic_interval=3
+  chance=0.5
+  max_active=1
+  @entry mist-wisp weight=2
+  @entry pale-lurker weight=2
+@end
+
+# --- Loot spawners (shrine offering on first visit) ---
+
+@loot-template shrine-rations
+  prototype=trail-rations
+  count=1
+@end
+
+@loot-spawner haunted-shrine-offering
+  target=haunted-shrine
+  trigger=on_enter
+  once=true
+  chance=1.0
+  max_active=1
+  @entry shrine-rations weight=1
+@end
+
+@loot-template pot-spill-rations
+  prototype=trail-rations
+  count=2
+@end
+
+@loot-spawner pot-break-loot
+  target=haunted-moon-pot
+  trigger=on_break
+  once=true
+  chance=1.0
+  max_active=1
+  @entry pot-spill-rations weight=1
+@end
+
+# --- Reward chest (weighted loot at the successful exit) ---
+
+@loot-template heart-bonus-rations
+  prototype=trail-rations
+  count=3
+@end
+
+@loot-template heart-bonus-tinder
+  prototype=tinderbox
+  count=1
+@end
+
+@loot-template heart-bonus-lantern
+  prototype=iron-lantern
+  count=1
+@end
+
+@loot-template heart-bonus-blade
+  prototype=chipped-blade
+  count=1
+@end
+
+@loot-template heart-bonus-ring
+  prototype=brass-key-ring
+  count=1
+@end
+
+@loot-template heart-bonus-boots
+  prototype=boots-of-carrying
+  count=1
+@end
+
+@loot-spawner heart-reward-loot
+  target=haunted-heart-chest
+  trigger=on_open
+  once=true
+  chance=1.0
+  max_active=1
+  @entry heart-bonus-rations weight=4
+  @entry heart-bonus-tinder weight=3
+  @entry heart-bonus-lantern weight=3
+  @entry heart-bonus-blade weight=2
+  @entry heart-bonus-ring weight=2
+  @entry heart-bonus-boots weight=1
+@end
+
 # --- Haunted forest areas ---
 
 type: area
@@ -149,6 +362,7 @@ type: area
 base_name: haunted-moon
 name: Moonlit Glade
 description: A silvered clearing where the canopy breaks. The air is colder than it should be under this much light.
+@trigger on_enter narrate Silver mist clings to the branches.
 exits:
   south: haunted-entry
   east: haunted-ember
@@ -185,6 +399,8 @@ type: area
 base_name: haunted-heart
 name: Pale Heart of the Wood
 description: The haunted forest kneels here. A ring of roots frames a patch of sky that looks almost ordinary. Something final has been waiting.
+@trigger on_enter heal 5
+@trigger on_enter narrate The wood loosens its grip — you feel steadier on your feet.
 exits:
   south: haunted-ash
   out: haunted-entry

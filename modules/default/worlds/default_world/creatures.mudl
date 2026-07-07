@@ -1,5 +1,18 @@
-# Creature definitions — anatomy and body slots.
+# Creature definitions — anatomy, vitals, stats, and effects.
+
 @creature human
+  max_health=100
+  base_max_weight=90
+  @stat strength 10
+  @stat dexterity 10
+  @stat constitution 10
+  @stat intelligence 10
+  @stat wisdom 10
+  @stat charisma 10
+  @skill combat 0
+  @skill stealth 0
+  @skill crafting 0
+  @skill survival 0
   @slot left_hand capacity=1 type=grasp hands=1
   @slot right_hand capacity=1 type=grasp hands=1
   @slot head capacity=1 type=wear
@@ -10,4 +23,19 @@
   @slot right_leg capacity=1 type=limb
   @slot left_foot capacity=1 type=wear
   @slot right_foot capacity=1 type=wear
+@end
+
+@effect weary
+  mod_encumbrance=1.1
+  mod_max_weight=-5
+  mod_stat_dexterity=-2
+  mod_skill_stealth=-1
+@end
+
+@effect iron_lantern_aura
+  mod_encumbrance=0.95
+@end
+
+@effect regeneration
+  regen_on_enter=2
 @end

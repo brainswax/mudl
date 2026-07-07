@@ -46,10 +46,7 @@ fn singularize_word(word: &str) -> String {
 fn is_fixed_plural_item_name(name: &str) -> bool {
     name_looks_plural(name)
         && !name.contains(' ')
-        && name
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_uppercase())
+        && name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 /// Label for a single unit in player messages (`gold bar`, `coin`, `Boots`).
@@ -93,12 +90,14 @@ fn pluralize_word(word: &str) -> String {
     let lower = word.to_lowercase();
     if lower.ends_with('y') {
         let bytes = lower.as_bytes();
-        if bytes.len() >= 2 && !matches!(bytes[bytes.len() - 2], b'a' | b'e' | b'i' | b'o' | b'u')
-        {
+        if bytes.len() >= 2 && !matches!(bytes[bytes.len() - 2], b'a' | b'e' | b'i' | b'o' | b'u') {
             return format!("{}ies", &word[..word.len() - 1]);
         }
     }
-    if lower.ends_with("ch") || lower.ends_with("sh") || lower.ends_with('x') || lower.ends_with('z')
+    if lower.ends_with("ch")
+        || lower.ends_with("sh")
+        || lower.ends_with('x')
+        || lower.ends_with('z')
     {
         return format!("{word}es");
     }
@@ -189,10 +188,7 @@ fn remainder_leave_phrase(item: &Object, count: u32, location: StackRemainderLoc
     let where_ = remainder_location_phrase(location);
     if count == 1 {
         let label = display_name_for_single_unit(&item.name);
-        format!(
-            "but leave {} {label} {where_}",
-            indefinite_article(&label)
-        )
+        format!("but leave {} {label} {where_}", indefinite_article(&label))
     } else {
         format!("but leave {count} {where_}")
     }
@@ -342,6 +338,9 @@ mod tests {
             count: 20,
             max_stack: 99,
         });
-        assert_eq!(format_look_stackable_sentence(&coins), "There are 20 coins.");
+        assert_eq!(
+            format_look_stackable_sentence(&coins),
+            "There are 20 coins."
+        );
     }
 }

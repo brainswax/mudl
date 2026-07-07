@@ -137,16 +137,31 @@ pub fn collect_worn_carry_modifiers(
     mods
 }
 
-/// Effective carry limit including worn `mod_max_weight` bonuses.
+/// Effective carry limit including worn equipment and effect bonuses.
 pub fn player_effective_max_weight(
     player: &Object,
     objects: &HashMap<ObjectId, Object>,
+) -> Option<i64> {
+    player_effective_max_weight_with_anatomy(player, objects, None)
+}
+
+/// Effective carry limit with optional anatomy for granted equipment effects.
+pub fn player_effective_max_weight_with_anatomy(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: Option<&crate::mudl::AnatomyRegistry>,
 ) -> Option<i64> {
     let base = player_base_max_weight(player)?;
     if is_unlimited_weight(base) {
         return Some(base);
     }
-    let bonus = collect_worn_carry_modifiers(player, objects).max_weight_bonus;
+    let mut bonus = crate::creature::effect_max_weight_bonus(player);
+    if let Some(anatomy) = anatomy {
+        bonus +=
+            crate::creature::collect_equipment_modifiers(player, objects, anatomy).max_weight_bonus;
+    } else {
+        bonus += collect_worn_carry_modifiers(player, objects).max_weight_bonus;
+    }
     Some(base.saturating_add(bonus))
 }
 
@@ -227,8 +242,21 @@ pub fn player_encumbrance_fraction(
     player: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> Option<f64> {
+    player_encumbrance_fraction_with_anatomy(player, objects, None)
+}
+
+/// Encumbrance ratio including granted equipment effects when anatomy is provided.
+pub fn player_encumbrance_fraction_with_anatomy(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: Option<&crate::mudl::AnatomyRegistry>,
+) -> Option<f64> {
     let base = player_carry_fraction(player, objects)?;
-    let factor = collect_worn_carry_modifiers(player, objects).encumbrance_factor;
+    let mut factor = collect_worn_carry_modifiers(player, objects).encumbrance_factor
+        * crate::creature::effect_encumbrance_factor(player);
+    if let Some(anatomy) = anatomy {
+        factor *= crate::creature::equipment_granted_encumbrance_factor(player, objects, anatomy);
+    }
     Some(base * factor)
 }
 
@@ -237,7 +265,16 @@ pub fn player_encumbrance_level(
     player: &Object,
     objects: &HashMap<ObjectId, Object>,
 ) -> EncumbranceLevel {
-    match player_encumbrance_fraction(player, objects) {
+    player_encumbrance_level_with_anatomy(player, objects, None)
+}
+
+/// Encumbrance tier with optional anatomy for granted equipment effects.
+pub fn player_encumbrance_level_with_anatomy(
+    player: &Object,
+    objects: &HashMap<ObjectId, Object>,
+    anatomy: Option<&crate::mudl::AnatomyRegistry>,
+) -> EncumbranceLevel {
+    match player_encumbrance_fraction_with_anatomy(player, objects, anatomy) {
         None => EncumbranceLevel::Unencumbered,
         Some(ratio) if ratio >= ENCUMBRANCE_BLOCK_THRESHOLD => EncumbranceLevel::Overloaded,
         Some(ratio) if ratio >= ENCUMBRANCE_SLOW_THRESHOLD => EncumbranceLevel::Encumbered,
@@ -447,13 +484,10 @@ mod tests {
         player.set_property_int("max_weight", 100);
         let mut boots = bare("item:boots-001");
         boots.name = "Boots of Carrying".to_string();
-        boots.apply_wearable_role(&crate::object::WearableSpec {
-            wear_slot: "left_foot".to_string(),
-            weight: 2.0,
-            volume: 2.0,
-            mod_max_weight: Some(25),
-            mod_encumbrance: Some(0.85),
-        });
+        let mut boot_spec = crate::object::WearableSpec::new("left_foot", 2.0, 2.0);
+        boot_spec.mod_max_weight = Some(25);
+        boot_spec.mod_encumbrance = Some(0.85);
+        boots.apply_wearable_role(&boot_spec);
         boots.location = Some(player.id.clone());
         player.set_property_map(
             "body_slots",
@@ -475,13 +509,10 @@ mod tests {
         heavy.set_property_numeric("weight", 92.0);
         heavy.location = Some(player.id.clone());
         let mut boots = bare("item:boots-001");
-        boots.apply_wearable_role(&crate::object::WearableSpec {
-            wear_slot: "left_foot".to_string(),
-            weight: 2.0,
-            volume: 2.0,
-            mod_max_weight: Some(25),
-            mod_encumbrance: Some(0.85),
-        });
+        let mut boot_spec = crate::object::WearableSpec::new("left_foot", 2.0, 2.0);
+        boot_spec.mod_max_weight = Some(25);
+        boot_spec.mod_encumbrance = Some(0.85);
+        boots.apply_wearable_role(&boot_spec);
         boots.location = Some(player.id.clone());
         player.set_property_map(
             "body_slots",

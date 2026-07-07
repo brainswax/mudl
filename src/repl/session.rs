@@ -6,24 +6,29 @@ use std::fmt;
 use crate::command::persist_inventory_dirty;
 use crate::display::{
     format_room_look_player, narrate_go, narrate_go_encumbered, narrate_no_exit,
-    narrate_scatter_exit, object_name,
-    narrate_no_location, narrate_overloaded, resolve_object, DisplayContext, DisplayFlags,
-    DisplayMode, ResolveScope, TargetResolution,
+    narrate_no_location, narrate_overloaded, narrate_scatter_exit, object_name, resolve_object,
+    DisplayContext, DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::object::{player_encumbrance_level, ObjectFactory, EncumbranceLevel};
-use crate::world::portal::{passable_portal_blocks_passage, PortalBlock};
+use crate::inventory::InventoryContext;
+use crate::inventory::{prepare_gate_for_passage, InventoryError};
+use crate::mudl::AnatomyRegistry;
+use crate::object::{player_encumbrance_level_with_anatomy, EncumbranceLevel, ObjectFactory};
+use crate::object::{Object, ObjectId};
+use crate::persistence::Persistence;
+use crate::world::exits::{apply_loop_entry, apply_scatter_exit, can_traverse_exit};
+use crate::world::exit_index::ExitIndex;
+use crate::world::navigation::resolve_exit;
 use crate::world::place_builder::{
     apply_dig_result, dig_place, link_places, unlink_exit, DigRequest, DigResult, PlaceBuildError,
 };
-use crate::world::exits::{apply_loop_entry, apply_scatter_exit, can_traverse_exit};
-use crate::world::navigation::{normalize_direction, resolve_exit};
-use crate::inventory::InventoryContext;
-use crate::mudl::AnatomyRegistry;
-use crate::object::{Object, ObjectId};
-use crate::persistence::Persistence;
-use crate::world::{
-    persist_all, persist_dirty, resolve_player_location, restore_session, DirtyTracker,
+use crate::world::portal::{
+    passable_portal_for_direction, portal_passage_block, portal_permits_exit,
 };
+use crate::world::{
+    execute_event, persist_all, persist_dirty, resolve_player_location, restore_session,
+    DirtyTracker, EventContext,
+};
+use crate::mudl::trigger_def::events::{ON_ENTER, ON_LEAVE};
 
 /// Errors from session-level navigation and state operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +40,8 @@ pub enum SessionError {
     DoorClosed(String),
     DoorLocked(String),
     Overloaded,
+    /// Movement or portal prep blocked with a player-facing explanation.
+    Blocked(String),
 }
 
 impl std::fmt::Display for SessionError {
@@ -45,13 +52,11 @@ impl std::fmt::Display for SessionError {
                 write!(f, "The ground shifts beneath you — you are nowhere.")
             }
             Self::PlayerMissing => write!(f, "You seem to have lost yourself."),
-            Self::NoExit(dir) => {
-                let friendly = normalize_direction(dir).unwrap_or(dir.as_str());
-                write!(f, "{}", narrate_no_exit(friendly))
-            }
+            Self::NoExit(dir) => write!(f, "{}", narrate_no_exit(dir)),
             Self::DoorClosed(name) => write!(f, "The {name} is closed."),
             Self::DoorLocked(name) => write!(f, "The {name} is locked."),
             Self::Overloaded => write!(f, "{}", narrate_overloaded()),
+            Self::Blocked(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -186,8 +191,11 @@ impl Session {
 
     /// Re-resolve current location from the player object's persisted `location`.
     pub fn sync_location_from_player(&mut self) {
-        self.current_location =
-            resolve_player_location(&self.player_id, &self.objects, self.current_location.clone());
+        self.current_location = resolve_player_location(
+            &self.player_id,
+            &self.objects,
+            self.current_location.clone(),
+        );
     }
 
     /// Resolve a command target against this session's object graph.
@@ -206,6 +214,23 @@ impl Session {
         DisplayContext::new(self.player_id.clone(), mode)
             .with_objects(self.objects.clone())
             .with_anatomy(self.anatomy.clone())
+    }
+
+    /// Perception checks when the player looks around the current room.
+    pub fn perceive_hidden_on_look(&mut self) -> crate::world::EventOutcome {
+        let Some(room_id) = self.current_location.clone() else {
+            return crate::world::EventOutcome::default();
+        };
+        let outcome = crate::world::run_discovery_on_look(
+            &room_id,
+            &self.player_id,
+            &mut self.objects,
+            &self.anatomy,
+        );
+        for id in &outcome.dirty {
+            self.dirty.mark(id);
+        }
+        outcome
     }
 
     /// Mutable inventory command context wired to session dirty tracking.
@@ -233,41 +258,47 @@ impl Session {
         let room = self
             .objects
             .get(&loc_id)
-            .ok_or(SessionError::LocationMissing)?;
+            .ok_or(SessionError::LocationMissing)?
+            .clone();
 
-        let exits = room.get_exits();
-        let (dir_label, map_target_id) = resolve_exit(&exits, direction)
+        let index = ExitIndex::from_place(&room);
+        let (dir_label, map_target_id) = resolve_exit(&index, direction)
             .ok_or_else(|| SessionError::NoExit(direction.to_string()))?;
 
-        if !can_traverse_exit(room, dir_label, map_target_id, &self.objects) {
+        if !can_traverse_exit(&room, dir_label, map_target_id, &self.objects) {
             return Err(SessionError::NoExit(direction.to_string()));
         }
 
-        if let Some(block) =
-            passable_portal_blocks_passage(&loc_id, dir_label, map_target_id, &self.objects)
-        {
-            let name = self
-                .objects
-                .get(&loc_id)
-                .and_then(|room| {
-                    crate::world::portal::passable_portal_for_direction(
-                        &room.id,
-                        dir_label,
-                        &self.objects,
-                    )
-                })
-                .map(|portal| portal.name.to_lowercase())
-                .unwrap_or_else(|| "passage".to_string());
-            return Err(match block {
-                PortalBlock::Closed => SessionError::DoorClosed(name),
-                PortalBlock::Locked => SessionError::DoorLocked(name),
-            });
+        let mut portal_prep_lines = Vec::new();
+        if let Some(portal) = passable_portal_for_direction(&loc_id, dir_label, &self.objects) {
+            if portal_permits_exit(portal, map_target_id) && portal_passage_block(portal).is_some()
+            {
+                let portal_id = portal.id.clone();
+                let portal_name = portal.name.to_lowercase();
+                let mut ctx = self.inventory_context();
+                match prepare_gate_for_passage(&mut ctx, &portal_id) {
+                    Ok(lines) => portal_prep_lines = lines,
+                    Err(InventoryError::NoMatchingKey(_))
+                    | Err(InventoryError::ContainerLocked(_)) => {
+                        return Err(SessionError::DoorLocked(portal_name));
+                    }
+                    Err(InventoryError::ContainerClosed(_)) => {
+                        return Err(SessionError::DoorClosed(portal_name));
+                    }
+                    Err(InventoryError::InvalidTarget(msg)) => {
+                        return Err(SessionError::Blocked(msg));
+                    }
+                    Err(err) => return Err(SessionError::Blocked(err.to_string())),
+                }
+            }
         }
 
         let encumbrance = self
             .objects
             .get(&self.player_id)
-            .map(|player| player_encumbrance_level(player, &self.objects))
+            .map(|player| {
+                player_encumbrance_level_with_anatomy(player, &self.objects, Some(&self.anatomy))
+            })
             .ok_or(SessionError::PlayerMissing)?;
         if encumbrance == EncumbranceLevel::Overloaded {
             return Err(SessionError::Overloaded);
@@ -275,11 +306,23 @@ impl Session {
 
         let looped_target = apply_loop_entry(map_target_id, &self.objects);
         let target_id = apply_scatter_exit(
-            room,
+            &room,
             dir_label,
             &looped_target,
             &self.player_id,
             &self.objects,
+        );
+
+        let leave_outcome = execute_event(
+            ON_LEAVE,
+            &EventContext {
+                actor_id: self.player_id.clone(),
+                host_id: loc_id.clone(),
+                room_id: Some(loc_id.clone()),
+                target_id: Some(target_id.clone()),
+            },
+            &mut self.objects,
+            Some(&self.anatomy),
         );
 
         let player = self
@@ -293,7 +336,11 @@ impl Session {
 
         let looped = looped_target != *map_target_id;
         let scattered = target_id != looped_target;
-        let mut lines = Vec::new();
+        let mut lines = portal_prep_lines;
+        lines.extend(leave_outcome.lines);
+        for id in leave_outcome.dirty {
+            self.dirty.mark(&id);
+        }
         if scattered {
             let dest_name = object_name(&target_id, &self.objects);
             lines.push(narrate_scatter_exit(&dest_name));
@@ -306,12 +353,54 @@ impl Session {
             };
             lines.push(movement_line);
         }
+        let enter_outcome = execute_event(
+            ON_ENTER,
+            &EventContext {
+                actor_id: self.player_id.clone(),
+                host_id: target_id.clone(),
+                room_id: Some(target_id.clone()),
+                target_id: None,
+            },
+            &mut self.objects,
+            Some(&self.anatomy),
+        );
+        for line in enter_outcome.lines {
+            lines.push(line);
+        }
+        for id in enter_outcome.dirty {
+            self.dirty.mark(&id);
+        }
+
+        let behavior_outcome = crate::creature::run_creature_behaviors(
+            "on_enter",
+            &target_id,
+            &self.player_id,
+            &mut self.objects,
+            &self.anatomy,
+        );
+        for id in behavior_outcome.dirty {
+            self.dirty.mark(&id);
+        }
+        for behavior_line in behavior_outcome.lines {
+            lines.push(behavior_line);
+        }
         if let Some(room) = self.objects.get(&target_id) {
             let ctx = DisplayContext::new(self.player_id.clone(), DisplayMode::Player)
                 .with_objects(self.objects.clone())
                 .with_anatomy(self.anatomy.clone())
                 .with_flags(DisplayFlags::BRIEF);
             lines.push(format_room_look_player(room, &ctx));
+        }
+        if let Some(mut player) = self.objects.get(&self.player_id).cloned() {
+            if let Some(regen) = crate::creature::apply_equipment_regen_on_enter(
+                &mut player,
+                &self.objects,
+                &self.anatomy,
+            ) {
+                self.objects.insert(self.player_id.clone(), player);
+                self.dirty.mark(&self.player_id);
+                lines.push(regen);
+            }
         }
         Ok(lines.join("\n"))
     }
@@ -336,7 +425,14 @@ impl Session {
             return Err(PlaceBuildError::NotAPlace(from.name.clone()));
         }
 
-        let result = dig_place(factory, &from, self.player_id.clone(), request, &self.objects).await?;
+        let result = dig_place(
+            factory,
+            &from,
+            self.player_id.clone(),
+            request,
+            &self.objects,
+        )
+        .await?;
         for id in apply_dig_result(&mut self.objects, &result) {
             self.dirty.mark(&id);
         }
@@ -350,6 +446,7 @@ impl Session {
         direction: &str,
         target_id: &ObjectId,
         reciprocal: bool,
+        return_exit: Option<&str>,
     ) -> Result<Vec<String>, PlaceBuildError> {
         let from = self
             .objects
@@ -376,6 +473,7 @@ impl Session {
             direction,
             &self.objects,
             reciprocal,
+            return_exit,
         )?;
         self.dirty.mark(&from_mut.id);
         self.dirty.mark(&target_mut.id);
@@ -401,12 +499,10 @@ impl Session {
             .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
         let removed = unlink_exit(from, direction)?;
         self.dirty.mark(from_id);
-        let dir = crate::world::navigation::normalize_direction(direction)
-            .unwrap_or(direction);
         Ok(format!(
             "Removed {} exit '{}'{}",
             from_name,
-            dir,
+            direction,
             removed
                 .and_then(|id| self.objects.get(&id).map(|o| format!(" (was {})", o.name)))
                 .unwrap_or_default()
@@ -447,7 +543,6 @@ mod tests {
     use crate::object::{PermissionFlags, StackableSpec};
     use crate::persistence::SqlitePersistence;
 
-
     fn bare(id: &str, name: &str) -> Object {
         Object {
             id: ObjectId::new(id),
@@ -478,14 +573,20 @@ mod tests {
                         capacity: 1,
                         slot_type: SlotType::Grasp,
                         hands: 1,
+                        effect: None,
                     },
                     BodySlotDef {
                         name: "right_hand".to_string(),
                         capacity: 1,
                         slot_type: SlotType::Grasp,
                         hands: 1,
+                        effect: None,
                     },
                 ],
+                max_health: 100,
+                base_max_weight: Some(100),
+                stats: HashMap::new(),
+                skills: HashMap::new(),
             },
         );
         anatomy
@@ -503,15 +604,15 @@ mod tests {
         let mut room = bare("room:void-001", "The Void");
         room.set_property_map(
             "exits",
-            HashMap::from([(
-                "north".to_string(),
-                ObjectId::new("room:north-001"),
-            )]),
+            HashMap::from([("north".to_string(), ObjectId::new("room:north-001"))]),
         );
 
         let mut north = bare("room:north-001", "North Passage");
         north.set_property_string("description", "A narrow passage north.");
         north.add_exit("south", room_id.clone());
+        north.set_exit_return("south", "north");
+        room.set_exit_alias("n", "north");
+        room.set_exit_return("north", "south");
 
         persistence.save_object(&player).await.unwrap();
         persistence.save_object(&room).await.unwrap();
@@ -616,13 +717,10 @@ mod tests {
         heavy.location = Some(player_id.clone());
 
         let mut boots = bare("item:boots-001", "Boots of Carrying");
-        boots.apply_wearable_role(&WearableSpec {
-            wear_slot: "left_foot".to_string(),
-            weight: 2.0,
-            volume: 2.0,
-            mod_max_weight: Some(25),
-            mod_encumbrance: Some(0.85),
-        });
+        let mut boot_spec = WearableSpec::new("left_foot", 2.0, 2.0);
+        boot_spec.mod_max_weight = Some(25);
+        boot_spec.mod_encumbrance = Some(0.85);
+        boots.apply_wearable_role(&boot_spec);
         boots.location = Some(player_id.clone());
 
         let player = session.object_mut(&player_id).unwrap();
@@ -717,7 +815,10 @@ mod tests {
 
         session.persist_changes(&persistence).await.unwrap();
         let bars = persistence.load_object(&bars_id).await.unwrap().unwrap();
-        assert_eq!(bars.location.as_ref().map(|id| id.as_str()), Some("room:void-001"));
+        assert_eq!(
+            bars.location.as_ref().map(|id| id.as_str()),
+            Some("room:void-001")
+        );
     }
 
     #[tokio::test]
@@ -737,6 +838,7 @@ mod tests {
                         place_type: Some("room".to_string()),
                         description: Some("A small side room.".to_string()),
                         reciprocal: Some(true),
+                        return_exit: None,
                     },
                 },
             )
@@ -746,10 +848,7 @@ mod tests {
         assert_eq!(result.new_place.name, "Side Chamber");
         assert!(result.new_place.is_room());
         let room = session.object(session.current_location().unwrap()).unwrap();
-        assert_eq!(
-            room.get_exits().get("east"),
-            Some(&result.new_place.id)
-        );
+        assert_eq!(room.get_exits().get("east"), Some(&result.new_place.id));
     }
 
     #[tokio::test]
@@ -781,6 +880,7 @@ mod tests {
             open: false,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             passable: None,
             transparent: None,
         });
@@ -793,8 +893,7 @@ mod tests {
         objects.insert(rear.id.clone(), rear);
         objects.insert(window.id.clone(), window);
 
-        let mut session =
-            Session::test_session(player_id, human_anatomy(), objects, Some(hall_id));
+        let mut session = Session::test_session(player_id, human_anatomy(), objects, Some(hall_id));
         session.go("east").unwrap();
         assert_eq!(session.current_location(), Some(&pantry_id));
     }

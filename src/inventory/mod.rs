@@ -1,19 +1,22 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 
+use crate::display::grammar::indefinite_article;
 use crate::display::{
     display_name_for_single_unit, format_stack_transfer_message, item_lookup_variants,
     name_looks_plural, resolve_object, stack_quantity_phrase, ResolveScope as LookupScope,
     StackRemainderLocation, TargetResolution,
 };
-use crate::display::grammar::indefinite_article;
 use crate::mudl::{slot_display_name, AnatomyRegistry, BodyPlan, SlotType};
 use crate::object::{LocationRef, Object, ObjectId};
+use crate::mudl::trigger_def::events::{ON_BREAK, ON_DROP, ON_HARVEST, ON_TAKE};
+use crate::world::events::{execute_event, emit_on_move_event, EventContext};
 use crate::world::move_manager::{
     move_object, move_to_container, move_to_grasp, move_to_room, MoveContext, MoveError, MoveHooks,
 };
 use crate::world::possession::{
-    grasp_action_phrase, is_carried_by as possession_is_carried_by, PossessionError,
+    clear_creature_slots_for_item, grasp_action_phrase, is_carried_by as possession_is_carried_by,
+    PossessionError,
 };
 
 /// Errors returned by inventory operations.
@@ -31,7 +34,10 @@ pub enum InventoryError {
     HandsFull,
     SlotFull(String),
     ContainerFull,
-    TypeNotAllowed { container: String, allowed: Vec<String> },
+    TypeNotAllowed {
+        container: String,
+        allowed: Vec<String>,
+    },
     ContainerClosed(String),
     ContainerLocked(String),
     NoLock(String),
@@ -50,6 +56,12 @@ pub enum InventoryError {
     InvalidTarget(String),
     /// Object has no readable text.
     NotReadable(String),
+    /// Object cannot be broken.
+    NotBreakable(String),
+    /// Breakable object was already destroyed.
+    AlreadyBroken(String),
+    /// Object cannot be harvested.
+    NotHarvestable(String),
 }
 
 impl fmt::Display for InventoryError {
@@ -96,6 +108,9 @@ impl fmt::Display for InventoryError {
             Self::NotReadable(name) => {
                 write!(f, "There's nothing to read on the {name}.")
             }
+            Self::NotBreakable(name) => write!(f, "The {name} can't be broken."),
+            Self::AlreadyBroken(name) => write!(f, "The {name} is already broken."),
+            Self::NotHarvestable(name) => write!(f, "You can't harvest from the {name}."),
         }
     }
 }
@@ -123,6 +138,64 @@ where
         dirty: ctx.dirty.as_deref_mut(),
     };
     f(&mut move_ctx).map_err(Into::into)
+}
+
+fn mark_dirty(ctx: &mut InventoryContext<'_>, id: &ObjectId) {
+    if let Some(dirty) = ctx.dirty.as_deref_mut() {
+        dirty.mark(id);
+    }
+}
+
+/// Soft-delete a one-time key and remove it from possession graphs.
+fn consume_key(ctx: &mut InventoryContext<'_>, key_id: &ObjectId) {
+    let Some(mut key) = ctx.objects.get(key_id).cloned() else {
+        return;
+    };
+    key.soft_delete();
+    ctx.objects.insert(key_id.clone(), key);
+    mark_dirty(ctx, key_id);
+
+    let creature_ids: Vec<ObjectId> = ctx
+        .objects
+        .values()
+        .filter(|obj| obj.is_active() && obj.has_creature_role())
+        .map(|obj| obj.id.clone())
+        .collect();
+    for creature_id in creature_ids {
+        clear_creature_slots_for_item(&creature_id, key_id, ctx.objects);
+        mark_dirty(ctx, &creature_id);
+    }
+
+    let container_ids: Vec<ObjectId> = ctx
+        .objects
+        .values()
+        .filter(|obj| obj.is_active() && obj.is_container())
+        .map(|obj| obj.id.clone())
+        .collect();
+    for container_id in container_ids {
+        let contains_key = ctx
+            .objects
+            .get(&container_id)
+            .is_some_and(|container| container.container_contents().contains(key_id));
+        if contains_key {
+            let mut container = ctx.objects.get(&container_id).unwrap().clone();
+            container.remove_from_list_property("contents", key_id);
+            ctx.objects.insert(container_id.clone(), container);
+            mark_dirty(ctx, &container_id);
+        }
+    }
+}
+
+/// Remove a spent lock mechanism from a gate so it cannot be secured again.
+fn consume_gate_lock(ctx: &mut InventoryContext<'_>, gate_id: &ObjectId) {
+    let Some(mut gate) = ctx.objects.get(gate_id).cloned() else {
+        return;
+    };
+    gate.properties.remove("lock_id");
+    gate.set_gate_locked(false);
+    gate.properties.remove("lock_consumable");
+    ctx.objects.insert(gate_id.clone(), gate);
+    mark_dirty(ctx, gate_id);
 }
 
 fn player_body_plan<'a>(
@@ -204,13 +277,7 @@ fn target_carried_by_player(
     objects: &HashMap<ObjectId, Object>,
 ) -> bool {
     matches!(
-        resolve_object(
-            name,
-            player_id,
-            None,
-            objects,
-            LookupScope::PossessionOnly,
-        ),
+        resolve_object(name, player_id, None, objects, LookupScope::PossessionOnly,),
         TargetResolution::Found(_)
     )
 }
@@ -295,9 +362,9 @@ where
     for name in &variants {
         match resolve_one(name) {
             Ok(id) => return Ok(id),
-            Err(InventoryError::AlreadyHolding(_)) => return Err(InventoryError::AlreadyHolding(
-                item_name.to_string(),
-            )),
+            Err(InventoryError::AlreadyHolding(_)) => {
+                return Err(InventoryError::AlreadyHolding(item_name.to_string()))
+            }
             Err(InventoryError::NotCarriedButOnGround(n)) => {
                 return Err(InventoryError::NotCarriedButOnGround(n));
             }
@@ -397,10 +464,7 @@ impl From<PossessionError> for InventoryError {
     }
 }
 
-pub fn take_item(
-    ctx: &mut InventoryContext<'_>,
-    args: &str,
-) -> Result<String, InventoryError> {
+pub fn take_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, InventoryError> {
     let req = parse_item_quantity_args(args)?;
     let room_id = ctx.room_id.ok_or(InventoryError::NoRoom)?.clone();
     let item_id = resolve_ground_item(ctx, &req.item_name, &room_id)?;
@@ -411,8 +475,12 @@ pub fn take_item(
         .ok_or_else(|| InventoryError::NotFound(req.item_name.clone()))?
         .clone();
 
-    if !crate::display::resolve::is_accessible_in_room(&item_id, &room_id, ctx.player_id, ctx.objects)
-    {
+    if !crate::display::resolve::is_accessible_in_room(
+        &item_id,
+        &room_id,
+        ctx.player_id,
+        ctx.objects,
+    ) {
         return Err(InventoryError::NotInRoom);
     }
     if is_carried_by(ctx.player_id, &item_id, ctx.objects) {
@@ -426,14 +494,12 @@ pub fn take_item(
     let src = crate::world::move_manager::resolve_location(&item_id, ctx.objects)
         .filter(|loc| match loc {
             LocationRef::Room(r) => r == &room_id,
-            LocationRef::Container(_, _) => {
-                crate::display::resolve::is_accessible_in_room(
-                    &item_id,
-                    &room_id,
-                    ctx.player_id,
-                    ctx.objects,
-                )
-            }
+            LocationRef::Container(_, _) => crate::display::resolve::is_accessible_in_room(
+                &item_id,
+                &room_id,
+                ctx.player_id,
+                ctx.objects,
+            ),
             _ => false,
         })
         .ok_or(InventoryError::NotInRoom)?;
@@ -459,18 +525,37 @@ pub fn take_item(
     } else {
         None
     };
-    Ok(format_stack_transfer_message(
+    let mut msg = format_stack_transfer_message(
         "pick up",
         &item,
         transferred,
         remainder,
-    ))
+    );
+    let actor_id = ctx.player_id.clone();
+    let take_outcome = execute_event(
+        ON_TAKE,
+        &EventContext {
+            actor_id: actor_id.clone(),
+            host_id: result.object_id.clone(),
+            room_id: Some(room_id.clone()),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    let move_outcome = emit_on_move_event(&actor_id, &result, ctx.objects, Some(ctx.anatomy));
+    for line in take_outcome
+        .lines
+        .into_iter()
+        .chain(move_outcome.lines)
+    {
+        msg.push('\n');
+        msg.push_str(&line);
+    }
+    Ok(msg)
 }
 
-pub fn drop_item(
-    ctx: &mut InventoryContext<'_>,
-    args: &str,
-) -> Result<String, InventoryError> {
+pub fn drop_item(ctx: &mut InventoryContext<'_>, args: &str) -> Result<String, InventoryError> {
     let req = parse_item_quantity_args(args)?;
     let room_id = ctx.room_id.ok_or(InventoryError::NoRoom)?.clone();
     let item_id = resolve_carried_item_with_variants(ctx, &req.item_name)?;
@@ -493,7 +578,9 @@ pub fn drop_item(
         }
     }
 
-    let result = with_move_ctx(ctx, |mctx| move_to_room(mctx, &item_id, &room_id, move_units))?;
+    let result = with_move_ctx(ctx, |mctx| {
+        move_to_room(mctx, &item_id, &room_id, move_units)
+    })?;
     let transferred = result.units_transferred.unwrap_or(units);
     let remainder_in_hand = ctx
         .objects
@@ -506,12 +593,34 @@ pub fn drop_item(
     } else {
         None
     };
-    Ok(format_stack_transfer_message(
+    let mut msg = format_stack_transfer_message(
         "drop",
         &item,
         transferred,
         remainder,
-    ))
+    );
+    let actor_id = ctx.player_id.clone();
+    let drop_outcome = execute_event(
+        ON_DROP,
+        &EventContext {
+            actor_id: actor_id.clone(),
+            host_id: result.object_id.clone(),
+            room_id: Some(room_id.clone()),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    let move_outcome = emit_on_move_event(&actor_id, &result, ctx.objects, Some(ctx.anatomy));
+    for line in drop_outcome
+        .lines
+        .into_iter()
+        .chain(move_outcome.lines)
+    {
+        msg.push('\n');
+        msg.push_str(&line);
+    }
+    Ok(msg)
 }
 
 /// Parsed `put [count] <item> in <container>` command.
@@ -596,17 +705,11 @@ pub fn format_put_message(
 fn format_remainder_in_hand_clause(item: &Object, count: u32) -> String {
     if count == 1 {
         let label = display_name_for_single_unit(&item.name);
-        format!(
-            "but {} remains in your hand",
-            indefinite_article(&label)
-        )
+        format!("but {} remains in your hand", indefinite_article(&label))
     } else {
         let mut snap = item.clone();
         snap.set_stack_count(count);
-        format!(
-            "but {} remain in your hand",
-            stack_quantity_phrase(&snap)
-        )
+        format!("but {} remain in your hand", stack_quantity_phrase(&snap))
     }
 }
 
@@ -808,11 +911,7 @@ struct KeyMatch {
     location_hint: String,
 }
 
-fn key_location_hint(
-    player: &Object,
-    key_id: &ObjectId,
-    container_hint: Option<&str>,
-) -> String {
+fn key_location_hint(player: &Object, key_id: &ObjectId, container_hint: Option<&str>) -> String {
     for (slot, id) in player.body_slots() {
         if id == *key_id {
             return format!("in your {}", slot_display_name(&slot));
@@ -911,10 +1010,7 @@ fn resolve_room_or_carried_container(
 }
 
 /// Resolve a door in the room or a container (carried or on the ground).
-fn resolve_gate_target(
-    ctx: &InventoryContext<'_>,
-    name: &str,
-) -> Result<ObjectId, InventoryError> {
+fn resolve_gate_target(ctx: &InventoryContext<'_>, name: &str) -> Result<ObjectId, InventoryError> {
     if let Some(room_id) = ctx.room_id {
         if let TargetResolution::Found(id) = resolve_object(
             name,
@@ -944,7 +1040,190 @@ fn resolve_gate_target(
     }
 }
 
+/// Unlock a door or container by resolved ID, firing `on_unlock` via `execute_event`.
+fn unlock_gate(
+    ctx: &mut InventoryContext<'_>,
+    gate_id: &ObjectId,
+    key_name: Option<&str>,
+) -> Result<Vec<String>, InventoryError> {
+    let gate = ctx
+        .objects
+        .get(gate_id)
+        .ok_or_else(|| InventoryError::NotFound(gate_id.as_str().to_string()))?
+        .clone();
+
+    if !gate.gate_has_lock() {
+        return Err(InventoryError::NoLock(gate.name.to_lowercase()));
+    }
+    if !gate.gate_is_locked() {
+        return Ok(vec![format!(
+            "The {} is already unlocked.",
+            gate.name.to_lowercase()
+        )]);
+    }
+
+    let key_id = match key_name {
+        Some(name) => {
+            let room_id = ctx.room_id.cloned();
+            resolve_inventory_target(
+                name,
+                room_id.as_ref(),
+                ctx.player_id,
+                ctx.objects,
+                ResolveScope::CarriedOrGround,
+            )?
+        }
+        None => {
+            let matches = find_matching_keys_in_possession(ctx.player_id, &gate, ctx.objects);
+            match matches.len() {
+                0 => {
+                    return Err(InventoryError::NoMatchingKey(gate.name.to_lowercase()));
+                }
+                1 => matches[0].id.clone(),
+                _ => {
+                    return Err(InventoryError::InvalidTarget(
+                        format_ambiguous_keys_message(&gate.name, &matches, ctx.objects),
+                    ));
+                }
+            }
+        }
+    };
+
+    let key = ctx
+        .objects
+        .get(&key_id)
+        .ok_or_else(|| InventoryError::NotFound(key_name.unwrap_or("key").to_string()))?
+        .clone();
+
+    if !key.is_key() {
+        return Err(InventoryError::NotKey(key.name.to_lowercase()));
+    }
+    if !Object::key_unlocks_gate(&key, &gate) {
+        return Err(InventoryError::WrongKey(key.name.to_lowercase()));
+    }
+
+    let key_consumable = key.key_consumable();
+    let lock_consumable = gate.lock_consumable();
+    let key_display = key.name.to_lowercase();
+    let gate_display = gate.name.to_lowercase();
+
+    let mut gate = gate;
+    gate.set_gate_locked(false);
+    ctx.objects.insert(gate_id.clone(), gate.clone());
+    mark_dirty(ctx, gate_id);
+
+    let mut lines = vec![format!(
+        "You unlock the {gate_display} with the {key_display}."
+    )];
+
+    if key_consumable {
+        consume_key(ctx, &key_id);
+        lines.push(format!(
+            "The {key_display} crumbles away as its magic is spent."
+        ));
+    }
+    if lock_consumable {
+        consume_gate_lock(ctx, gate_id);
+        lines.push(format!(
+            "The binding on the {gate_display} dissolves — it cannot be secured again."
+        ));
+    }
+
+    let unlock_outcome = execute_event(
+        crate::mudl::trigger_def::events::ON_UNLOCK,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: gate_id.clone(),
+            room_id: ctx.room_id.cloned(),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(unlock_outcome.lines);
+    for id in unlock_outcome.dirty {
+        mark_dirty(ctx, &id);
+    }
+    Ok(lines)
+}
+
+/// Open a door or container by resolved ID, firing `on_open` via `execute_event` (full script semantics).
+fn open_gate(
+    ctx: &mut InventoryContext<'_>,
+    gate_id: &ObjectId,
+) -> Result<Vec<String>, InventoryError> {
+    let gate = ctx
+        .objects
+        .get(gate_id)
+        .ok_or_else(|| InventoryError::NotFound(gate_id.as_str().to_string()))?
+        .clone();
+
+    let display = gate.name.to_lowercase();
+    if gate.gate_is_open() {
+        return Ok(vec![format!("The {display} is already open.")]);
+    }
+    if gate.gate_is_locked() {
+        return Err(InventoryError::ContainerLocked(display));
+    }
+
+    let mut gate = gate;
+    gate.set_gate_open(true);
+    ctx.objects.insert(gate_id.clone(), gate.clone());
+    mark_dirty(ctx, gate_id);
+
+    let gate = ctx.objects.get(gate_id).unwrap();
+    let mut lines = vec![if gate.is_container() {
+        crate::display::format_open_container_message(gate, ctx.objects)
+    } else {
+        format!("You open the {display}.")
+    }];
+    let open_outcome = execute_event(
+        crate::mudl::trigger_def::events::ON_OPEN,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: gate_id.clone(),
+            room_id: ctx.room_id.cloned(),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(open_outcome.lines);
+    for id in open_outcome.dirty {
+        mark_dirty(ctx, &id);
+    }
+
+    Ok(lines)
+}
+
+/// Unlock (if needed) and open a gate so passage is allowed — used when moving through a portal.
+pub fn prepare_gate_for_passage(
+    ctx: &mut InventoryContext<'_>,
+    gate_id: &ObjectId,
+) -> Result<Vec<String>, InventoryError> {
+    let gate = ctx
+        .objects
+        .get(gate_id)
+        .ok_or_else(|| InventoryError::NotFound(gate_id.as_str().to_string()))?
+        .clone();
+
+    let mut lines = Vec::new();
+    if gate.gate_is_locked() {
+        lines.extend(unlock_gate(ctx, gate_id, None)?);
+    }
+    let gate = ctx
+        .objects
+        .get(gate_id)
+        .ok_or_else(|| InventoryError::NotFound(gate_id.as_str().to_string()))?;
+    if !gate.gate_is_open() {
+        lines.extend(open_gate(ctx, gate_id)?);
+    }
+    Ok(lines)
+}
+
 /// Open a door or container on the ground or in your possession.
+///
+/// When the target is locked, automatically unlocks with a matching key in possession if possible.
 pub fn open_container(
     ctx: &mut InventoryContext<'_>,
     target_name: &str,
@@ -960,22 +1239,13 @@ pub fn open_container(
     if gate.gate_is_open() {
         return Ok(format!("The {display} is already open."));
     }
+
+    let mut lines = Vec::new();
     if gate.gate_is_locked() {
-        return Err(InventoryError::ContainerLocked(display));
+        lines.extend(unlock_gate(ctx, &gate_id, None)?);
     }
-
-    let mut gate = gate;
-    gate.set_gate_open(true);
-    ctx.objects.insert(gate_id.clone(), gate);
-
-    let gate = ctx.objects.get(&gate_id).unwrap();
-    if gate.is_container() {
-        return Ok(crate::display::format_open_container_message(
-            gate,
-            ctx.objects,
-        ));
-    }
-    Ok(format!("You open the {display}."))
+    lines.extend(open_gate(ctx, &gate_id)?);
+    Ok(lines.join("\n"))
 }
 
 /// Close a door or container on the ground or in your possession.
@@ -1048,73 +1318,8 @@ pub fn unlock_container(
     key_name: Option<&str>,
 ) -> Result<String, InventoryError> {
     let gate_id = resolve_gate_target(ctx, target_name)?;
-    let gate = ctx
-        .objects
-        .get(&gate_id)
-        .ok_or_else(|| InventoryError::NotFound(target_name.to_string()))?
-        .clone();
-
-    if !gate.gate_has_lock() {
-        return Err(InventoryError::NoLock(gate.name.to_lowercase()));
-    }
-    if !gate.gate_is_locked() {
-        return Ok(format!(
-            "The {} is already unlocked.",
-            gate.name.to_lowercase()
-        ));
-    }
-
-    let key_id = match key_name {
-        Some(name) => {
-            let room_id = ctx.room_id.cloned();
-            resolve_inventory_target(
-                name,
-                room_id.as_ref(),
-                ctx.player_id,
-                ctx.objects,
-                ResolveScope::CarriedOrGround,
-            )?
-        }
-        None => {
-            let matches = find_matching_keys_in_possession(ctx.player_id, &gate, ctx.objects);
-            match matches.len() {
-                0 => {
-                    return Err(InventoryError::NoMatchingKey(
-                        gate.name.to_lowercase(),
-                    ));
-                }
-                1 => matches[0].id.clone(),
-                _ => {
-                    return Err(InventoryError::InvalidTarget(
-                        format_ambiguous_keys_message(&gate.name, &matches, ctx.objects),
-                    ));
-                }
-            }
-        }
-    };
-
-    let key = ctx
-        .objects
-        .get(&key_id)
-        .ok_or_else(|| InventoryError::NotFound(key_name.unwrap_or("key").to_string()))?
-        .clone();
-
-    if !key.is_key() {
-        return Err(InventoryError::NotKey(key.name.to_lowercase()));
-    }
-    if !Object::key_unlocks_gate(&key, &gate) {
-        return Err(InventoryError::WrongKey(key.name.to_lowercase()));
-    }
-
-    let mut gate = gate;
-    gate.set_gate_locked(false);
-    ctx.objects.insert(gate_id, gate.clone());
-
-    Ok(format!(
-        "You unlock the {} with the {}.",
-        gate.name.to_lowercase(),
-        key.name.to_lowercase()
-    ))
+    let lines = unlock_gate(ctx, &gate_id, key_name)?;
+    Ok(lines.join("\n"))
 }
 
 /// Read text from an object in the room or in your possession.
@@ -1153,6 +1358,132 @@ pub fn read_item(ctx: &InventoryContext<'_>, item_name: &str) -> Result<String, 
 
     crate::display::format_read_message(&item)
         .ok_or_else(|| InventoryError::NotReadable(item.name.to_lowercase()))
+}
+
+/// Break a breakable object in the room or in your possession.
+///
+/// Destroys attached creature spawners, despawns their creatures, and fires `on_break` loot spawners.
+pub fn break_item(
+    ctx: &mut InventoryContext<'_>,
+    item_name: &str,
+) -> Result<String, InventoryError> {
+    let room_id = ctx.room_id.cloned();
+    let item_id = resolve_inventory_target(
+        item_name,
+        room_id.as_ref(),
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::CarriedOrGround,
+    )?;
+
+    let item = ctx
+        .objects
+        .get(&item_id)
+        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?
+        .clone();
+
+    if let Some(room) = ctx.room_id {
+        if !is_carried_by(ctx.player_id, &item_id, ctx.objects)
+            && !crate::display::resolve::is_accessible_in_room(
+                &item_id,
+                room,
+                ctx.player_id,
+                ctx.objects,
+            )
+        {
+            return Err(InventoryError::NotFound(item_name.to_string()));
+        }
+    }
+
+    let display = item.name.to_lowercase();
+    if !item.is_active() {
+        return Err(InventoryError::AlreadyBroken(display));
+    }
+    if !item.is_breakable() {
+        return Err(InventoryError::NotBreakable(display));
+    }
+
+    let mut lines = vec![item
+        .break_text()
+        .unwrap_or_else(|| format!("You break the {display}."))];
+
+    let break_outcome = execute_event(
+        ON_BREAK,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: item_id.clone(),
+            room_id: room_id.clone(),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(break_outcome.lines);
+
+    let spawner_ids = crate::creature::destroy_spawners_for_target(&item_id, ctx.objects);
+    for spawner_id in &spawner_ids {
+        mark_dirty(ctx, spawner_id);
+    }
+
+    if let Some(item) = ctx.objects.get_mut(&item_id) {
+        item.soft_delete();
+        mark_dirty(ctx, &item_id);
+    }
+
+    for id in break_outcome.dirty {
+        mark_dirty(ctx, &id);
+    }
+
+    Ok(lines.join("\n"))
+}
+
+/// Harvest renewable resources from a harvestable object in the room.
+pub fn harvest_item(
+    ctx: &mut InventoryContext<'_>,
+    item_name: &str,
+) -> Result<String, InventoryError> {
+    let room_id = ctx.room_id.cloned().ok_or(InventoryError::NoRoom)?;
+    let item_id = resolve_inventory_target(
+        item_name,
+        Some(&room_id),
+        ctx.player_id,
+        ctx.objects,
+        ResolveScope::Ground,
+    )?;
+
+    let item = ctx
+        .objects
+        .get(&item_id)
+        .ok_or_else(|| InventoryError::NotFound(item_name.to_string()))?
+        .clone();
+
+    let display = item.name.to_lowercase();
+    if !item.is_active() {
+        return Err(InventoryError::NotFound(item_name.to_string()));
+    }
+    if !item.get_bool_property("harvestable").unwrap_or(false) {
+        return Err(InventoryError::NotHarvestable(display));
+    }
+
+    let mut lines = vec![format!("You harvest from the {display}.")];
+    let harvest_outcome = execute_event(
+        ON_HARVEST,
+        &EventContext {
+            actor_id: ctx.player_id.clone(),
+            host_id: item_id.clone(),
+            room_id: Some(room_id),
+            target_id: None,
+        },
+        ctx.objects,
+        Some(ctx.anatomy),
+    );
+    lines.extend(harvest_outcome.lines);
+
+    for id in harvest_outcome.dirty {
+        mark_dirty(ctx, &id);
+    }
+
+    Ok(lines.join("\n"))
 }
 
 pub fn wield_item(
@@ -1403,7 +1734,10 @@ pub fn describe_inventory(
                 } else {
                     format!("in your {}", slot_display_name(slot))
                 };
-                let mut line = format!("  {label} — {placement}", label = crate::display::format_stackable_label(obj));
+                let mut line = format!(
+                    "  {label} — {placement}",
+                    label = crate::display::format_stackable_label(obj)
+                );
                 if obj.is_container() && !obj.container_is_open() {
                     line.push_str(" (closed)");
                 }
@@ -1792,10 +2126,7 @@ mod tests {
         };
 
         let msg = take_item(&mut ctx, "10 gold bars").unwrap();
-        assert_eq!(
-            msg,
-            "You pick up 5 gold bars, but leave 5 on the ground."
-        );
+        assert_eq!(msg, "You pick up 5 gold bars, but leave 5 on the ground.");
 
         let ground = objects.get(&ObjectId::new("item:bars-001")).unwrap();
         assert_eq!(ground.stack_count(), 5);
@@ -1822,7 +2153,10 @@ mod tests {
         ground.location = Some(room_id.clone());
         let ground_id = ground.id.clone();
 
-        let mut sword = factory.create_item("sword", player_id.clone()).await.unwrap();
+        let mut sword = factory
+            .create_item("sword", player_id.clone())
+            .await
+            .unwrap();
         sword.name = "Rusty Sword".to_string();
         sword.set_property_string("hand_slot", "right");
         sword.location = Some(player_id.clone());
@@ -1850,7 +2184,7 @@ mod tests {
         let merged = objects.get(&held_id).unwrap();
         assert_eq!(merged.stack_count(), 10);
         assert_eq!(merged.location.as_ref(), Some(&player_id));
-        assert!(objects.get(&ground_id).is_none());
+        assert!(!objects.contains_key(&ground_id));
     }
 
     #[tokio::test]
@@ -1989,7 +2323,10 @@ mod tests {
         let main = ctx.objects.get(&main_id).unwrap();
         assert_eq!(main.stack_count(), 98);
         assert_eq!(main.location.as_ref(), Some(&room_id));
-        assert_eq!(ctx.objects.get(&split_id).unwrap().location.as_ref(), Some(&room_id));
+        assert_eq!(
+            ctx.objects.get(&split_id).unwrap().location.as_ref(),
+            Some(&room_id)
+        );
 
         take_item(&mut ctx, &format!("6 {}", short_id(&split_id))).unwrap();
         let player = ctx.objects.get(&player_id).unwrap();
@@ -2025,7 +2362,10 @@ mod tests {
         ground.set_property_int("weight", 0);
         ground.location = Some(room_id.clone());
 
-        let mut sword = factory.create_item("sword", player_id.clone()).await.unwrap();
+        let mut sword = factory
+            .create_item("sword", player_id.clone())
+            .await
+            .unwrap();
         sword.name = "Sword".to_string();
         sword.set_property_int("weight", 0);
         sword.location = Some(player_id.clone());
@@ -2116,8 +2456,10 @@ mod tests {
         let player = ctx.objects.get(&player_id).unwrap();
         let summary = format_look_self_summary(player, ctx.objects, &anatomy);
         assert!(summary.contains("gold bar"));
-        assert!(player.body_slot_item("right_hand").is_some()
-            || player.body_slot_item("left_hand").is_some());
+        assert!(
+            player.body_slot_item("right_hand").is_some()
+                || player.body_slot_item("left_hand").is_some()
+        );
     }
 
     #[tokio::test]
@@ -2166,7 +2508,11 @@ mod tests {
             .unwrap()
             .id
             .clone();
-        take_item(&mut ctx, &format!("1 {}", crate::display::short_id(&split_id))).unwrap();
+        take_item(
+            &mut ctx,
+            &format!("1 {}", crate::display::short_id(&split_id)),
+        )
+        .unwrap();
         let player = ctx.objects.get(&player_id).unwrap();
         assert!(
             player.body_slot_item("right_hand").is_some()
@@ -2542,12 +2888,11 @@ mod tests {
             .create_wearable(
                 "Boots of Carrying",
                 player_id.clone(),
-                WearableSpec {
-                    wear_slot: "left_foot".to_string(),
-                    weight: 2.0,
-                    volume: 2.0,
-                    mod_max_weight: Some(25),
-                    mod_encumbrance: Some(0.85),
+                {
+                    let mut spec = WearableSpec::new("left_foot", 2.0, 2.0);
+                    spec.mod_max_weight = Some(25);
+                    spec.mod_encumbrance = Some(0.85);
+                    spec
                 },
                 None,
             )
@@ -2635,7 +2980,7 @@ mod tests {
                     max_volume: None,
                     wearable: true,
                     wear_slot: Some("torso".to_string()),
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -2728,7 +3073,7 @@ mod tests {
 
     #[test]
     fn format_put_message_ground_container() {
-        let mut note = Object {
+        let note = Object {
             id: ObjectId::new("item:note-001"),
             name: "folded note".to_string(),
             aliases: Vec::new(),
@@ -2874,13 +3219,12 @@ mod tests {
 
         let msg = put_item(&mut ctx, "note", "chest", None).unwrap();
         assert_eq!(msg, "You put a folded note in the travel chest.");
-        assert!(
-            ctx.objects
-                .get(&chest_id)
-                .unwrap()
-                .container_contents()
-                .contains(&note_id)
-        );
+        assert!(ctx
+            .objects
+            .get(&chest_id)
+            .unwrap()
+            .container_contents()
+            .contains(&note_id));
     }
 
     #[tokio::test]
@@ -2972,7 +3316,7 @@ mod tests {
                     max_volume: None,
                     wearable: true,
                     wear_slot: Some("torso".to_string()),
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -3122,7 +3466,7 @@ mod tests {
                     max_volume: None,
                     wearable: false,
                     wear_slot: None,
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -3198,7 +3542,7 @@ mod tests {
                     max_volume: None,
                     wearable: true,
                     wear_slot: Some("torso".to_string()),
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -3249,8 +3593,11 @@ mod tests {
 
         let merged = objects.get(&in_purse_id).unwrap();
         assert_eq!(merged.stack_count(), 12);
-        assert!(objects.get(&in_hand_id).is_none());
-        assert_eq!(objects.get(&purse_id).unwrap().container_contents().len(), 1);
+        assert!(!objects.contains_key(&in_hand_id));
+        assert_eq!(
+            objects.get(&purse_id).unwrap().container_contents().len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -3267,7 +3614,7 @@ mod tests {
                     max_volume: None,
                     wearable: false,
                     wear_slot: None,
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -3372,7 +3719,7 @@ mod tests {
     async fn put_into_closed_container_is_blocked() {
         let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
 
-        let mut purse = factory
+        let purse = factory
             .create_container_with_spec(
                 "purse",
                 player_id.clone(),
@@ -3445,7 +3792,12 @@ mod tests {
 
         let msg = close_container(&mut ctx, "chest").unwrap();
         assert_eq!(msg, "You close the chest.");
-        assert!(!ctx.objects.values().find(|o| o.name == "chest").unwrap().container_is_open());
+        assert!(!ctx
+            .objects
+            .values()
+            .find(|o| o.name == "chest")
+            .unwrap()
+            .container_is_open());
     }
 
     #[tokio::test]
@@ -3637,16 +3989,20 @@ mod tests {
         let lock_msg = lock_container(&mut ctx, "chest").unwrap();
         assert_eq!(lock_msg, "You lock the travel chest.");
 
-        let err = open_container(&mut ctx, "chest").unwrap_err();
-        assert_eq!(err, InventoryError::ContainerLocked("travel chest".to_string()));
-
-        let unlock_msg = unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
-        assert_eq!(unlock_msg, "You unlock the travel chest with the brass key.");
-
         let open_msg = open_container(&mut ctx, "chest").unwrap();
-        assert_eq!(open_msg, "You open the travel chest. It is empty.");
+        assert!(open_msg.contains("unlock the travel chest with the brass key"));
+        assert_eq!(
+            open_msg.lines().last().unwrap(),
+            "You open the travel chest. It is empty."
+        );
 
+        drop_item(&mut ctx, "brass key").unwrap();
         let lock_open_msg = lock_container(&mut ctx, "chest").unwrap();
+        let err = open_container(&mut ctx, "chest").unwrap_err();
+        assert_eq!(
+            err,
+            InventoryError::NoMatchingKey("travel chest".to_string())
+        );
         assert_eq!(lock_open_msg, "You close the travel chest and lock it.");
         let chest = ctx.objects.get(&chest_id).unwrap();
         assert!(!chest.container_is_open());
@@ -3900,6 +4256,217 @@ mod tests {
 
         let err = unlock_container(&mut ctx, "chest", None).unwrap_err();
         assert_eq!(err, InventoryError::NoMatchingKey("chest".to_string()));
+    }
+
+    #[tokio::test]
+    async fn consumable_key_is_destroyed_on_unlock() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let mut key = factory
+            .create_key("whisper charm", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+        key.apply_key_role(&crate::object::KeySpec::new("chest-lock").consumable());
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(key.id.clone(), key.clone());
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = unlock_container(&mut ctx, "chest", None).unwrap();
+        assert!(msg.contains("crumbles away"));
+        let key = ctx.objects.get(&key.id).unwrap();
+        assert!(key.is_deleted);
+        assert!(!ctx
+            .objects
+            .get(&player_id)
+            .unwrap()
+            .body_slots()
+            .values()
+            .any(|id| id == &key.id));
+    }
+
+    #[tokio::test]
+    async fn consumable_lock_is_removed_on_unlock() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    lock_consumable: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest.clone());
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = unlock_container(&mut ctx, "chest", None).unwrap();
+        assert!(msg.contains("cannot be secured again"));
+        let chest = ctx.objects.get(&chest.id).unwrap();
+        assert!(!chest.gate_has_lock());
+        assert!(!chest.gate_is_locked());
+    }
+
+    #[tokio::test]
+    async fn open_auto_unlocks_with_key_in_hand() {
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest.clone());
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = open_container(&mut ctx, "chest").unwrap();
+        assert!(msg.contains("unlock the travel chest with the brass key"));
+        assert!(msg.contains("open the travel chest"));
+        let chest = ctx.objects.get(&chest.id).unwrap();
+        assert!(!chest.gate_is_locked());
+        assert!(chest.gate_is_open());
+    }
+
+    #[tokio::test]
+    async fn open_unlock_and_open_fire_gate_events_in_order() {
+        use crate::object::{Behavior, PermissionFlags};
+
+        let (factory, anatomy, player_id, room_id, mut objects) = setup_world().await;
+
+        let mut chest = factory
+            .create_container_with_spec(
+                "travel chest",
+                player_id.clone(),
+                crate::object::ContainerSpec {
+                    open: false,
+                    lock_id: Some("chest-lock".to_string()),
+                    locked: true,
+                    ..crate::object::ContainerSpec::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        chest.location = Some(room_id.clone());
+        chest.add_event_handler(
+            "on_unlock".to_string(),
+            Behavior {
+                code: "narrate The lock yields with a soft click.".to_string(),
+                permissions: PermissionFlags::EVERYONE,
+            },
+        );
+        chest.add_event_handler(
+            "on_open".to_string(),
+            Behavior {
+                code: "narrate The lid lifts with a groan.".to_string(),
+                permissions: PermissionFlags::EVERYONE,
+            },
+        );
+
+        let key = factory
+            .create_key("brass key", player_id.clone(), "chest-lock", None)
+            .await
+            .unwrap();
+
+        let mut player = objects.get(&player_id).unwrap().clone();
+        player.set_body_slot("right_hand", Some(key.id.clone()));
+        objects.insert(player_id.clone(), player);
+        objects.insert(chest.id.clone(), chest);
+        objects.insert(key.id.clone(), key);
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&room_id),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        let msg = open_container(&mut ctx, "chest").unwrap();
+        let lines: Vec<&str> = msg.lines().collect();
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], "You unlock the travel chest with the brass key.");
+        assert_eq!(lines[1], "The lock yields with a soft click.");
+        assert_eq!(lines[2], "You open the travel chest. It is empty.");
+        assert_eq!(lines[3], "The lid lifts with a groan.");
     }
 
     #[tokio::test]

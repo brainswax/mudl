@@ -39,6 +39,8 @@ pub struct ContainerSpec {
     pub lock_id: Option<String>,
     /// Whether the container starts locked (requires `lock_id`).
     pub locked: bool,
+    /// When true, the lock mechanism is spent after a successful unlock and cannot be used again.
+    pub lock_consumable: bool,
     /// When set, only items matching at least one type tag may be placed inside (e.g. `key`).
     pub allowed_types: Option<Vec<String>>,
 }
@@ -54,6 +56,7 @@ impl Default for ContainerSpec {
             open: true,
             lock_id: None,
             locked: false,
+            lock_consumable: false,
             allowed_types: None,
         }
     }
@@ -99,6 +102,29 @@ pub fn parse_allowed_types(value: &str) -> Vec<String> {
 #[derive(Debug, Clone)]
 pub struct KeySpec {
     pub lock_id: String,
+    /// When true, the key is destroyed after a successful unlock.
+    pub consumable: bool,
+}
+
+impl KeySpec {
+    pub fn new(lock_id: impl Into<String>) -> Self {
+        Self {
+            lock_id: lock_id.into(),
+            consumable: false,
+        }
+    }
+
+    pub fn consumable(mut self) -> Self {
+        self.consumable = true;
+        self
+    }
+}
+
+/// Configuration for a breakable prop — smashing it can disable spawners and drop loot.
+#[derive(Debug, Clone, Default)]
+pub struct BreakableSpec {
+    /// Optional custom narrative when the object is broken.
+    pub break_text: Option<String>,
 }
 
 /// Kind of exit portal — doors, windows, and future teleporters share one model.
@@ -157,10 +183,32 @@ pub struct PortalSpec {
     pub open: bool,
     pub lock_id: Option<String>,
     pub locked: bool,
+    /// When true, the lock mechanism is spent after a successful unlock.
+    pub lock_consumable: bool,
     /// When set, overrides the kind default (windows are not passable by default).
     pub passable: Option<bool>,
     /// When set, overrides the kind default (windows are transparent by default).
     pub transparent: Option<bool>,
+}
+
+impl PortalSpec {
+    pub fn new(
+        kind: PortalKind,
+        direction: impl Into<String>,
+        destination: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            direction: direction.into(),
+            destination: destination.into(),
+            open: false,
+            lock_id: None,
+            locked: false,
+            lock_consumable: false,
+            passable: None,
+            transparent: None,
+        }
+    }
 }
 
 /// Configuration for a door — convenience wrapper around [`PortalSpec`].
@@ -174,6 +222,21 @@ pub struct DoorSpec {
     pub open: bool,
     pub lock_id: Option<String>,
     pub locked: bool,
+    /// When true, the lock mechanism is spent after a successful unlock.
+    pub lock_consumable: bool,
+}
+
+impl DoorSpec {
+    pub fn new(direction: impl Into<String>, destination: impl Into<String>) -> Self {
+        Self {
+            direction: direction.into(),
+            destination: destination.into(),
+            open: false,
+            lock_id: None,
+            locked: false,
+            lock_consumable: false,
+        }
+    }
 }
 
 /// Configuration for a wearable role.
@@ -186,6 +249,27 @@ pub struct WearableSpec {
     pub mod_max_weight: Option<i64>,
     /// Encumbrance multiplier while equipped (`0.85` = 15% lighter feel for movement).
     pub mod_encumbrance: Option<f64>,
+    /// Additive bonus to effective max health while equipped.
+    pub mod_max_health: Option<i64>,
+    pub stat_mods: HashMap<String, i64>,
+    pub skill_mods: HashMap<String, i64>,
+    pub grant_effects: Vec<String>,
+}
+
+impl WearableSpec {
+    pub fn new(wear_slot: impl Into<String>, weight: f64, volume: f64) -> Self {
+        Self {
+            wear_slot: wear_slot.into(),
+            weight,
+            volume,
+            mod_max_weight: None,
+            mod_encumbrance: None,
+            mod_max_health: None,
+            stat_mods: HashMap::new(),
+            skill_mods: HashMap::new(),
+            grant_effects: Vec::new(),
+        }
+    }
 }
 
 /// Physical attributes for a generic item.
@@ -392,15 +476,42 @@ impl Object {
             .filter(|id| !id.trim().is_empty())
     }
 
+    pub fn key_consumable(&self) -> bool {
+        self.get_bool_property("key_consumable").unwrap_or(false)
+    }
+
+    pub fn lock_consumable(&self) -> bool {
+        self.get_bool_property("lock_consumable").unwrap_or(false)
+    }
+
     pub fn apply_key_role(&mut self, spec: &KeySpec) {
         self.set_property_bool("is_key", true);
         self.set_property_string("lock_id", &spec.lock_id);
+        if spec.consumable {
+            self.set_property_bool("key_consumable", true);
+        }
         self.set_property_bool("is_pocketable", true);
         if self.get_numeric_property("weight").is_none() {
             self.set_property_numeric("weight", 0.1);
         }
         if self.get_numeric_property("volume").is_none() {
             self.set_property_numeric("volume", 0.1);
+        }
+    }
+
+    pub fn is_breakable(&self) -> bool {
+        self.get_bool_property("is_breakable").unwrap_or(false)
+    }
+
+    pub fn break_text(&self) -> Option<String> {
+        self.get_string_property("break_text")
+            .filter(|text| !text.trim().is_empty())
+    }
+
+    pub fn apply_breakable_role(&mut self, spec: &BreakableSpec) {
+        self.set_property_bool("is_breakable", true);
+        if let Some(text) = &spec.break_text {
+            self.set_property_string("break_text", text);
         }
     }
 
@@ -506,7 +617,8 @@ impl Object {
         self.set_property_bool("is_open", spec.open);
         self.set_property_bool(
             "portal_passable",
-            spec.passable.unwrap_or_else(|| spec.kind.default_passable()),
+            spec.passable
+                .unwrap_or_else(|| spec.kind.default_passable()),
         );
         self.set_property_bool(
             "portal_transparent",
@@ -517,6 +629,9 @@ impl Object {
         if let Some(ref lock_id) = spec.lock_id {
             self.set_container_lock_id(lock_id);
             self.set_container_locked(spec.locked);
+            if spec.lock_consumable {
+                self.set_property_bool("lock_consumable", true);
+            }
         }
         let (default_weight, default_volume) = match spec.kind {
             PortalKind::Window => (2.0, 1.0),
@@ -539,6 +654,7 @@ impl Object {
             open: spec.open,
             lock_id: spec.lock_id.clone(),
             locked: spec.locked,
+            lock_consumable: spec.lock_consumable,
             passable: None,
             transparent: None,
         });
@@ -613,6 +729,9 @@ impl Object {
         if let Some(ref lock_id) = spec.lock_id {
             self.set_container_lock_id(lock_id);
             self.set_container_locked(spec.locked);
+            if spec.lock_consumable {
+                self.set_property_bool("lock_consumable", true);
+            }
         }
         if let Some(ref types) = spec.allowed_types {
             if !types.is_empty() {
@@ -633,6 +752,50 @@ impl Object {
         self.set_property_numeric("weight", spec.weight);
         self.set_property_numeric("volume", spec.volume);
         self.apply_carry_modifiers(spec.mod_max_weight, spec.mod_encumbrance);
+        self.apply_equipment_mods(
+            spec.mod_max_health,
+            spec.stat_mods.clone(),
+            spec.skill_mods.clone(),
+            spec.grant_effects.clone(),
+        );
+    }
+
+    /// Apply stat/skill/health modifiers and granted effects (wearable or wielded gear).
+    pub fn apply_equipment_mods(
+        &mut self,
+        mod_max_health: Option<i64>,
+        stat_mods: HashMap<String, i64>,
+        skill_mods: HashMap<String, i64>,
+        grant_effects: Vec<String>,
+    ) {
+        if let Some(bonus) = mod_max_health.filter(|b| *b != 0) {
+            self.set_property_int("mod_max_health", bonus);
+        }
+        if !stat_mods.is_empty() {
+            self.set_int_map("mod_stats", stat_mods);
+        }
+        if !skill_mods.is_empty() {
+            self.set_int_map("mod_skills", skill_mods);
+        }
+        if !grant_effects.is_empty() {
+            self.set_string_list("grant_effects", grant_effects);
+        }
+    }
+
+    pub fn equipment_max_health_bonus(&self) -> i64 {
+        self.get_int_property("mod_max_health").unwrap_or(0)
+    }
+
+    pub fn equipment_stat_mods(&self) -> HashMap<String, i64> {
+        self.get_int_map("mod_stats")
+    }
+
+    pub fn equipment_skill_mods(&self) -> HashMap<String, i64> {
+        self.get_int_map("mod_skills")
+    }
+
+    pub fn equipment_grant_effects(&self) -> Vec<String> {
+        self.get_string_list("grant_effects")
     }
 
     /// Apply carry-capacity / encumbrance modifiers (wearable equipment).
@@ -644,7 +807,8 @@ impl Object {
         if let Some(bonus) = max_weight_bonus.filter(|b| *b != 0) {
             self.set_property_int("mod_max_weight", bonus);
         }
-        if let Some(factor) = encumbrance_factor.filter(|f| f.is_finite() && (*f - 1.0).abs() > 1e-9)
+        if let Some(factor) =
+            encumbrance_factor.filter(|f| f.is_finite() && (*f - 1.0).abs() > 1e-9)
         {
             self.set_property_numeric("mod_encumbrance", factor);
         }
@@ -663,8 +827,7 @@ impl Object {
     }
 
     pub fn has_carry_modifiers(&self) -> bool {
-        self.carry_max_weight_bonus() != 0
-            || (self.carry_encumbrance_factor() - 1.0).abs() > 1e-9
+        self.carry_max_weight_bonus() != 0 || (self.carry_encumbrance_factor() - 1.0).abs() > 1e-9
     }
 
     pub fn apply_item_phys(&mut self, spec: &ItemPhysSpec) {
@@ -815,15 +978,117 @@ impl Object {
         })
     }
 
+    pub fn get_float_property(&self, name: &str) -> Option<f64> {
+        self.get_numeric_property(name)
+    }
+
+    pub fn set_int_map(&mut self, name: &str, map: HashMap<String, i64>) {
+        let value_map: HashMap<String, Value> =
+            map.into_iter().map(|(k, v)| (k, Value::Int(v))).collect();
+        self.add_property(Property {
+            name: name.to_string(),
+            value: Value::Map(value_map),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+    }
+
+    pub fn get_int_map(&self, name: &str) -> HashMap<String, i64> {
+        self.get_property(name)
+            .and_then(|p| {
+                if let Value::Map(map) = &p.value {
+                    Some(
+                        map.iter()
+                            .filter_map(|(k, v)| {
+                                if let Value::Int(n) = v {
+                                    Some((k.clone(), *n))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn set_string_map(&mut self, name: &str, map: HashMap<String, String>) {
+        let value_map: HashMap<String, Value> = map
+            .into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect();
+        self.add_property(Property {
+            name: name.to_string(),
+            value: Value::Map(value_map),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+    }
+
+    pub fn get_string_map(&self, name: &str) -> HashMap<String, String> {
+        self.get_property(name)
+            .and_then(|p| {
+                if let Value::Map(map) = &p.value {
+                    Some(
+                        map.iter()
+                            .filter_map(|(k, v)| {
+                                if let Value::String(s) = v {
+                                    Some((k.clone(), s.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn set_string_list(&mut self, name: &str, items: Vec<String>) {
+        self.add_property(Property {
+            name: name.to_string(),
+            value: Value::List(items.into_iter().map(Value::String).collect()),
+            permissions: PermissionFlags::OWNER,
+            behavior: None,
+        });
+    }
+
+    pub fn get_string_list(&self, name: &str) -> Vec<String> {
+        self.get_property(name)
+            .and_then(|p| {
+                if let Value::List(items) = &p.value {
+                    Some(
+                        items
+                            .iter()
+                            .filter_map(|v| {
+                                if let Value::String(s) = v {
+                                    Some(s.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
     pub fn set_property_numeric(&mut self, name: &str, value: f64) {
-        let stored = if value.fract().abs() < 1e-9
-            && value >= i64::MIN as f64
-            && value <= i64::MAX as f64
-        {
-            Value::Int(value.round() as i64)
-        } else {
-            Value::Float(value)
-        };
+        let stored =
+            if value.fract().abs() < 1e-9 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+                Value::Int(value.round() as i64)
+            } else {
+                Value::Float(value)
+            };
         self.add_property(Property {
             name: name.to_string(),
             value: stored,
@@ -895,9 +1160,7 @@ impl Object {
     /// Whether this object has text the player can read.
     pub fn is_readable(&self) -> bool {
         self.get_bool_property("is_readable").unwrap_or(false)
-            || self
-                .read_text()
-                .is_some_and(|text| !text.trim().is_empty())
+            || self.read_text().is_some_and(|text| !text.trim().is_empty())
     }
 
     /// Text shown by the `read` command.
@@ -1015,6 +1278,27 @@ mod tests {
     }
 
     #[test]
+    fn consumable_key_and_lock_flags() {
+        let mut key = bare_object("item:charm-001");
+        key.apply_key_role(&KeySpec::new("oak-whisper").consumable());
+        assert!(key.key_consumable());
+
+        let mut oak = bare_object("item:oak-001");
+        oak.apply_portal_role(&PortalSpec {
+            kind: PortalKind::Door,
+            direction: "in".to_string(),
+            destination: "haunted-entry".to_string(),
+            open: false,
+            lock_id: Some("oak-whisper".to_string()),
+            locked: true,
+            lock_consumable: true,
+            passable: None,
+            transparent: None,
+        });
+        assert!(oak.lock_consumable());
+    }
+
+    #[test]
     fn container_lock_and_key_matching() {
         let mut chest = bare_object("item:chest-001");
         chest.apply_container_role(&ContainerSpec {
@@ -1026,21 +1310,15 @@ mod tests {
         assert!(chest.container_is_locked());
 
         let mut key_a = bare_object("item:key-a-001");
-        key_a.apply_key_role(&KeySpec {
-            lock_id: "chest-lock".to_string(),
-        });
+        key_a.apply_key_role(&KeySpec::new("chest-lock"));
         let mut key_b = bare_object("item:key-b-001");
-        key_b.apply_key_role(&KeySpec {
-            lock_id: "chest-lock".to_string(),
-        });
+        key_b.apply_key_role(&KeySpec::new("chest-lock"));
 
         assert!(Object::key_unlocks_container(&key_a, &chest));
         assert!(Object::key_unlocks_container(&key_b, &chest));
 
         let mut wrong = bare_object("item:key-wrong-001");
-        wrong.apply_key_role(&KeySpec {
-            lock_id: "other-lock".to_string(),
-        });
+        wrong.apply_key_role(&KeySpec::new("other-lock"));
         assert!(!Object::key_unlocks_container(&wrong, &chest));
     }
 
@@ -1071,10 +1349,8 @@ mod tests {
         );
 
         let mut key = bare_object("item:key-001");
-        key.apply_key_role(&KeySpec {
-            lock_id: "demo".to_string(),
-        });
-        let mut blade = bare_object("item:blade-001");
+        key.apply_key_role(&KeySpec::new("demo"));
+        let blade = bare_object("item:blade-001");
 
         assert!(ring.container_accepts_item(&key));
         assert!(!ring.container_accepts_item(&blade));
@@ -1121,13 +1397,7 @@ mod tests {
     #[test]
     fn init_item_defaults_if_unset_preserves_role_phys() {
         let mut obj = bare_object("item:cloak-001");
-        obj.apply_wearable_role(&WearableSpec {
-            wear_slot: "back".to_string(),
-            weight: 2.5,
-            volume: 3.0,
-            mod_max_weight: None,
-            mod_encumbrance: None,
-        });
+        obj.apply_wearable_role(&WearableSpec::new("back", 2.5, 3.0));
         obj.init_item_defaults_if_unset(false);
 
         assert!((obj.weight() - 2.5).abs() < f64::EPSILON);

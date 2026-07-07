@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::mudl::{ItemInstanceDef, ItemPrototypeDef, LoadedWorld, WorldDef};
 use crate::object::{Object, ObjectFactory, ObjectId, PermissionFlags, Property, Value};
 use crate::persistence::Persistence;
+use crate::world::events::attach_triggers;
 use crate::world::exits::validate_world_places;
 use crate::world::session::resolve_bootstrap_location;
 
@@ -66,7 +67,7 @@ async fn spawn_prototype<P: Persistence>(
         return Ok(());
     }
     let name = def.name.as_deref().unwrap_or(&def.base_name);
-    let obj = factory
+    let mut obj = factory
         .create_from_mudl_spec(
             &def.base_name,
             name,
@@ -77,6 +78,8 @@ async fn spawn_prototype<P: Persistence>(
             &def.aliases,
         )
         .await?;
+    attach_triggers(&mut obj, &def.triggers);
+    factory.persistence().save_object(&obj).await?;
     ids.insert(def.base_name.clone(), obj.id);
     Ok(())
 }
@@ -103,17 +106,14 @@ async fn spawn_instance<P: Persistence>(
         .and_then(|name| prototypes.get(name).cloned());
 
     let name = instance_display_name(def, prototype_defs);
-    let description = def
-        .description
-        .as_deref()
-        .or_else(|| {
-            def.prototype.as_deref().and_then(|p| {
-                prototype_defs
-                    .iter()
-                    .find(|d| d.base_name == p)
-                    .and_then(|d| d.description.as_deref())
-            })
-        });
+    let description = def.description.as_deref().or_else(|| {
+        def.prototype.as_deref().and_then(|p| {
+            prototype_defs
+                .iter()
+                .find(|d| d.base_name == p)
+                .and_then(|d| d.description.as_deref())
+        })
+    });
     let aliases = merged_aliases(def, prototype_defs);
     let mut obj = factory
         .create_from_mudl_spec(
@@ -127,15 +127,22 @@ async fn spawn_instance<P: Persistence>(
         )
         .await?;
 
-    let parent_id = placements
-        .get(&def.location)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Unknown location '{}' for item '{}'",
-                def.location,
-                def.base_name
-            )
-        })?;
+    let mut triggers = Vec::new();
+    if let Some(proto_name) = def.prototype.as_deref() {
+        if let Some(proto_def) = prototype_defs.iter().find(|p| p.base_name == proto_name) {
+            triggers.extend(proto_def.triggers.clone());
+        }
+    }
+    triggers.extend(def.triggers.clone());
+    attach_triggers(&mut obj, &triggers);
+
+    let parent_id = placements.get(&def.location).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Unknown location '{}' for item '{}'",
+            def.location,
+            def.base_name
+        )
+    })?;
 
     obj.location = Some(parent_id.clone());
 
@@ -218,6 +225,218 @@ pub async fn bootstrap_world_items<P: Persistence>(
     Ok(placements)
 }
 
+/// Spawn MUDL-defined creature spawners into persistence.
+pub async fn bootstrap_world_spawners<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    owner: &ObjectId,
+    world: &LoadedWorld,
+    target_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    use crate::creature::{
+        apply_spawner_def, behavior_templates_to_property, spawn_templates_to_property,
+    };
+    use std::collections::HashMap as StdHashMap;
+
+    let template_map: StdHashMap<_, _> = world
+        .spawn_template_defs
+        .iter()
+        .map(|t| (t.base_name.clone(), t.clone()))
+        .collect();
+
+    for def in &world.spawner_defs {
+        if def.location.is_empty() && def.target.is_empty() {
+            anyhow::bail!("Spawner '{}' missing location or target", def.base_name);
+        }
+        let spawner_id = ObjectId::new(format!("spawner:{}-001", def.base_name));
+        if factory.load_object(&spawner_id).await?.is_some() {
+            continue;
+        }
+
+        let (location, target_id) = if !def.target.is_empty() {
+            let target_id = target_ids.get(&def.target).cloned().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Spawner '{}' targets unknown object '{}'",
+                    def.base_name,
+                    def.target
+                )
+            })?;
+            (None, Some(target_id))
+        } else {
+            let location = target_ids.get(&def.location).cloned().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Spawner '{}' targets unknown location '{}'",
+                    def.base_name,
+                    def.location
+                )
+            })?;
+            (Some(location), None)
+        };
+
+        let mut spawner = Object {
+            id: spawner_id,
+            name: format!("{} spawner", def.base_name),
+            aliases: Vec::new(),
+            location,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        apply_spawner_def(&mut spawner, def, &template_map)?;
+        if let Some(target_id) = target_id {
+            spawner.set_property_object_ref("spawner_target", target_id);
+        }
+        spawner.add_property(spawn_templates_to_property(&world.spawn_template_defs));
+        spawner.add_property(behavior_templates_to_property(
+            &world.behavior_template_defs,
+        ));
+        factory.persistence().save_object(&spawner).await?;
+    }
+    Ok(())
+}
+
+/// Spawn MUDL-defined loot spawners into persistence.
+pub async fn bootstrap_world_loot_spawners<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    owner: &ObjectId,
+    world: &LoadedWorld,
+    target_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    use crate::loot::{apply_loot_spawner_def, loot_templates_to_property};
+    use std::collections::HashMap as StdHashMap;
+
+    let template_map: StdHashMap<_, _> = world
+        .loot_template_defs
+        .iter()
+        .map(|t| (t.base_name.clone(), t.clone()))
+        .collect();
+
+    for def in &world.loot_spawner_defs {
+        if def.target.is_empty() {
+            anyhow::bail!("Loot spawner '{}' missing target", def.base_name);
+        }
+        let spawner_id = ObjectId::new(format!("loot-spawner:{}-001", def.base_name));
+        if factory.load_object(&spawner_id).await?.is_some() {
+            continue;
+        }
+        let target_id = target_ids.get(&def.target).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Loot spawner '{}' targets unknown location or object '{}'",
+                def.base_name,
+                def.target
+            )
+        })?;
+
+        let mut spawner = Object {
+            id: spawner_id,
+            name: format!("{} loot spawner", def.base_name),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        apply_loot_spawner_def(&mut spawner, def, &template_map)?;
+        spawner.set_property_object_ref("loot_spawner_target", target_id);
+        spawner.add_property(loot_templates_to_property(&world.loot_template_defs));
+        factory.persistence().save_object(&spawner).await?;
+    }
+    Ok(())
+}
+
+/// Spawn MUDL-defined resource spawners into persistence.
+pub async fn bootstrap_world_resource_spawners<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    owner: &ObjectId,
+    world: &LoadedWorld,
+    target_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    use crate::resource::{apply_resource_spawner_def, resource_templates_to_property};
+    use std::collections::HashMap as StdHashMap;
+
+    let template_map: StdHashMap<_, _> = world
+        .resource_template_defs
+        .iter()
+        .map(|t| (t.base_name.clone(), t.clone()))
+        .collect();
+
+    for def in &world.resource_spawner_defs {
+        if def.target.is_empty() {
+            anyhow::bail!("Resource spawner '{}' missing target", def.base_name);
+        }
+        let spawner_id = ObjectId::new(format!("resource-spawner:{}-001", def.base_name));
+        if factory.load_object(&spawner_id).await?.is_some() {
+            continue;
+        }
+        let target_id = target_ids.get(&def.target).cloned().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Resource spawner '{}' targets unknown location or object '{}'",
+                def.base_name,
+                def.target
+            )
+        })?;
+
+        let mut spawner = Object {
+            id: spawner_id,
+            name: format!("{} resource spawner", def.base_name),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        apply_resource_spawner_def(&mut spawner, def, &template_map)?;
+        spawner.set_property_object_ref("resource_spawner_target", target_id);
+        spawner.add_property(resource_templates_to_property(&world.resource_template_defs));
+        factory.persistence().save_object(&spawner).await?;
+    }
+    Ok(())
+}
+
+/// Spawn MUDL-defined NPCs into persistence.
+pub async fn bootstrap_world_npcs<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    owner: &ObjectId,
+    world: &LoadedWorld,
+    area_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    for def in &world.npc_defs {
+        if def.location.is_empty() {
+            anyhow::bail!("NPC '{}' missing location", def.base_name);
+        }
+        let location = area_ids.get(&def.location).cloned();
+        let behavior_templates: std::collections::HashMap<_, _> = world
+            .behavior_template_defs
+            .iter()
+            .map(|t| (t.base_name.clone(), t.clone()))
+            .collect();
+        factory
+            .create_npc(
+                def,
+                owner.clone(),
+                &world.anatomy,
+                location,
+                &behavior_templates,
+            )
+            .await?;
+    }
+    Ok(())
+}
+
 /// Bootstrap world objects from a loaded MUDL world into persistence.
 pub async fn bootstrap_world<P: Persistence>(
     factory: &ObjectFactory<P>,
@@ -284,6 +503,12 @@ pub async fn bootstrap_world<P: Persistence>(
                 })?;
                 obj.add_exit(dir, target_id.clone());
             }
+            for (alias, exit_name) in &def.exit_aliases {
+                obj.set_exit_alias(alias, exit_name);
+            }
+            for (exit_name, return_name) in &def.exit_returns {
+                obj.set_exit_return(exit_name, return_name);
+            }
             if !def.scatter_to.is_empty() {
                 let scatter_ids: Vec<Value> = def
                     .scatter_to
@@ -317,6 +542,7 @@ pub async fn bootstrap_world<P: Persistence>(
                     });
                 }
             }
+            attach_triggers(&mut obj, &def.triggers);
             factory.persistence().save_object(&obj).await?;
         }
     }
@@ -327,11 +553,22 @@ pub async fn bootstrap_world<P: Persistence>(
             place_objects.insert(id.clone(), obj);
         }
     }
-    validate_world_places(&place_objects).map_err(|errors| {
-        anyhow::anyhow!("Invalid world exit graph: {}", errors.join("; "))
-    })?;
+    validate_world_places(&place_objects)
+        .map_err(|errors| anyhow::anyhow!("Invalid world exit graph: {}", errors.join("; ")))?;
 
-    bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
+    let placements = bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
+    bootstrap_world_npcs(factory, &owner, world, &name_to_id).await?;
+    bootstrap_world_spawners(factory, &owner, world, &placements).await?;
+
+    let mut loot_targets = placements.clone();
+    for def in &world.npc_defs {
+        loot_targets.insert(
+            def.base_name.clone(),
+            ObjectId::new(format!("npc:{}-001", def.base_name)),
+        );
+    }
+    bootstrap_world_loot_spawners(factory, &owner, world, &loot_targets).await?;
+    bootstrap_world_resource_spawners(factory, &owner, world, &loot_targets).await?;
 
     if factory.load_object(&owner).await?.is_none() {
         let mut player = factory
@@ -341,6 +578,7 @@ pub async fn bootstrap_world<P: Persistence>(
         if let Some(start_base) = &world.starting_location {
             if let Some(start_id) = name_to_id.get(start_base) {
                 player.location = Some(start_id.clone());
+                player.set_property_object_ref("home_location", start_id.clone());
             }
         }
         factory.persistence().save_object(&player).await?;
@@ -373,21 +611,25 @@ pub async fn bootstrap_world<P: Persistence>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repl::session::Session;
-    use crate::world::exits::validate_world_places;
     use crate::inventory::{
-        close_container, open_container, read_item, take_item, unlock_container,
-        InventoryContext, InventoryError,
+        break_item, close_container, open_container, read_item, take_item, wield_item,
+        InventoryContext,
     };
     use crate::mudl::load_module;
     use crate::persistence::SqlitePersistence;
+    use crate::repl::session::Session;
+    use crate::world::exits::validate_world_places;
 
     #[tokio::test]
     async fn bootstrap_wires_starting_area_exits() {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         let start = bootstrap_world(&factory, owner.clone(), &world)
             .await
@@ -421,7 +663,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         let start = bootstrap_world(&factory, owner.clone(), &world)
             .await
@@ -449,12 +695,12 @@ mod tests {
             "chest on ground"
         );
 
-        let mailbox = ground
-            .iter()
-            .find(|o| o.name == "Worn Mailbox")
-            .unwrap();
+        let mailbox = ground.iter().find(|o| o.name == "Worn Mailbox").unwrap();
         assert!(mailbox.is_container());
-        assert!(!mailbox.container_is_open(), "starting mailbox should be closed");
+        assert!(
+            !mailbox.container_is_open(),
+            "starting mailbox should be closed"
+        );
         assert!(mailbox.is_readable());
         assert!(mailbox.read_text().is_some());
         let mailbox_contents: Vec<_> = mailbox
@@ -472,12 +718,15 @@ mod tests {
         assert!(key.is_key());
         assert_eq!(key.key_lock_id().as_deref(), Some("chest-lock"));
 
-        let chest = ground
-            .iter()
-            .find(|o| o.name == "Travel Chest")
-            .unwrap();
-        assert!(!chest.container_is_open(), "starting chest should be closed");
-        assert!(chest.container_is_locked(), "starting chest should be locked");
+        let chest = ground.iter().find(|o| o.name == "Travel Chest").unwrap();
+        assert!(
+            !chest.container_is_open(),
+            "starting chest should be closed"
+        );
+        assert!(
+            chest.container_is_locked(),
+            "starting chest should be locked"
+        );
         assert_eq!(chest.container_lock_id().as_deref(), Some("chest-lock"));
         let chest_contents: Vec<_> = chest
             .container_contents()
@@ -491,10 +740,7 @@ mod tests {
         assert!(chest_contents.contains(&"Tinderbox"));
         assert!(!chest_contents.contains(&"Folded Note"));
 
-        let note = objects
-            .iter()
-            .find(|o| o.name == "Folded Note")
-            .unwrap();
+        let note = objects.iter().find(|o| o.name == "Folded Note").unwrap();
         assert!(note.is_readable());
         assert_eq!(
             note.read_text().as_deref(),
@@ -507,7 +753,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let room_id = bootstrap_world(&factory, player_id.clone(), &world)
@@ -554,20 +804,9 @@ mod tests {
         assert!(take_key.contains("pick up"));
         assert!(take_key.to_lowercase().contains("brass key"));
 
-        let err = open_container(&mut ctx, "chest").unwrap_err();
-        assert_eq!(
-            err,
-            InventoryError::ContainerLocked("travel chest".to_string())
-        );
-
-        let unlock_msg = unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
-        assert_eq!(
-            unlock_msg,
-            "You unlock the travel chest with the brass key."
-        );
-
         let open_chest = open_container(&mut ctx, "chest").unwrap();
-        assert!(open_chest.starts_with("You open the travel chest."));
+        assert!(open_chest.contains("unlock the travel chest with the brass key"));
+        assert!(open_chest.contains("open the travel chest"));
         assert!(!open_chest.contains("folded note"));
 
         close_container(&mut ctx, "mailbox").unwrap();
@@ -584,7 +823,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, owner, &world).await.unwrap();
 
@@ -655,8 +898,7 @@ mod tests {
         let boots = objects
             .iter()
             .find(|o| {
-                o.name == "Boots of Carrying"
-                    && o.location.as_ref() == Some(&cottage_bedroom.id)
+                o.name == "Boots of Carrying" && o.location.as_ref() == Some(&cottage_bedroom.id)
             })
             .expect("boots of carrying in cottage bedroom");
         assert!(boots.is_wearable());
@@ -672,7 +914,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, owner, &world).await.unwrap();
 
@@ -704,7 +950,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, owner, &world).await.unwrap();
 
@@ -717,10 +967,7 @@ mod tests {
             .iter()
             .find(|o| o.name == "Bedroom")
             .expect("bedroom");
-        let pantry = objects
-            .iter()
-            .find(|o| o.name == "Pantry")
-            .expect("pantry");
+        let pantry = objects.iter().find(|o| o.name == "Pantry").expect("pantry");
 
         assert!(interior.is_area());
         assert!(bedroom.is_room());
@@ -742,13 +989,124 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn forest_clearing_navigation_with_aliases() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let forest_path_id = objects
+            .values()
+            .find(|o| o.name == "Forest Path")
+            .map(|o| o.id.clone())
+            .expect("forest path");
+        let cottage_front_id = objects
+            .values()
+            .find(|o| o.name == "Front of Small Cottage")
+            .map(|o| o.id.clone())
+            .expect("cottage front");
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(start.clone()),
+        );
+
+        session.go("n").unwrap();
+        assert_eq!(session.current_location(), Some(&forest_path_id));
+
+        session.go("s").unwrap();
+        assert_eq!(session.current_location(), Some(&start));
+
+        session.go("north").unwrap();
+        session.go("north").unwrap();
+        assert_eq!(session.current_location(), Some(&cottage_front_id));
+    }
+
+    #[tokio::test]
+    async fn cottage_rear_custom_around_exit() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let cottage_rear_id = objects
+            .values()
+            .find(|o| o.name == "Behind the Cottage")
+            .map(|o| o.id.clone())
+            .expect("cottage rear");
+        let cottage_front_id = objects
+            .values()
+            .find(|o| o.name == "Front of Small Cottage")
+            .map(|o| o.id.clone())
+            .expect("cottage front");
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(start),
+        );
+        session.go("east").unwrap();
+        assert_eq!(session.current_location(), Some(&cottage_rear_id));
+
+        let msg = session.go("around").unwrap();
+        assert!(msg.contains("around"));
+        assert_eq!(session.current_location(), Some(&cottage_front_id));
+
+        session.go("rear").unwrap();
+        assert_eq!(session.current_location(), Some(&cottage_rear_id));
+
+        let msg = session.go("path").unwrap();
+        assert!(msg.contains("around"));
+        assert_eq!(session.current_location(), Some(&cottage_front_id));
+    }
+
+    #[tokio::test]
     async fn cottage_room_movement_and_persist_reload() {
         use crate::world::session::{hydrate_world, persist_all, resolve_player_location};
 
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
@@ -769,16 +1127,17 @@ mod tests {
             .map(|o| o.id.clone())
             .expect("pantry");
 
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: Some(&start),
-            objects: &mut objects,
-            anatomy: &anatomy,
-            dirty: None,
-        };
-        open_container(&mut ctx, "mailbox").unwrap();
-        take_item(&mut ctx, "cottage key").unwrap();
-        drop(ctx);
+        {
+            let mut ctx = InventoryContext {
+                player_id: &player_id,
+                room_id: Some(&start),
+                objects: &mut objects,
+                anatomy: &anatomy,
+                dirty: None,
+            };
+            open_container(&mut ctx, "mailbox").unwrap();
+            take_item(&mut ctx, "cottage key").unwrap();
+        }
 
         let mut session = Session::test_session(
             player_id.clone(),
@@ -788,8 +1147,6 @@ mod tests {
         );
         session.go("north").unwrap();
         session.go("north").unwrap();
-        unlock_container(&mut session.inventory_context(), "door", None).unwrap();
-        open_container(&mut session.inventory_context(), "door").unwrap();
         session.go("in").unwrap();
         session.go("east").unwrap();
         assert_eq!(session.current_location(), Some(&pantry_id));
@@ -816,14 +1173,18 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
             .await
             .unwrap();
 
-        let mut objects: HashMap<ObjectId, Object> = persistence
+        let objects: HashMap<ObjectId, Object> = persistence
             .list_objects(false)
             .await
             .unwrap()
@@ -837,21 +1198,10 @@ mod tests {
             .map(|o| o.id.clone())
             .expect("cottage front");
 
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: Some(&start),
-            objects: &mut objects,
-            anatomy: &anatomy,
-            dirty: None,
-        };
-
-        open_container(&mut ctx, "mailbox").unwrap();
-        take_item(&mut ctx, "cottage key").unwrap();
-
         let mut session = Session::test_session(
             player_id.clone(),
             anatomy.clone(),
-            ctx.objects.clone(),
+            objects,
             Some(start.clone()),
         );
         session.go("north").unwrap();
@@ -868,27 +1218,60 @@ mod tests {
         let blocked = session.go("in").unwrap_err().to_string();
         assert!(blocked.contains("locked"));
 
-        let room_id = session.current_location().cloned();
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: room_id.as_ref(),
-            objects: session.objects_mut(),
-            anatomy: &anatomy,
-            dirty: None,
-        };
-        let unlock = unlock_container(&mut ctx, "door", None).unwrap();
-        assert!(unlock.contains("unlock"));
-        let open = open_container(&mut ctx, "door").unwrap();
-        assert!(open.contains("open"));
+        session.go("south").unwrap();
+        session.go("south").unwrap();
+        open_container(&mut session.inventory_context(), "mailbox").unwrap();
+        take_item(&mut session.inventory_context(), "cottage key").unwrap();
+        session.go("north").unwrap();
+        session.go("north").unwrap();
 
-        drop(ctx);
         let msg = session.go("in").unwrap();
+        assert!(msg.contains("unlock"));
+        assert!(msg.contains("open"));
         assert!(msg.contains("main hall"));
         assert_eq!(
             session
                 .object(session.current_location().unwrap())
                 .map(|o| o.name.as_str()),
             Some("Cottage Interior")
+        );
+    }
+
+    #[tokio::test]
+    async fn haunted_forest_whisper_charm_and_oak_are_consumable() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        bootstrap_world(&factory, player_id, &world).await.unwrap();
+
+        let objects: Vec<Object> = persistence.list_objects(false).await.unwrap();
+        let charm = objects
+            .iter()
+            .find(|o| o.name == "Whisper Charm" && o.id.as_str().contains("chest-whisper"))
+            .or_else(|| {
+                objects
+                    .iter()
+                    .find(|o| o.name == "Whisper Charm" && o.key_consumable())
+            })
+            .expect("whisper charm instance spawned");
+        assert!(
+            charm.key_consumable(),
+            "whisper charm should mark key_consumable"
+        );
+
+        let oak = objects
+            .iter()
+            .find(|o| o.name == "Hollow Oak")
+            .expect("hollow oak spawned");
+        assert!(
+            oak.lock_consumable(),
+            "hollow oak should mark lock_consumable"
         );
     }
 
@@ -900,7 +1283,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
@@ -917,23 +1304,22 @@ mod tests {
 
         validate_world_places(&objects).expect("haunted map validates");
 
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: Some(&start),
-            objects: &mut objects,
-            anatomy: &anatomy,
-            dirty: None,
+        let boulder_hint = {
+            let mut ctx = InventoryContext {
+                player_id: &player_id,
+                room_id: Some(&start),
+                objects: &mut objects,
+                anatomy: &anatomy,
+                dirty: None,
+            };
+            let hint = read_item(&ctx, "boulder").unwrap();
+            open_container(&mut ctx, "mailbox").unwrap();
+            take_item(&mut ctx, "brass key").unwrap();
+            open_container(&mut ctx, "chest").unwrap();
+            take_item(&mut ctx, "whisper charm").unwrap();
+            hint
         };
-
-        let boulder_hint = read_item(&ctx, "boulder").unwrap();
         assert!(boulder_hint.contains("HOLLOW OAK"));
-
-        open_container(&mut ctx, "mailbox").unwrap();
-        take_item(&mut ctx, "brass key").unwrap();
-        unlock_container(&mut ctx, "chest", Some("brass key")).unwrap();
-        open_container(&mut ctx, "chest").unwrap();
-        take_item(&mut ctx, "whisper charm").unwrap();
-        drop(ctx);
 
         let mut session = Session::test_session(
             player_id.clone(),
@@ -943,16 +1329,45 @@ mod tests {
         );
 
         session.go("north").unwrap();
-
-        unlock_container(&mut session.inventory_context(), "oak", None).unwrap();
-        open_container(&mut session.inventory_context(), "oak").unwrap();
+        let charm_id = session
+            .objects()
+            .get(&player_id)
+            .and_then(|player| {
+                player.carried_body_items().into_iter().find(|id| {
+                    session
+                        .objects()
+                        .get(id)
+                        .is_some_and(|o| o.name == "Whisper Charm" && o.is_key())
+                })
+            })
+            .expect("carried whisper charm");
 
         let entry_msg = session.go("in").unwrap();
+        assert!(entry_msg.contains("unlock"));
+        assert!(entry_msg.contains("open"));
+        assert!(entry_msg.contains("crumbles away"));
+        assert!(entry_msg.contains("cannot be secured again"));
         assert!(entry_msg.contains("Tangled Threshold") || entry_msg.contains("held breath"));
+        assert!(
+            session
+                .objects()
+                .get(&charm_id)
+                .is_some_and(|o| o.is_deleted),
+            "whisper charm should be consumed opening the hollow oak"
+        );
+        let oak = session
+            .objects()
+            .values()
+            .find(|o| o.name == "Hollow Oak" && o.id.as_str().contains("forest-hollow"))
+            .expect("forest hollow oak portal");
+        assert!(!oak.gate_has_lock(), "oak lock should be spent after entry");
 
         let wrong_turn = session.go("east").unwrap();
         assert_eq!(
-            session.object(session.current_location().unwrap()).unwrap().name,
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
             "Tangled Threshold",
             "wrong turns loop silently to the threshold"
         );
@@ -966,7 +1381,7 @@ mod tests {
         );
 
         session.go("north").unwrap();
-        let moon_read = read_item(&mut session.inventory_context(), "marker").unwrap();
+        let moon_read = read_item(&session.inventory_context(), "marker").unwrap();
         assert!(moon_read.contains("MOON"));
 
         session.go("east").unwrap();
@@ -974,8 +1389,63 @@ mod tests {
         session.go("west").unwrap();
         session.go("north").unwrap();
         assert_eq!(
-            session.object(session.current_location().unwrap()).unwrap().name,
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
             "Pale Heart of the Wood"
+        );
+
+        let heart_location = session.current_location().unwrap().clone();
+        let reward_chest_id = session
+            .objects()
+            .values()
+            .find(|o| {
+                o.name == "Rootbound Chest"
+                    && o.is_container()
+                    && !o.is_deleted
+                    && o.location.as_ref() == Some(&heart_location)
+            })
+            .map(|o| o.id.clone())
+            .expect("heart reward chest at Pale Heart");
+        assert_eq!(
+            session
+                .objects()
+                .get(&reward_chest_id)
+                .unwrap()
+                .location
+                .as_ref(),
+            Some(&heart_location)
+        );
+
+        let reward_msg = {
+            let mut ctx = session.inventory_context();
+            open_container(&mut ctx, "reward chest").unwrap()
+        };
+        assert!(
+            reward_msg.contains("find"),
+            "opening reward chest should spawn loot: {reward_msg}"
+        );
+        let reward_chest = session.objects().get(&reward_chest_id).unwrap();
+        assert!(reward_chest.gate_is_open());
+        let reward_names = [
+            "Trail Rations",
+            "Tinderbox",
+            "Iron Lantern",
+            "Chipped Blade",
+            "Brass Key Ring",
+            "Boots of Carrying",
+        ];
+        let spawned: Vec<_> = reward_chest
+            .container_contents()
+            .iter()
+            .filter_map(|id| session.objects().get(id))
+            .collect();
+        assert!(
+            spawned
+                .iter()
+                .any(|item| reward_names.contains(&item.name.as_str())),
+            "reward chest should hold a weighted loot drop"
         );
 
         let heart = session
@@ -1021,13 +1491,618 @@ mod tests {
             None => panic!("nowhere after scatter"),
         }
 
-        unlock_container(&mut session.inventory_context(), "oak", None).unwrap();
-        open_container(&mut session.inventory_context(), "oak").unwrap();
         session.go("in").unwrap();
         assert_eq!(
-            session.object(session.current_location().unwrap()).unwrap().name,
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
             "Tangled Threshold",
             "haunted forest is replayable"
         );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_equipment_modifiers_on_starting_gear() {
+        use crate::creature::creature_effective_stat;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+        let anatomy = world.anatomy.clone();
+
+        bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let blade = objects
+            .values()
+            .find(|o| o.name == "Chipped Blade")
+            .expect("chipped blade in travel chest");
+        assert_eq!(
+            blade.equipment_stat_mods().get("strength").copied(),
+            Some(2)
+        );
+
+        let vest = objects
+            .values()
+            .find(|o| o.name == "Leather Vest")
+            .expect("leather vest in cottage bedroom");
+        assert_eq!(vest.equipment_max_health_bonus(), 5);
+        assert_eq!(
+            vest.equipment_skill_mods().get("survival").copied(),
+            Some(1)
+        );
+
+        let lantern = objects
+            .values()
+            .find(|o| o.name == "Iron Lantern")
+            .expect("iron lantern in travel chest");
+        assert_eq!(
+            lantern.equipment_grant_effects(),
+            vec!["iron_lantern_aura".to_string()]
+        );
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            anatomy.clone(),
+            objects,
+            Some(ObjectId::new("area:the-void-001")),
+        );
+        open_container(&mut session.inventory_context(), "mailbox").unwrap();
+        take_item(&mut session.inventory_context(), "brass key").unwrap();
+        open_container(&mut session.inventory_context(), "chest").unwrap();
+        take_item(&mut session.inventory_context(), "chipped blade").unwrap();
+        wield_item(&mut session.inventory_context(), "blade").unwrap();
+
+        let player = session.object(&player_id).unwrap();
+        assert_eq!(
+            creature_effective_stat(player, "strength", session.objects(), &anatomy),
+            12
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_attaches_behavior_templates_to_npcs() {
+        use crate::creature::read_creature_behaviors;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let owner = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        bootstrap_world(&factory, owner, &world).await.unwrap();
+
+        let npc = factory
+            .load_object(&ObjectId::new("npc:path-watcher-001"))
+            .await
+            .unwrap()
+            .expect("path watcher");
+        let entries = read_creature_behaviors(&npc);
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.template_name.as_deref() == Some("guard")),
+            "path watcher should have guard behavior template"
+        );
+        assert!(
+            npc
+                .event_handlers
+                .get("on_enter")
+                .is_some_and(|handlers| handlers.iter().any(|behavior| {
+                    behavior.code.contains("trees seem to lean closer")
+                })),
+            "path watcher on_enter script should be attached as @trigger"
+        );
+    }
+
+    #[tokio::test]
+    async fn milestone3_creature_systems_initial() {
+        use crate::creature::{
+            apply_effect, creature_health, creature_is_defeated, creature_skill, creature_stat,
+            damage_creature, run_creature_behaviors,
+        };
+        use crate::display::{
+            creature::format_examine_creature_player, format_examine_self, Describable, DisplayMode,
+        };
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let player = factory.load_object(&player_id).await.unwrap().unwrap();
+        assert_eq!(creature_health(&player), 100);
+        assert_eq!(creature_stat(&player, "strength"), 10);
+        assert_eq!(creature_skill(&player, "survival"), 0);
+        assert_eq!(player.get_int_property("max_weight"), Some(100));
+
+        let npc_id = ObjectId::new("npc:path-watcher-001");
+        let npc = factory
+            .load_object(&npc_id)
+            .await
+            .unwrap()
+            .expect("path watcher");
+        assert_eq!(npc.name, "Path Watcher");
+        assert_eq!(
+            npc.location.as_ref().map(|id| id.as_str()),
+            Some("area:forest-path-001")
+        );
+        assert_eq!(creature_health(&npc), 100);
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let self_examine = format_examine_self(&player, &objects, &world.anatomy);
+        assert!(self_examine.contains("You feel fit."));
+        assert!(self_examine.contains("Strength 10"));
+
+        let npc_examine =
+            format_examine_creature_player(&npc, &objects, &world.anatomy);
+        assert!(npc_examine.contains("looks fit"));
+        assert!(npc_examine.contains("Strength 10"));
+
+        let forest_path = ObjectId::new("area:forest-path-001");
+        let mut behavior_objects = objects.clone();
+        let outcome =
+            run_creature_behaviors(
+                "on_enter",
+                &forest_path,
+                &player_id,
+                &mut behavior_objects,
+                &world.anatomy,
+            );
+        assert!(outcome.lines.len() >= 2, "guard + script should both fire");
+        assert!(outcome
+            .lines
+            .iter()
+            .any(|l| l.contains("trees seem to lean closer")));
+        assert!(outcome.lines.iter().any(|l| l.contains("Halt")));
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(start),
+        );
+        let move_out = session.go("north").unwrap();
+        assert!(move_out.contains("trees seem to lean closer"));
+
+        let damage_msg = {
+            let ctx = session.inventory_context();
+            damage_creature(
+                ctx.player_id,
+                ctx.room_id,
+                ctx.objects,
+                ctx.anatomy,
+                ctx.dirty,
+                "path watcher",
+                40,
+            )
+            .unwrap()
+        };
+        assert!(damage_msg.contains("damage") || damage_msg.contains("stagger"));
+        let watcher = session.object(&npc_id).unwrap();
+        assert_eq!(creature_health(watcher), 60);
+
+        {
+            let ctx = session.inventory_context();
+            damage_creature(
+                ctx.player_id,
+                ctx.room_id,
+                ctx.objects,
+                ctx.anatomy,
+                ctx.dirty,
+                "self",
+                90,
+            )
+            .unwrap();
+        }
+        let wounded = session.object(&player_id).unwrap();
+        assert_eq!(creature_health(wounded), 10);
+        assert!(!creature_is_defeated(wounded));
+
+        let display_ctx = session.display_context(DisplayMode::Player);
+        let watcher_describe = session.object(&npc_id).unwrap().describe(&display_ctx);
+        assert!(watcher_describe.contains("wounded") || watcher_describe.contains("health"));
+
+        let mut encumbered_player = session.object(&player_id).expect("player").clone();
+        apply_effect(&mut encumbered_player, "weary", &world.anatomy);
+        session
+            .objects_mut()
+            .insert(player_id.clone(), encumbered_player);
+        let weary_player = session.object(&player_id).unwrap();
+        assert_eq!(
+            crate::creature::effect_encumbrance_factor(weary_player),
+            1.1
+        );
+    }
+
+    #[tokio::test]
+    async fn loot_spawner_adds_bonus_to_travel_chest_on_open() {
+        use crate::loot::loot_spawners_for_target;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+        let anatomy = world.anatomy.clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let mut objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let chest_id = objects
+            .values()
+            .find(|o| o.id.as_str().contains("scene-chest"))
+            .map(|o| o.id.clone())
+            .expect("travel chest");
+
+        assert_eq!(
+            loot_spawners_for_target(&chest_id, &objects).len(),
+            1,
+            "travel chest should have a loot spawner attached"
+        );
+
+        let mut ctx = InventoryContext {
+            player_id: &player_id,
+            room_id: Some(&start),
+            objects: &mut objects,
+            anatomy: &anatomy,
+            dirty: None,
+        };
+
+        open_container(&mut ctx, "mailbox").unwrap();
+        take_item(&mut ctx, "brass key").unwrap();
+        let before = ctx
+            .objects
+            .get(&chest_id)
+            .unwrap()
+            .container_contents()
+            .len();
+
+        let open_msg = open_container(&mut ctx, "chest").unwrap();
+        assert!(open_msg.contains("bonus rations") || open_msg.contains("find"));
+        let after = ctx
+            .objects
+            .get(&chest_id)
+            .unwrap()
+            .container_contents()
+            .len();
+        assert!(after > before, "opening chest should spawn bonus loot");
+
+        let again = open_container(&mut ctx, "chest").unwrap();
+        assert!(
+            !again.contains("find"),
+            "once=true loot spawner should not repeat"
+        );
+    }
+
+    #[tokio::test]
+    async fn breakable_pot_disables_spawner_and_drops_loot() {
+        use crate::creature::{is_spawner, spawners_for_target};
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let moon = ObjectId::new("area:haunted-moon-001");
+        let pot_id = objects
+            .values()
+            .find(|o| o.id.as_str().contains("haunted-moon-pot"))
+            .map(|o| o.id.clone())
+            .expect("clay pot instance in haunted moon");
+        assert_eq!(objects.get(&pot_id).unwrap().location.as_ref(), Some(&moon));
+
+        let pot_spawners: Vec<_> = objects
+            .values()
+            .filter(|o| is_spawner(o))
+            .filter(|o| o.id.as_str().contains("pot-mist"))
+            .collect();
+        assert_eq!(pot_spawners.len(), 1, "pot mist spawner should bootstrap");
+        assert_eq!(
+            spawners_for_target(&pot_id, &objects).len(),
+            1,
+            "pot should have an attached creature spawner (pot_id={})",
+            pot_id.as_str()
+        );
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(start),
+        );
+
+        {
+            let mut ctx = session.inventory_context();
+            open_container(&mut ctx, "mailbox").unwrap();
+            take_item(&mut ctx, "brass key").unwrap();
+            open_container(&mut ctx, "chest").unwrap();
+            take_item(&mut ctx, "whisper charm").unwrap();
+        }
+
+        let moon_entry = session.go("north").unwrap();
+        session.go("in").unwrap();
+        let moon_arrival = session.go("north").unwrap();
+        assert!(
+            moon_arrival.contains("Silver mist clings to the branches"),
+            "haunted-moon on_enter trigger should narrate: {moon_arrival}"
+        );
+        assert_eq!(
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
+            "Moonlit Glade"
+        );
+        let _ = moon_entry;
+
+        let wisp_count_before = session
+            .objects()
+            .values()
+            .filter(|o| {
+                o.object_type() == "npc"
+                    && o.is_active()
+                    && o.location.as_ref() == Some(&moon)
+                    && o.name == "Mist Wisp"
+            })
+            .count();
+        assert!(
+            wisp_count_before >= 1,
+            "pot spawner should seed a mist wisp on enter"
+        );
+
+        let break_msg = {
+            let mut ctx = session.inventory_context();
+            break_item(&mut ctx, "pot").unwrap()
+        };
+
+        assert!(break_msg.contains("smash the clay pot"));
+        assert!(
+            break_msg.contains("shatters into pale dust"),
+            "pot on_break trigger should fire: {break_msg}"
+        );
+        assert!(break_msg.contains("find") || break_msg.contains("rations"));
+        assert!(
+            session.objects().get(&pot_id).is_some_and(|o| o.is_deleted),
+            "broken pot should be removed from play"
+        );
+        assert!(
+            spawners_for_target(&pot_id, session.objects()).is_empty(),
+            "pot creature spawner should be destroyed"
+        );
+
+        let moon_rations = session
+            .objects()
+            .values()
+            .filter(|o| {
+                o.is_active() && o.name == "Trail Rations" && o.location.as_ref() == Some(&moon)
+            })
+            .count();
+        assert!(
+            moon_rations >= 1,
+            "breaking pot should spill loot into the glade"
+        );
+
+        session.go("south").unwrap();
+        session.go("north").unwrap();
+        let wisp_count_after = session
+            .objects()
+            .values()
+            .filter(|o| {
+                o.object_type() == "npc"
+                    && o.is_active()
+                    && o.location.as_ref() == Some(&moon)
+                    && o.name == "Mist Wisp"
+                    && o.get_object_ref_property("spawned_by")
+                        .is_some_and(|id| id.as_str().contains("pot-mist"))
+            })
+            .count();
+        assert_eq!(
+            wisp_count_after, 0,
+            "pot spawner should not respawn wisps after the pot is broken"
+        );
+    }
+
+    #[tokio::test]
+    async fn creature_spawner_attached_to_haunted_moon() {
+        use crate::creature::spawners_in_room;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let moon = ObjectId::new("area:haunted-moon-001");
+        let clearing = ObjectId::new("area:the-void-001");
+        assert!(
+            spawners_in_room(&clearing, &objects).is_empty(),
+            "starting clearing has no spawners"
+        );
+        assert_eq!(spawners_in_room(&moon, &objects).len(), 2);
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(clearing),
+        );
+
+        open_container(&mut session.inventory_context(), "mailbox").unwrap();
+        take_item(&mut session.inventory_context(), "brass key").unwrap();
+        open_container(&mut session.inventory_context(), "chest").unwrap();
+        take_item(&mut session.inventory_context(), "whisper charm").unwrap();
+
+        session.go("north").unwrap();
+        session.go("in").unwrap();
+        session.go("north").unwrap();
+
+        let moon_npcs: Vec<_> = session
+            .objects()
+            .values()
+            .filter(|o| {
+                o.object_type() == "npc"
+                    && o.location.as_ref() == Some(&moon)
+                    && o.get_property("spawned_by").is_some()
+            })
+            .collect();
+        assert!(
+            !moon_npcs.is_empty(),
+            "haunted-moon spawner should create a creature on enter"
+        );
+        assert!(moon_npcs
+            .iter()
+            .any(|o| o.name == "Mist Wisp" || o.name == "Pale Lurker"));
+    }
+
+    #[tokio::test]
+    async fn path_watcher_kill_loot_spawner_bootstraps() {
+        use crate::creature::attack_creature;
+        use crate::loot::loot_spawners_for_target;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
+
+        let start = bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let npc_id = ObjectId::new("npc:path-watcher-001");
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        assert_eq!(
+            loot_spawners_for_target(&npc_id, &objects).len(),
+            1,
+            "path watcher should have on_kill loot spawner"
+        );
+
+        let forest_path = ObjectId::new("area:forest-path-001");
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(forest_path.clone()),
+        );
+        session.objects_mut().get_mut(&player_id).unwrap().location = Some(forest_path.clone());
+        session
+            .objects_mut()
+            .get_mut(&npc_id)
+            .unwrap()
+            .set_property_int("health", 1);
+
+        let ctx = session.inventory_context();
+        let outcome = attack_creature(
+            ctx.player_id,
+            ctx.room_id,
+            ctx.objects,
+            ctx.anatomy,
+            ctx.dirty,
+            "path watcher",
+        )
+        .unwrap();
+        assert!(outcome.lines.iter().any(|l| l.contains("corpse")));
+        assert!(
+            outcome
+                .lines
+                .iter()
+                .any(|l| l.contains("forest exhales")),
+            "path watcher on_kill trigger should narrate: {:?}",
+            outcome.lines
+        );
+        assert!(
+            outcome.lines.iter().any(|l| l.contains("rations")),
+            "on_kill loot should drop trail rations: {:?}",
+            outcome.lines
+        );
+        assert!(session.object(&npc_id).unwrap().is_deleted);
+        let _ = start;
     }
 }

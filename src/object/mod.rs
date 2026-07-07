@@ -16,17 +16,18 @@ pub use factory::ObjectFactory;
 pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS};
 pub use location::LocationRef;
 pub use roles::{
-    allowed_type_label, format_allowed_type_labels, parse_allowed_types, ContainerSpec,
-    DoorSpec, ItemPhysSpec, KeySpec, ObjectRoles, PortalKind, PortalSpec, ReadableSpec,
-    RoleKind, StackableSpec,
-    WearableSpec,
+    allowed_type_label, format_allowed_type_labels, parse_allowed_types, BreakableSpec,
+    ContainerSpec, DoorSpec, ItemPhysSpec, KeySpec, ObjectRoles, PortalKind, PortalSpec,
+    ReadableSpec, RoleKind, StackableSpec, WearableSpec,
 };
 pub use weight::{
     collect_worn_carry_modifiers, format_weight_amount, is_unlimited_weight,
-    owner_player_of_container, player_base_max_weight, player_carried_weight, player_carry_fraction,
-    player_effective_max_weight, player_encumbrance_fraction, player_encumbrance_level,
-    player_weight_bearer, transfer_weight, weight_limit_applies, would_exceed_player_max_weight,
-    CarryModifiers, EncumbranceLevel, DEFAULT_PLAYER_MAX_WEIGHT, ENCUMBRANCE_BLOCK_THRESHOLD,
+    owner_player_of_container, player_base_max_weight, player_carried_weight,
+    player_carry_fraction, player_effective_max_weight, player_effective_max_weight_with_anatomy,
+    player_encumbrance_fraction, player_encumbrance_fraction_with_anatomy,
+    player_encumbrance_level, player_encumbrance_level_with_anatomy, player_weight_bearer,
+    transfer_weight, weight_limit_applies, would_exceed_player_max_weight, CarryModifiers,
+    EncumbranceLevel, DEFAULT_PLAYER_MAX_WEIGHT, ENCUMBRANCE_BLOCK_THRESHOLD,
     ENCUMBRANCE_SLOW_THRESHOLD, UNLIMITED_WEIGHT,
 };
 
@@ -235,6 +236,35 @@ impl Object {
         HashMap::new()
     }
 
+    /// Alias → canonical exit name (`exit_aliases` property).
+    pub fn get_exit_aliases(&self) -> HashMap<String, String> {
+        self.get_string_map("exit_aliases")
+    }
+
+    pub fn set_exit_alias(&mut self, alias: &str, exit_name: &str) {
+        let mut map = self.get_exit_aliases();
+        map.insert(alias.to_string(), exit_name.to_string());
+        self.set_string_map("exit_aliases", map);
+    }
+
+    /// Exit name → return exit name on the destination (`exit_returns` property).
+    pub fn get_exit_returns(&self) -> HashMap<String, String> {
+        self.get_string_map("exit_returns")
+    }
+
+    pub fn exit_return_name(&self, exit_name: &str) -> Option<String> {
+        self.get_exit_returns()
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(exit_name))
+            .map(|(_, ret)| ret.clone())
+    }
+
+    pub fn set_exit_return(&mut self, exit_name: &str, return_name: &str) {
+        let mut map = self.get_exit_returns();
+        map.insert(exit_name.to_string(), return_name.to_string());
+        self.set_string_map("exit_returns", map);
+    }
+
     pub fn add_exit(&mut self, direction: &str, target: ObjectId) {
         let exits_prop = self.properties.get_mut("exits");
         if let Some(prop) = exits_prop {
@@ -278,10 +308,7 @@ impl Object {
     }
 
     /// Parent navigable place when this object is nested (rooms under areas, etc.).
-    pub fn parent_place<'a>(
-        &self,
-        objects: &'a HashMap<ObjectId, Object>,
-    ) -> Option<&'a Object> {
+    pub fn parent_place<'a>(&self, objects: &'a HashMap<ObjectId, Object>) -> Option<&'a Object> {
         let parent_id = self.location.as_ref()?;
         let parent = objects.get(parent_id)?;
         if parent.is_active() && parent.is_location() {
@@ -296,12 +323,10 @@ impl Object {
         let mut rooms: Vec<&Object> = objects
             .values()
             .filter(|obj| {
-                obj.is_active()
-                    && obj.is_room()
-                    && obj.location.as_ref() == Some(&self.id)
+                obj.is_active() && obj.is_room() && obj.location.as_ref() == Some(&self.id)
             })
             .collect();
-        rooms.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        rooms.sort_by_key(|a| a.name.to_lowercase());
         rooms
     }
 
@@ -453,6 +478,13 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
 
     // In-character `examine`: natural sentences, no leading name, stats when relevant.
     if !brief {
+        if obj.object_type() == "npc" && obj.has_creature_role() {
+            return crate::display::creature::format_examine_creature_player(
+                obj,
+                &ctx.objects,
+                &ctx.anatomy,
+            );
+        }
         if obj.is_container() {
             return crate::display::format_examine_container_player(obj, &ctx.objects);
         }

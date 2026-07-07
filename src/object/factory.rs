@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 
-use crate::mudl::{AnatomyRegistry, MudlRoleProps, PlayerTemplate};
+use crate::creature::bootstrap_creature_behavior_system;
+use crate::creature::init_creature_vitality;
+use crate::mudl::{AnatomyRegistry, BehaviorTemplateDef, MudlRoleProps, NpcDef, PlayerTemplate};
 use crate::object::{
     constrain_id_base, generate_object_id, id_base_from_display_name,
     roles::{ContainerSpec, KeySpec, StackableSpec, WearableSpec},
@@ -49,15 +51,74 @@ impl<P: Persistence> ObjectFactory<P> {
                 gender: "neutral".to_string(),
             });
         let slug = id_base_from_display_name(display_name);
-        let mut player = self.allocate_named("player", &slug, display_name, owner).await?;
+        let mut player = self
+            .allocate_named("player", &slug, display_name, owner)
+            .await?;
         player.init_creature_role(&template);
+        if let Some(def) = anatomy.creature(&template.creature) {
+            init_creature_vitality(&mut player, def);
+        }
         self.commit(&player).await?;
         Ok(player)
     }
 
+    /// Create an NPC from a MUDL `@npc` definition (idempotent via fixed `npc:<base>-001` id).
+    pub async fn create_npc(
+        &self,
+        def: &NpcDef,
+        owner: ObjectId,
+        anatomy: &AnatomyRegistry,
+        location: Option<ObjectId>,
+        behavior_templates: &HashMap<String, BehaviorTemplateDef>,
+    ) -> anyhow::Result<Object> {
+        let npc_id = ObjectId::new(format!("npc:{}-001", def.base_name));
+        if let Some(existing) = self.persistence.load_object(&npc_id).await? {
+            return Ok(existing);
+        }
+        let display_name = def.name.as_deref().unwrap_or(&def.base_name);
+        let mut npc = Object {
+            id: npc_id,
+            name: display_name.to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner,
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        self.persistence.save_object(&npc).await?;
+        let template = PlayerTemplate {
+            name: def.base_name.clone(),
+            creature: def.creature.clone(),
+            gender: "neutral".to_string(),
+        };
+        npc.init_creature_role(&template);
+        if let Some(creature_def) = anatomy.creature(&def.creature) {
+            init_creature_vitality(&mut npc, creature_def);
+        }
+        if let Some(loc) = location {
+            npc.location = Some(loc);
+        }
+        bootstrap_creature_behavior_system(
+            &mut npc,
+            &def.behaviors,
+            &def.use_behaviors,
+            behavior_templates,
+            &def.triggers,
+        );
+        self.commit(&npc).await?;
+        Ok(npc)
+    }
+
     pub async fn create_item(&self, display_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut item = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         Self::fill_item_defaults(&mut item, true);
         self.commit(&item).await?;
         Ok(item)
@@ -97,7 +158,9 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut container = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut container = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         self.attach_prototype(&mut container, prototype).await?;
         container.apply_container_role(&spec);
         self.commit(&container).await?;
@@ -113,11 +176,11 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut key = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut key = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         self.attach_prototype(&mut key, prototype).await?;
-        key.apply_key_role(&KeySpec {
-            lock_id: lock_id.to_string(),
-        });
+        key.apply_key_role(&KeySpec::new(lock_id));
         Self::fill_item_defaults(&mut key, true);
         self.commit(&key).await?;
         Ok(key)
@@ -132,7 +195,9 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut item = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         self.attach_prototype(&mut item, prototype).await?;
         item.apply_wearable_role(&spec);
         Self::fill_item_defaults(&mut item, false);
@@ -149,7 +214,9 @@ impl<P: Persistence> ObjectFactory<P> {
         count: u32,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut item = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         self.attach_prototype(&mut item, prototype).await?;
         Self::fill_item_defaults(&mut item, true);
         item.apply_stackable_role(&StackableSpec {
@@ -206,7 +273,9 @@ impl<P: Persistence> ObjectFactory<P> {
             "write_text",
             "lock_id",
             "is_locked",
+            "lock_consumable",
             "is_key",
+            "key_consumable",
             "is_portal",
             "is_door",
             "is_window",
@@ -215,9 +284,15 @@ impl<P: Persistence> ObjectFactory<P> {
             "portal_transparent",
             "mod_max_weight",
             "mod_encumbrance",
+            "mod_max_health",
+            "mod_stats",
+            "mod_skills",
+            "grant_effects",
             "door_direction",
             "door_destination_base",
             "allowed_types",
+            "is_breakable",
+            "break_text",
         ] {
             if let Some(prop) = prototype.get_property(key) {
                 target.add_property(prop.clone());
@@ -286,6 +361,7 @@ impl<P: Persistence> ObjectFactory<P> {
     }
 
     /// Materialize an item from MUDL prototype/instance definitions.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_from_mudl_spec(
         &self,
         base_name: &str,
@@ -421,7 +497,10 @@ mod tests {
         let factory = memory_factory().await;
         let owner = ObjectId::new("player:hero-001");
 
-        let mut proto = factory.create_item("Gold Coin", owner.clone()).await.unwrap();
+        let mut proto = factory
+            .create_item("Gold Coin", owner.clone())
+            .await
+            .unwrap();
         proto.set_property_numeric("weight", 0.25);
         factory.persistence().save_object(&proto).await.unwrap();
 
@@ -486,7 +565,7 @@ mod tests {
                     max_volume: Some(30),
                     wearable: false,
                     wear_slot: None,
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -503,18 +582,7 @@ mod tests {
         let owner = ObjectId::new("player:hero-001");
 
         let cloak = factory
-            .create_wearable(
-                "Cloak",
-                owner,
-                WearableSpec {
-                    wear_slot: "back".to_string(),
-                    weight: 2.5,
-                    volume: 3.0,
-                    mod_max_weight: None,
-                    mod_encumbrance: None,
-                },
-                None,
-            )
+            .create_wearable("Cloak", owner, WearableSpec::new("back", 2.5, 3.0), None)
             .await
             .unwrap();
 
@@ -530,7 +598,10 @@ mod tests {
         let factory = memory_factory().await;
         let owner = ObjectId::new("player:hero-001");
 
-        let mut proto = factory.create_item("Robe Template", owner.clone()).await.unwrap();
+        let mut proto = factory
+            .create_item("Robe Template", owner.clone())
+            .await
+            .unwrap();
         proto.set_property_numeric("weight", 5.0);
         factory.persistence().save_object(&proto).await.unwrap();
 
@@ -538,13 +609,7 @@ mod tests {
             .create_wearable(
                 "Silk Robe",
                 owner,
-                WearableSpec {
-                    wear_slot: "torso".to_string(),
-                    weight: 1.2,
-                    volume: 2.0,
-                    mod_max_weight: None,
-                    mod_encumbrance: None,
-                },
+                WearableSpec::new("torso", 1.2, 2.0),
                 Some(proto.id.clone()),
             )
             .await

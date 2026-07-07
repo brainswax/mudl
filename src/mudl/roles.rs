@@ -1,8 +1,10 @@
 //! Apply composable object roles from MUDL property definitions.
 
+use std::collections::HashMap;
+
 use crate::object::{
-    ContainerSpec, ItemPhysSpec, KeySpec, Object, PortalKind, PortalSpec, ReadableSpec,
-    StackableSpec, WearableSpec,
+    BreakableSpec, ContainerSpec, ItemPhysSpec, KeySpec, Object, PortalKind, PortalSpec,
+    ReadableSpec, StackableSpec, WearableSpec,
 };
 
 /// Key-value role properties parsed from MUDL item/object blocks.
@@ -29,6 +31,8 @@ pub struct MudlRoleProps {
     pub locked: Option<bool>,
     pub lock_id: Option<String>,
     pub is_key: Option<bool>,
+    pub key_consumable: Option<bool>,
+    pub lock_consumable: Option<bool>,
     pub allowed_types: Option<String>,
     pub is_door: Option<bool>,
     pub is_window: Option<bool>,
@@ -39,6 +43,15 @@ pub struct MudlRoleProps {
     pub portal_transparent: Option<bool>,
     pub mod_max_weight: Option<i64>,
     pub mod_encumbrance: Option<f64>,
+    pub mod_max_health: Option<i64>,
+    pub stat_mods: HashMap<String, i64>,
+    pub skill_mods: HashMap<String, i64>,
+    pub grant_effects: Vec<String>,
+    pub breakable: Option<bool>,
+    pub break_text: Option<String>,
+    pub harvestable: Option<bool>,
+    pub hidden_until_discovered: Option<bool>,
+    pub discovery_stealth: Option<i64>,
 }
 
 impl MudlRoleProps {
@@ -68,6 +81,12 @@ impl MudlRoleProps {
                 "locked" | "is_locked" => props.locked = Some(*value == "true"),
                 "lock_id" => props.lock_id = Some(value.to_string()),
                 "is_key" | "key" => props.is_key = Some(*value == "true"),
+                "key_consumable" | "consumable_key" => {
+                    props.key_consumable = Some(*value == "true")
+                }
+                "lock_consumable" | "consumable_lock" => {
+                    props.lock_consumable = Some(*value == "true")
+                }
                 "allowed_types" => props.allowed_types = Some(value.to_string()),
                 "is_door" | "door" => props.is_door = Some(*value == "true"),
                 "is_window" | "window" => props.is_window = Some(*value == "true"),
@@ -78,9 +97,7 @@ impl MudlRoleProps {
                 "door_destination" | "portal_destination" | "destination" => {
                     props.door_destination = Some(value.to_string())
                 }
-                "portal_passable" | "passable" => {
-                    props.portal_passable = Some(*value == "true")
-                }
+                "portal_passable" | "passable" => props.portal_passable = Some(*value == "true"),
                 "portal_transparent" | "transparent" => {
                     props.portal_transparent = Some(*value == "true")
                 }
@@ -89,6 +106,36 @@ impl MudlRoleProps {
                 }
                 "mod_encumbrance" | "encumbrance_factor" | "encumbrance_reduction" => {
                     props.mod_encumbrance = value.parse::<f64>().ok().filter(|n| n.is_finite())
+                }
+                "mod_max_health" | "mod_health" | "health_bonus" => {
+                    props.mod_max_health = value.parse().ok()
+                }
+                "grant_effect" | "effect" => {
+                    let name = value.trim().to_string();
+                    if !name.is_empty() && !props.grant_effects.contains(&name) {
+                        props.grant_effects.push(name);
+                    }
+                }
+                key if key.starts_with("mod_stat_") => {
+                    let stat = key.trim_start_matches("mod_stat_");
+                    if let Ok(v) = value.parse::<i64>() {
+                        props.stat_mods.insert(stat.to_string(), v);
+                    }
+                }
+                key if key.starts_with("mod_skill_") => {
+                    let skill = key.trim_start_matches("mod_skill_");
+                    if let Ok(v) = value.parse::<i64>() {
+                        props.skill_mods.insert(skill.to_string(), v);
+                    }
+                }
+                "breakable" | "is_breakable" => props.breakable = Some(*value == "true"),
+                "break_text" | "on_break" => props.break_text = Some(value.to_string()),
+                "harvestable" | "is_harvestable" => props.harvestable = Some(*value == "true"),
+                "hidden_until_discovered" | "hidden" => {
+                    props.hidden_until_discovered = Some(*value == "true")
+                }
+                "discovery_stealth" | "stealth" => {
+                    props.discovery_stealth = value.parse().ok()
                 }
                 _ => {}
             }
@@ -104,6 +151,13 @@ impl MudlRoleProps {
             || self.hand_slot.is_some()
             || self.mod_max_weight.is_some()
             || self.mod_encumbrance.is_some()
+            || self.mod_max_health.is_some()
+            || !self.stat_mods.is_empty()
+            || !self.skill_mods.is_empty()
+            || !self.grant_effects.is_empty()
+            || self.harvestable.is_some()
+            || self.hidden_until_discovered.is_some()
+            || self.discovery_stealth.is_some()
     }
 
     /// Apply scalar overrides without re-applying role composition.
@@ -120,8 +174,29 @@ impl MudlRoleProps {
         if let Some(ref slot) = self.hand_slot {
             obj.set_property_string("hand_slot", slot);
         }
+        if let Some(harvestable) = self.harvestable {
+            obj.set_property_bool("harvestable", harvestable);
+        }
+        if let Some(hidden) = self.hidden_until_discovered {
+            obj.set_property_bool("hidden_until_discovered", hidden);
+        }
+        if let Some(stealth) = self.discovery_stealth {
+            obj.set_property_int("discovery_stealth", stealth);
+        }
         if self.mod_max_weight.is_some() || self.mod_encumbrance.is_some() {
             obj.apply_carry_modifiers(self.mod_max_weight, self.mod_encumbrance);
+        }
+        if self.mod_max_health.is_some()
+            || !self.stat_mods.is_empty()
+            || !self.skill_mods.is_empty()
+            || !self.grant_effects.is_empty()
+        {
+            obj.apply_equipment_mods(
+                self.mod_max_health,
+                self.stat_mods.clone(),
+                self.skill_mods.clone(),
+                self.grant_effects.clone(),
+            );
         }
     }
 
@@ -170,6 +245,10 @@ impl MudlRoleProps {
                     .locked
                     .or_else(|| obj.get_bool_property("is_locked"))
                     .unwrap_or(false),
+                lock_consumable: self
+                    .lock_consumable
+                    .or_else(|| obj.get_bool_property("lock_consumable"))
+                    .unwrap_or(false),
                 passable: self.portal_passable,
                 transparent: self.portal_transparent,
             });
@@ -189,6 +268,7 @@ impl MudlRoleProps {
                 open: self.is_open.unwrap_or(true),
                 lock_id: self.lock_id.clone(),
                 locked: self.locked.unwrap_or(false),
+                lock_consumable: self.lock_consumable.unwrap_or(false),
                 allowed_types: self
                     .allowed_types
                     .as_ref()
@@ -210,18 +290,45 @@ impl MudlRoleProps {
         }
 
         if self.is_wearable == Some(true) && self.is_container != Some(true) {
-            obj.apply_wearable_role(&WearableSpec {
-                wear_slot: self
-                    .wear_slot
+            let mut spec = WearableSpec::new(
+                self.wear_slot
                     .clone()
                     .unwrap_or_else(|| "torso".to_string()),
-                weight: self.weight.unwrap_or(1.0),
-                volume: self.volume.unwrap_or(1.0),
-                mod_max_weight: self.mod_max_weight,
-                mod_encumbrance: self.mod_encumbrance,
-            });
+                self.weight.unwrap_or(1.0),
+                self.volume.unwrap_or(1.0),
+            );
+            spec.mod_max_weight = self.mod_max_weight;
+            spec.mod_encumbrance = self.mod_encumbrance;
+            spec.mod_max_health = self.mod_max_health;
+            spec.stat_mods = self.stat_mods.clone();
+            spec.skill_mods = self.skill_mods.clone();
+            spec.grant_effects = self.grant_effects.clone();
+            obj.apply_wearable_role(&spec);
         } else if self.mod_max_weight.is_some() || self.mod_encumbrance.is_some() {
             obj.apply_carry_modifiers(self.mod_max_weight, self.mod_encumbrance);
+            if self.mod_max_health.is_some()
+                || !self.stat_mods.is_empty()
+                || !self.skill_mods.is_empty()
+                || !self.grant_effects.is_empty()
+            {
+                obj.apply_equipment_mods(
+                    self.mod_max_health,
+                    self.stat_mods.clone(),
+                    self.skill_mods.clone(),
+                    self.grant_effects.clone(),
+                );
+            }
+        } else if self.mod_max_health.is_some()
+            || !self.stat_mods.is_empty()
+            || !self.skill_mods.is_empty()
+            || !self.grant_effects.is_empty()
+        {
+            obj.apply_equipment_mods(
+                self.mod_max_health,
+                self.stat_mods.clone(),
+                self.skill_mods.clone(),
+                self.grant_effects.clone(),
+            );
         }
 
         if self.stackable == Some(true) {
@@ -247,10 +354,18 @@ impl MudlRoleProps {
 
         if self.is_key == Some(true) {
             if let Some(ref lock_id) = self.lock_id {
-                obj.apply_key_role(&KeySpec {
-                    lock_id: lock_id.clone(),
-                });
+                let mut spec = KeySpec::new(lock_id.clone());
+                if self.key_consumable == Some(true) {
+                    spec = spec.consumable();
+                }
+                obj.apply_key_role(&spec);
             }
+        }
+
+        if self.breakable == Some(true) {
+            obj.apply_breakable_role(&BreakableSpec {
+                break_text: self.break_text.clone(),
+            });
         }
     }
 }
@@ -280,10 +395,7 @@ mod tests {
 
     #[test]
     fn mudl_role_props_parse_is_open() {
-        let props = MudlRoleProps::from_pairs(&[
-            ("is_container", "true"),
-            ("is_open", "false"),
-        ]);
+        let props = MudlRoleProps::from_pairs(&[("is_container", "true"), ("is_open", "false")]);
         let mut obj = bare("item:chest-001");
         props.apply_to(&mut obj);
         assert!(!obj.container_is_open());
@@ -305,10 +417,8 @@ mod tests {
 
     #[test]
     fn mudl_role_props_apply_readable() {
-        let props = MudlRoleProps::from_pairs(&[
-            ("readable", "true"),
-            ("read_text", "Mind the dark."),
-        ]);
+        let props =
+            MudlRoleProps::from_pairs(&[("readable", "true"), ("read_text", "Mind the dark.")]);
         let mut obj = bare("item:note-001");
         props.apply_to(&mut obj);
         assert!(obj.is_readable());
@@ -317,16 +427,36 @@ mod tests {
 
     #[test]
     fn mudl_role_props_apply_allowed_types_on_container() {
-        let props = MudlRoleProps::from_pairs(&[
-            ("is_container", "true"),
-            ("allowed_types", "key"),
-        ]);
+        let props =
+            MudlRoleProps::from_pairs(&[("is_container", "true"), ("allowed_types", "key")]);
         let mut obj = bare("item:ring-001");
         props.apply_to(&mut obj);
-        assert_eq!(
-            obj.container_allowed_types(),
-            Some(vec!["key".to_string()])
-        );
+        assert_eq!(obj.container_allowed_types(), Some(vec!["key".to_string()]));
+    }
+
+    #[test]
+    fn mudl_role_props_apply_consumable_key_and_lock() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("is_key", "true"),
+            ("lock_id", "oak-whisper"),
+            ("key_consumable", "true"),
+        ]);
+        let mut key = bare("item:charm-001");
+        props.apply_to(&mut key);
+        assert!(key.is_key());
+        assert!(key.key_consumable());
+
+        let portal_props = MudlRoleProps::from_pairs(&[
+            ("is_door", "true"),
+            ("door_direction", "in"),
+            ("door_destination", "haunted-entry"),
+            ("locked", "true"),
+            ("lock_id", "oak-whisper"),
+            ("lock_consumable", "true"),
+        ]);
+        let mut oak = bare("item:oak-001");
+        portal_props.apply_to(&mut oak);
+        assert!(oak.lock_consumable());
     }
 
     #[test]
@@ -383,6 +513,20 @@ mod tests {
         assert!(!obj.portal_passable());
         assert!(obj.portal_transparent());
         assert!(obj.portal_allows_view());
+    }
+
+    #[test]
+    fn mudl_role_props_apply_breakable() {
+        let props = MudlRoleProps::from_pairs(&[
+            ("breakable", "true"),
+            ("break_text", "Shards everywhere."),
+            ("weight", "2"),
+            ("volume", "2"),
+        ]);
+        let mut obj = bare("item:pot-001");
+        props.apply_to(&mut obj);
+        assert!(obj.is_breakable());
+        assert_eq!(obj.break_text().as_deref(), Some("Shards everywhere."));
     }
 
     #[test]

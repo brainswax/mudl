@@ -20,7 +20,11 @@ pub struct CommandLine {
 pub fn parse_command_line(input: &str) -> CommandLine {
     let input = input.trim();
     let is_meta = input.starts_with('@');
-    let body = if is_meta { input[1..].trim_start() } else { input };
+    let body = if is_meta {
+        input[1..].trim_start()
+    } else {
+        input
+    };
 
     let mut parts = body.split_whitespace();
     let verb = parts.next().unwrap_or_default().to_ascii_lowercase();
