@@ -1,110 +1,42 @@
 # Sandy Shoals Resort
 
-**Pack:** `sandy_shoals/sandy_shoals.mudl` · **ID:** `beach_resort` · **Entry:** `beach-trail` (via `beach-gate`)
-
----
-
-## 1. Theme teaser
-
 Whimsical tropical resort — tiki bar, tidepools, striped hammocks, and a pearl inlet where the surf applauds politely. Restorative, sunny, slightly silly. The house special is confidence on the rocks; the worst injury is ego.
 
----
+## Quick Install
 
-## 2. Quick install
-
-### Import (GitHub)
+Paste the `@import` line into `world.mudl`, the room into `map.mudl`, set `starting_location=start`, then run:
 
 ```mudl
 @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/sandy_shoals/sandy_shoals.mudl
-```
 
-### Minimal host map
-
-The pack places a **resort trail sign** on `the-void`. Any hub with that name works, or edit the sign's `@item location=` in a fork.
-
-```mudl
 type: area
-base_name: the-void
-name: West Clearing
-description: A clearing at the edge of nowhere. A painted arrow points south along sand.
+base_name: start
+name: Start
+description: A painted arrow points south along sand.
 exits:
   south: beach-trail
 exit_returns:
   south: north
 ```
 
-### Run
-
 ```bash
 cargo run --bin repl
 ```
 
-### Link (wizard, in-game)
-
-From your hub (rename as needed):
-
 ```text
-> go the-void
-> @link south beach-trail --return north
+module reload
+go south
 ```
 
-No portal object required — a sandy path exit is enough.
+## Details
 
-### Play
+**Tone:** No combat. Pressure is optional cocktail chaos and gentle navigation loops.
 
-```text
-> look
-> read sign
-> go south
-> look
-> examine marker
-> go east
-> take spritz
-> go south
-```
+**Inside the resort:** Sandy trail into a gate with scenic dead ends, taste-themed way markers, and shore/veranda/bar/tidepool/inlet rooms with healing or buff triggers on entry. Stackable cocktails grant layered drunk effects that shift dexterity and charisma; NPCs react differently when you are unsteady. Tiki bartender, hammock attendant, and pier hermit — friendly only. Harvestable shells and tidepool ledges, hidden bottle and cache finds, message in a bottle, and pearl coffer with resort gear.
 
----
+**Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `open`, `inventory`.
 
-## 3. What to expect
-
-**Tone & danger:** None. No combat spawns; pressure is optional cocktail chaos and gentle navigation loops.
-
-**The resort:**
-
-- **Sandy trail** into a **gate** with four outward paths — some are scenic dead ends that loop to the gate with humor.
-- **Way markers** along a taste-themed route (the clearing sign sets vocabulary; you supply the footsteps).
-- **Open shore**, **sunbed veranda**, **tiki bar**, **tidepool shelf**, and **pearl inlet** — each with healing or buff triggers on entry.
-- **Weather schedules** on shore and tidepool; **bar respawn** refreshes garnish narrative.
-
-**Drunk mechanism:**
-
-- Stackable **cocktails** (`on_take` grants layered effects: tipsy → buzz → three sheets).
-- Dexterity and charisma shift; **bar, bartender, and hidden finds** react differently when you are unsteady.
-- NPC lines change with your stats — revisit rooms after a drink.
-
-**NPCs (friendly only):**
-
-- **Tiki bartender**, **hammock attendant**, **pier hermit** — greet or idle behaviors, healing lines, no attacks.
-
-**Objects & interactions:**
-
-- **Harvestable** shell clusters and tidepool ledges — conches, pearls, salves, charms.
-- **Hidden** buried bottle on the shore and **tidepool cache** under the ledge (perception + drunk-aware narration).
-- **Message in a bottle** at the shell shrine — readable, openable, with loot inside.
-- **Pearl coffer** at the inlet — weighted resort gear (swimsuit, sandals, jewelry, map, salves).
-- **Hammocks**, cabanas, pier, jetty, shallows — flavor and wrong turns.
-
-**Leaving:**
-
-- **Out** from the pearl inlet scatters to clearing, forest path, or sandy trail.
-
-**Commands to know:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `open`, `inventory`.
-
-*Resort route order and coffer contents are discoverable in play — this doc does not chart the path.*
-
----
-
-## 4. Extension ideas
+## Extension ideas
 
 - `@schedule` sunset `on_weather` on the open shore for time-of-day flavor.
 - Mocktail `@prototype` items with custom `@effect` buffs instead of drunk stacks.

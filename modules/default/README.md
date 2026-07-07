@@ -30,12 +30,6 @@ To add a new creature, define `@creature cat` in `creatures.mudl` and set `creat
 
 ## Expansion packs
 
-Self-contained adventures live in `worlds/default_world/expansions/<name>/` — each folder has `<name>.mudl` and `README.md`.
+Self-contained adventures live in `worlds/default_world/expansions/<name>/` — each folder has `<name>.mudl` and `README.md` with theme teaser, quick install, details, and extension ideas.
 
-**Install from GitHub:**
-
-```mudl
-@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl
-```
-
-- **Pack index:** [worlds/default_world/expansions/README.md](worlds/default_world/expansions/README.md)
+The stock `world.mudl` already imports all five packs. To try one in your own world, open that pack's README and copy the Quick Install block.

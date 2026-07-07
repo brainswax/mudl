@@ -1,30 +1,28 @@
 # Adventure Modules
 
-Official expansion packs for Project MUDL. Each module is a **folder** with `<name>/<name>.mudl` plus a self-contained README.
+Official expansion packs for Project MUDL. Each module is a folder with `<name>/<name>.mudl` and a self-contained README beside it.
 
-## Index
+## Packs
 
-| Module | Folder | Documentation |
-|--------|--------|----------------|
-| Haunted Forest | `haunted_forest/` | [README](modules/default/worlds/default_world/expansions/haunted_forest/README.md) |
-| Poisonous Swamp | `poisonous_swamp/` | [README](modules/default/worlds/default_world/expansions/poisonous_swamp/README.md) |
-| Giant Spider Den | `giant_spider_den/` | [README](modules/default/worlds/default_world/expansions/giant_spider_den/README.md) |
-| Sandy Shoals Resort | `sandy_shoals/` | [README](modules/default/worlds/default_world/expansions/sandy_shoals/README.md) |
-| Glimmerfen | `glimmerfen/` | [README](modules/default/worlds/default_world/expansions/glimmerfen/README.md) |
+| Module | Folder |
+|--------|--------|
+| Haunted Forest | `haunted_forest/` |
+| Poisonous Swamp | `poisonous_swamp/` |
+| Giant Spider Den | `giant_spider_den/` |
+| Sandy Shoals Resort | `sandy_shoals/` |
+| Glimmerfen | `glimmerfen/` |
 
-Install URL pattern and listing: [expansions/README.md](modules/default/worlds/default_world/expansions/README.md).
-
-## Import from GitHub
-
-```mudl
-@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/glimmerfen/glimmerfen.mudl
-```
+Docs live next to each `.mudl` file under `modules/default/worlds/default_world/expansions/<folder>/README.md`.
 
 ## Doc structure (every module README)
 
-1. Theme teaser  
-2. Quick install (`@import` URL, map, `@link`, `@create`, `go`)  
-3. What to expect (no solutions)  
-4. Extension ideas  
+1. Theme teaser (no spoilers)
+2. Quick install — one copy-paste block: `@import` URL, minimal host map, `cargo run`, `module reload`, `go`
+3. Details — tone, what to expect, commands (no puzzle solutions)
+4. Extension ideas (optional, builder-focused)
 
-Reference: [LANGUAGE.md](LANGUAGE.md) · [BUILDER.md](BUILDER.md) · [COMMANDS.md](COMMANDS.md).
+## Import URL pattern
+
+```mudl
+@import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/<folder>/<folder>.mudl
+```
