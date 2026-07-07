@@ -4,46 +4,23 @@ A stinking sink where bitter fen, sweet reeds, and black water teach hard lesson
 
 ## Quick Install
 
-Paste the `@import` line into `world.mudl`, the two rooms into `map.mudl`, set `starting_location=start`, then run:
+Stand in any room and paste:
 
 ```mudl
 @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/poisonous_swamp/poisonous_swamp.mudl
-
-type: area
-base_name: start
-name: Start
-exits:
-  north: forest-path
-exit_returns:
-  north: south
-
-type: area
-base_name: forest-path
-name: Forest Path
-description: The ground sounds hollow toward the east.
-exits:
-  south: start
-  down: swamp-entry
-exit_returns:
-  south: north
-  down: up
+@create portal Swamp door_direction=down door_destination=swamp-entry
+@link down swamp-entry --return up
 ```
 
-```bash
-cargo run --bin repl
-```
-
-```text
-module reload
-go north
-go down
-```
+Then `go down`.
 
 ## Details
 
-**Tone:** High danger. Environmental damage on harsh rooms, creature ambushes, antidote scarcity, and a fixed warden NPC at the deep heart. Defeating the warden grants a lasting resilience effect.
+**Entry:** `swamp-entry` — a threshold bowl of stagnant air; wrong paths loop back. Carved stakes and a warning post hint at tastes and textures (bitter, sweet, dry, deep). Regions include bitter fen, sweet stand, dry rise, and deep heart with gas pockets, quicksand, and snares.
 
-**Inside the bog:** A threshold where wrong paths loop back, carved stakes and a warning post, and bitter/sweet/dry/deep themed regions with gas pockets, quicksand, and snares. Reed breather mask and bog-walker boots as wearable rewards; antidote salves from harvests and breakables. Gas wisps, bog leeches, and mire crawlers spawn throughout.
+**Tone:** High danger. Environmental damage on harsh rooms, creature ambushes, antidote scarcity, and a fixed warden NPC at the deep heart. Defeating the warden grants `bog_resilience`.
+
+**Notable features:** Reed breather mask and reed-walker boots; antidote salves from harvests, hidden caches, and breakable spore pods. Gas wisps, bog leeches, and mire crawlers throughout. `up` from the heart scatters to forest or clearing.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `attack`, `wear`.
 

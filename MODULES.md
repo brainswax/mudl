@@ -17,7 +17,7 @@ Docs live next to each `.mudl` file under `modules/default/worlds/default_world/
 ## Doc structure (every module README)
 
 1. Theme teaser (no spoilers)
-2. Quick install — one copy-paste block: `@import` URL, minimal host map, `cargo run`, `module reload`, `go`
+2. Quick install — three REPL/IRC commands: `@import`, `@create portal`, `@link` (then `go`)
 3. Details — tone, what to expect, commands (no puzzle solutions)
 4. Extension ideas (optional, builder-focused)
 

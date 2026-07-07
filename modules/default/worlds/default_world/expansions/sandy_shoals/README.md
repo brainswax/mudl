@@ -4,35 +4,23 @@ Whimsical tropical resort — tiki bar, tidepools, striped hammocks, and a pearl
 
 ## Quick Install
 
-Paste the `@import` line into `world.mudl`, the room into `map.mudl`, set `starting_location=start`, then run:
+Stand in any room and paste:
 
 ```mudl
 @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/sandy_shoals/sandy_shoals.mudl
-
-type: area
-base_name: start
-name: Start
-description: A painted arrow points south along sand.
-exits:
-  south: beach-trail
-exit_returns:
-  south: north
+@create portal Shoals door_direction=south door_destination=beach-trail
+@link south beach-trail --return north
 ```
 
-```bash
-cargo run --bin repl
-```
-
-```text
-module reload
-go south
-```
+Then `go south`.
 
 ## Details
 
-**Tone:** No combat. Pressure is optional cocktail chaos and gentle navigation loops.
+**Entry:** `beach-trail` → `beach-gate` — four outward paths, some scenic dead ends that loop back with humor. Taste-themed way markers (salt, sun, sip, sand). Rooms include open shore, sunbed veranda, tiki bar, tidepool shelf, and pearl inlet with healing or buff triggers on entry.
 
-**Inside the resort:** Sandy trail into a gate with scenic dead ends, taste-themed way markers, and shore/veranda/bar/tidepool/inlet rooms with healing or buff triggers on entry. Stackable cocktails grant layered drunk effects that shift dexterity and charisma; NPCs react differently when you are unsteady. Tiki bartender, hammock attendant, and pier hermit — friendly only. Harvestable shells and tidepool ledges, hidden bottle and cache finds, message in a bottle, and pearl coffer with resort gear.
+**Tone:** No combat. Optional cocktail chaos and gentle navigation loops.
+
+**Notable features:** Stackable cocktails grant layered drunk effects (tipsy → buzz → three sheets); NPCs react differently when unsteady. Tiki bartender, hammock attendant, pier hermit — friendly only. Harvestable shells and tidepool ledges, hidden bottle and cache finds, message in a bottle, pearl coffer with resort gear. `out` from the pearl inlet scatters to clearing, forest path, or sandy trail.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `open`, `inventory`.
 

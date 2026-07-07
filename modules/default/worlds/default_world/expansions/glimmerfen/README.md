@@ -4,44 +4,25 @@ A pristine fey vale — silver grass, singing reeds, glowcap counsel, and starli
 
 ## Quick Install
 
-Paste the `@import` line into `world.mudl`, the two rooms into `map.mudl`, set `starting_location=start`, then run:
+Stand in any room and paste:
 
 ```mudl
 @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/glimmerfen/glimmerfen.mudl
-
-type: area
-base_name: start
-name: Start
-exits:
-  north: forest-path
-exit_returns:
-  north: south
-
-type: area
-base_name: forest-path
-name: Forest Path
-description: Pale mushroom caps ring the trail in a perfect circle.
-exits:
-  south: start
-exit_returns:
-  south: north
+@create portal Glimmerfen prototype=mushroom-ring-portal door_direction=through door_destination=fey-threshold
+@link through fey-threshold --return through
 ```
 
-```bash
-cargo run --bin repl
-```
-
-```text
-module reload
-go north
-go through
-```
+Then `go through`.
 
 ## Details
 
-**Tone:** Restorative. No attack behaviors; ambient fey spawns emote and wander.
+**Entry:** `fey-threshold` — four outward paths with gentle wrong turns (mist, bramble, mirror glade, wisp hollow, fern cathedral, petal shrine) that loop back softly. Hush-themed navigation via runestone markers; the crossing plaque teaches vocabulary, not the route.
 
-**Inside the vale:** A threshold with gentle wrong turns, hush-themed navigation via runestone markers, and glades that grant magical buffs and healing on entry. Harvest moonpetals, reeds, glowcaps, and starroots for teas, charms, and wearables. Fairy guide, gnome gardener, and elder elf sage offer greetings and light aid. Leaving from the grace pool scatters you back to familiar ground.
+**Tone:** Restorative. No attack behaviors; ambient fey spawns emote and wander. Glades grant magical `@effect` buffs on entry and healing when worn down — dewdrop_vigor, songpeace, glowcap_luminance, rootwise, fey_grace, and others.
+
+**Notable areas:** Dewglade, songbower, glowfen, rootbridge, grace pool. Harvest moonpetals, singing reeds, glowcaps, and starroots. NPCs: fairy guide, gnome gardener, elder elf sage. Leaving from the grace pool scatters to clearing, forest, or beach trail.
+
+**Optional second entrance:** `prototype=moonmist-arch` with `door_direction=mist` on a shore room links to the same threshold.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `inventory`, `wear`.
 
@@ -49,6 +30,6 @@ go through
 
 - `@schedule` seasonal `@trigger on_weather` blessings on the grace pool.
 - `@spawn-template` unicorn with `fey_wanderer` for rare `on_enter` sightings.
-- `@create item` a second portal with `prototype=moonmist-arch` and `door_direction=mist` for a beach entrance.
+- Third portal from a custom courtyard with a new `door_direction`.
 - `when skill stealth at_least N` triggers on your own fairy rings.
 - `@effect` festival_merriment toggled by wizard `@set` on the threshold for live events.

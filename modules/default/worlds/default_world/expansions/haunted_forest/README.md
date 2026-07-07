@@ -4,46 +4,23 @@ Silver mist, moonlit glades, and a wood that remembers those who listen. Gothic 
 
 ## Quick Install
 
-Paste the `@import` line into `world.mudl`, the two rooms into `map.mudl`, set `starting_location=start`, then run:
+Stand in any room and paste:
 
 ```mudl
 @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/haunted_forest/haunted_forest.mudl
-
-type: area
-base_name: start
-name: Start
-exits:
-  north: forest-path
-exit_returns:
-  north: south
-
-type: area
-base_name: forest-path
-name: Forest Path
-description: An ancient split oak hunches beside the trail.
-exits:
-  south: start
-  in: haunted-entry
-exit_returns:
-  south: north
-  in: out
+@create portal "Haunted Forest" door_direction=in door_destination=haunted-entry
+@link in haunted-entry --return out
 ```
 
-```bash
-cargo run --bin repl
-```
-
-```text
-module reload
-go north
-go in
-```
+Then `go in`.
 
 ## Details
 
+**Entry:** `haunted-entry` — a threshold where many paths look equally inviting; wrong turns loop back without fanfare. Way markers and readable stones reward careful reading. Themed regions: moonlit, ember, mirror, and ash glades with weather and respawn schedules.
+
 **Tone:** Medium danger. Navigation tension, ambient phantoms, and lurkers that may attack if you blunder in unprepared. Stealth and survival help.
 
-**Inside the wood:** A threshold where many paths look equally inviting, way markers whose wording rewards careful reading, and themed regions (moonlit, ember, mirror, ash) with weather and respawn schedules. Locked hollow oak portal, breakable pots, harvestable moss, hidden supply cache, shrine offering, and a reward chest at the deep heart. Wisps and lurkers spawn on enter and on periodic ticks.
+**Notable features:** Locked hollow oak portal (consumable key via whisper charm), breakable clay pots, harvestable moss, hidden supply cache, shrine offering, and rootbound reward chest at the deep heart. Wisps and lurkers spawn on enter and on periodic ticks. A deliberate `out` exit from the heart scatters you to familiar ground.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `harvest`, `attack`, `open`, `unlock`.
 

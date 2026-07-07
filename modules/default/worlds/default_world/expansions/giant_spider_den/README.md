@@ -4,46 +4,23 @@ A brood crawl beneath the earth — silk galleries, egg chambers, iron gates, an
 
 ## Quick Install
 
-Paste the `@import` line into `world.mudl`, the two rooms into `map.mudl`, set `starting_location=start`, then run:
+Stand in any room and paste:
 
 ```mudl
 @import https://raw.githubusercontent.com/brainswax/mudl/main/modules/default/worlds/default_world/expansions/giant_spider_den/giant_spider_den.mudl
-
-type: area
-base_name: start
-name: Start
-exits:
-  north: swamp-dry
-exit_returns:
-  north: south
-
-type: area
-base_name: swamp-dry
-name: Dry Mound
-description: A rare rise of cracked peat. Wet silk strings a web-choked fissure.
-exits:
-  south: start
-  in: spider-entry
-exit_returns:
-  south: north
-  in: out
+@create portal "Spider Den" prototype=webbed-fissure door_direction=in door_destination=spider-entry
+@link in spider-entry --return out
 ```
 
-```bash
-cargo run --bin repl
-```
-
-```text
-module reload
-go north
-go in
-```
+Then `go in`.
 
 ## Details
 
-**Tone:** High danger. Web-slowed movement, lurkers with awareness checks, hatchling swarms, and a brood queen boss at the crown. Stealth, light, and survival skills strongly recommended.
+**Entry:** `spider-entry` — a webbed threshold; wrong crawls loop back silently. Thread-themed navigation via bone peg markers and a warning plaque (silk, egg, fang, crown). Chambers escalate through silk galleries, egg nests, fang halls, and the crown where the brood queen waits.
 
-**Inside the den:** A webbed threshold with wrong crawls that loop back, thread-themed navigation via bone peg markers, and silk/egg/fang/crown chambers with escalating pressure. Brood lantern and starlight ward gear; `@effect` webbed_slow, starlight_ward, spider_sense. Breakable cocoons, hidden silk cache, iron gate with key mechanics, and a weighted crown coffer. Ceiling lurkers, broodlings, hatchlings, and the brood queen.
+**Tone:** High danger. Web-slowed movement, lurkers with awareness checks, hatchling swarms, and a brood queen boss. Stealth, light, and survival skills strongly recommended.
+
+**Notable features:** Brood lantern and starlight ward gear; `@effect` webbed_slow, starlight_ward, spider_sense. Breakable cocoons, hidden silk cache, brood iron gate with key mechanics, weighted crown coffer. `out` from the crown scatters to forest, clearing, or dry mound.
 
 **Commands:** `look`, `examine`, `read`, `go`, `take`, `attack`, `open`, `unlock`, `wield`.
 
