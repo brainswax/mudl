@@ -20,6 +20,10 @@ use mudl::display::{
     DisplayContext, DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope,
     TargetResolution,
 };
+use mudl::creature::{
+    damage_creature, heal_creature, parse_vital_amount_args, DEFAULT_DAMAGE_AMOUNT,
+    DEFAULT_HEAL_AMOUNT,
+};
 use mudl::inventory::{
     break_item, close_container, describe_inventory, drop_item, lock_container, open_container,
     parse_put_args, parse_unlock_args, put_item, read_item, remove_item, take_item,
@@ -394,6 +398,12 @@ async fn main() -> Result<()> {
                         );
                         println!("  @delete <target>            - wizard: soft-delete an object");
                         println!(
+                            "  @damage <creature> [amount] - wizard: apply damage to a creature"
+                        );
+                        println!(
+                            "  @heal <creature> [amount]   - wizard: heal a creature"
+                        );
+                        println!(
                             "  @undelete <id>              - wizard: restore soft-deleted object"
                         );
                         println!(
@@ -550,6 +560,62 @@ async fn main() -> Result<()> {
                                 error!(error = %e, "@dump failed");
                                 println!("The underlying structure remains hidden.");
                             }
+                        }
+                    }
+                    "@damage" => {
+                        let rest = parts[1..].join(" ");
+                        match parse_vital_amount_args(&rest, DEFAULT_DAMAGE_AMOUNT) {
+                            Ok(req) => {
+                                let mut ctx = session.inventory_context();
+                                match damage_creature(
+                                    ctx.player_id,
+                                    ctx.room_id,
+                                    ctx.objects,
+                                    ctx.anatomy,
+                                    ctx.dirty,
+                                    &req.target_name,
+                                    req.amount,
+                                ) {
+                                    Ok(msg) => {
+                                        println!("{msg}");
+                                        if let Err(e) =
+                                            persist_session(&mut session, &persistence).await
+                                        {
+                                            error!(error = %e, "persist after damage failed");
+                                        }
+                                    }
+                                    Err(e) => println!("{e}"),
+                                }
+                            }
+                            Err(e) => println!("{e}"),
+                        }
+                    }
+                    "@heal" => {
+                        let rest = parts[1..].join(" ");
+                        match parse_vital_amount_args(&rest, DEFAULT_HEAL_AMOUNT) {
+                            Ok(req) => {
+                                let mut ctx = session.inventory_context();
+                                match heal_creature(
+                                    ctx.player_id,
+                                    ctx.room_id,
+                                    ctx.objects,
+                                    ctx.anatomy,
+                                    ctx.dirty,
+                                    &req.target_name,
+                                    req.amount,
+                                ) {
+                                    Ok(msg) => {
+                                        println!("{msg}");
+                                        if let Err(e) =
+                                            persist_session(&mut session, &persistence).await
+                                        {
+                                            error!(error = %e, "persist after heal failed");
+                                        }
+                                    }
+                                    Err(e) => println!("{e}"),
+                                }
+                            }
+                            Err(e) => println!("{e}"),
                         }
                     }
                     "@delete" => {

@@ -1257,8 +1257,14 @@ mod tests {
 
     #[tokio::test]
     async fn milestone3_creature_systems_initial() {
-        use crate::creature::{apply_effect, creature_health, creature_stat, run_on_enter_behaviors};
-        use crate::display::format_examine_self;
+        use crate::creature::{
+            apply_effect, creature_health, creature_is_defeated, creature_skill, creature_stat,
+            damage_creature, heal_creature, run_on_enter_behaviors,
+        };
+        use crate::display::{
+            creature::format_examine_creature_player, format_examine_self, Describable,
+            DisplayMode,
+        };
 
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
@@ -1272,12 +1278,14 @@ mod tests {
         let player = factory.load_object(&player_id).await.unwrap().unwrap();
         assert_eq!(creature_health(&player), 100);
         assert_eq!(creature_stat(&player, "strength"), 10);
+        assert_eq!(creature_skill(&player, "survival"), 0);
         assert_eq!(player.get_int_property("max_weight"), Some(100));
 
         let npc_id = ObjectId::new("npc:path-watcher-001");
         let npc = factory.load_object(&npc_id).await.unwrap().expect("path watcher");
         assert_eq!(npc.name, "Path Watcher");
         assert_eq!(npc.location.as_ref().map(|id| id.as_str()), Some("area:forest-path-001"));
+        assert_eq!(creature_health(&npc), 100);
 
         let objects: HashMap<ObjectId, Object> = persistence
             .list_objects(false)
@@ -1289,6 +1297,11 @@ mod tests {
 
         let self_examine = format_examine_self(&player, &objects, &world.anatomy);
         assert!(self_examine.contains("You feel fit."));
+        assert!(self_examine.contains("Strength 10"));
+
+        let npc_examine = format_examine_creature_player(&npc, &world.anatomy);
+        assert!(npc_examine.contains("looks fit"));
+        assert!(npc_examine.contains("Strength 10"));
 
         let forest_path = ObjectId::new("area:forest-path-001");
         let behavior_lines = run_on_enter_behaviors(&forest_path, &player_id, &objects);
@@ -1303,6 +1316,44 @@ mod tests {
         );
         let move_out = session.go("north").unwrap();
         assert!(move_out.contains("trees seem to lean closer"));
+
+        let damage_msg = {
+            let mut ctx = session.inventory_context();
+            damage_creature(
+                ctx.player_id,
+                ctx.room_id,
+                ctx.objects,
+                ctx.anatomy,
+                ctx.dirty,
+                "path watcher",
+                40,
+            )
+            .unwrap()
+        };
+        assert!(damage_msg.contains("damage") || damage_msg.contains("stagger"));
+        let watcher = session.object(&npc_id).unwrap();
+        assert_eq!(creature_health(watcher), 60);
+
+        {
+            let mut ctx = session.inventory_context();
+            damage_creature(
+                ctx.player_id,
+                ctx.room_id,
+                ctx.objects,
+                ctx.anatomy,
+                ctx.dirty,
+                "self",
+                90,
+            )
+            .unwrap();
+        }
+        let wounded = session.object(&player_id).unwrap();
+        assert_eq!(creature_health(wounded), 10);
+        assert!(!creature_is_defeated(wounded));
+
+        let display_ctx = session.display_context(DisplayMode::Player);
+        let watcher_describe = session.object(&npc_id).unwrap().describe(&display_ctx);
+        assert!(watcher_describe.contains("wounded") || watcher_describe.contains("health"));
 
         let mut encumbered_player = session
             .object(&player_id)

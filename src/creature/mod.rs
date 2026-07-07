@@ -1,6 +1,7 @@
 //! Creature systems — vitality, effects, and basic NPC behaviors (Milestone 3).
 
 pub mod ai;
+pub mod combat;
 pub mod effects;
 pub mod spawner;
 pub mod vitality;
@@ -16,8 +17,13 @@ pub use spawner::{
     run_on_enter_spawners, spawn_creature, spawner_entries, spawner_room_id, spawners_for_target,
     spawners_in_room, spawn_templates_to_property, SpawnResult,
 };
+pub use combat::{
+    damage_creature, heal_creature, parse_vital_amount_args, CreatureCombatError,
+    DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT, VitalAmountRequest,
+};
 pub use vitality::{
     apply_damage, creature_base_max_health, creature_def_for, creature_health,
-    creature_max_health, creature_skill, creature_stat, format_health_clause, heal,
+    creature_is_defeated, creature_max_health, creature_skill, creature_stat,
+    format_creature_stats_summary, format_health_clause, format_npc_health_clause, heal,
     init_creature_vitality, DEFAULT_MAX_HEALTH,
 };

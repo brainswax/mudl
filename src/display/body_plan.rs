@@ -44,7 +44,25 @@ fn capitalize_first(s: &str) -> String {
 
 /// Player-facing examine output for a creature definition by name (`examine human`).
 pub fn format_body_plan_examine_player(plan: &BodyPlan, _carry_capacity: Option<f64>) -> String {
-    format_body_detail_player(plan, false)
+    let mut lines = vec![format_body_detail_player(plan, false)];
+    if plan.max_health > 0 {
+        lines.push(format!("Typical health: {}.", plan.max_health));
+    }
+    let mut vitals = Vec::new();
+    let mut stat_names: Vec<_> = plan.stats.keys().collect();
+    stat_names.sort();
+    for name in stat_names {
+        vitals.push(format!("{} {}", name.replace('_', " "), plan.stats[name]));
+    }
+    let mut skill_names: Vec<_> = plan.skills.keys().collect();
+    skill_names.sort();
+    for name in skill_names {
+        vitals.push(format!("{} {}", name.replace('_', " "), plan.skills[name]));
+    }
+    if !vitals.is_empty() {
+        lines.push(format!("Typical vitals: {}.", vitals.join(", ")));
+    }
+    lines.join("\n")
 }
 
 /// Builder `@examine` section listing slot definitions and occupancy.
@@ -85,8 +103,28 @@ pub fn format_body_plan_examine_builder(plan: &BodyPlan) -> String {
     let mut lines = vec![
         format!("name: {}", plan.name),
         "type: body_plan".to_string(),
-        "slots:".to_string(),
+        format!("max_health: {}", plan.max_health),
     ];
+    if let Some(base) = plan.base_max_weight {
+        lines.push(format!("base_max_weight: {base}"));
+    }
+    if !plan.stats.is_empty() {
+        lines.push("stats:".to_string());
+        let mut names: Vec<_> = plan.stats.keys().collect();
+        names.sort();
+        for name in names {
+            lines.push(format!("  {name}: {}", plan.stats[name]));
+        }
+    }
+    if !plan.skills.is_empty() {
+        lines.push("skills:".to_string());
+        let mut names: Vec<_> = plan.skills.keys().collect();
+        names.sort();
+        for name in names {
+            lines.push(format!("  {name}: {}", plan.skills[name]));
+        }
+    }
+    lines.push("slots:".to_string());
     for slot in &plan.slots {
         let type_label = match slot.slot_type {
             SlotType::Grasp => "grasp",
@@ -151,6 +189,8 @@ mod tests {
         let plan = human_plan();
         let output = format_body_plan_examine_builder(&plan);
         assert!(output.contains("type: body_plan"));
+        assert!(output.contains("max_health: 100"));
+        assert!(output.contains("strength: 10"));
         assert!(output.contains("left_hand: type=grasp"));
         assert!(output.contains("torso: type=wear"));
     }

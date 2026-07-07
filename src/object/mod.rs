@@ -452,6 +452,9 @@ fn describe_entity_player(obj: &Object, ctx: &DisplayContext) -> String {
 
     // In-character `examine`: natural sentences, no leading name, stats when relevant.
     if !brief {
+        if obj.object_type() == "npc" && obj.has_creature_role() {
+            return crate::display::creature::format_examine_creature_player(obj, &ctx.anatomy);
+        }
         if obj.is_container() {
             return crate::display::format_examine_container_player(obj, &ctx.objects);
         }

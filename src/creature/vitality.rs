@@ -74,6 +74,71 @@ pub fn creature_skill(creature: &Object, name: &str) -> i64 {
     creature.get_int_map("skills").get(name).copied().unwrap_or(0)
 }
 
+/// Whether a creature has been reduced to zero health.
+pub fn creature_is_defeated(creature: &Object) -> bool {
+    creature_health(creature) == 0
+}
+
+/// Compact player-facing summary of core stats and skills.
+pub fn format_creature_stats_summary(creature: &Object) -> String {
+    let stats = creature.get_int_map("stats");
+    let skills = creature.get_int_map("skills");
+    if stats.is_empty() && skills.is_empty() {
+        return String::new();
+    }
+
+    let mut parts = Vec::new();
+    let mut stat_names: Vec<_> = stats.keys().collect();
+    stat_names.sort();
+    for name in stat_names {
+        parts.push(format!(
+            "{} {}",
+            capitalize_stat_name(name),
+            creature_stat(creature, name)
+        ));
+    }
+    let mut skill_names: Vec<_> = skills.keys().collect();
+    skill_names.sort();
+    for name in skill_names {
+        parts.push(format!(
+            "{} {}",
+            capitalize_stat_name(name),
+            creature_skill(creature, name)
+        ));
+    }
+    parts.join(", ")
+}
+
+fn capitalize_stat_name(name: &str) -> String {
+    name.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Third-person health phrase for examining an NPC.
+pub fn format_npc_health_clause(creature: &Object, anatomy: Option<&AnatomyRegistry>) -> String {
+    let display = creature.name.to_lowercase();
+    let health = creature_health(creature);
+    let max = creature_max_health(creature, anatomy);
+    if health == 0 {
+        return format!("The {display} is down.");
+    }
+    if health >= max {
+        return format!("The {display} looks fit.");
+    }
+    if max > 0 && health * 100 / max < 25 {
+        return format!("The {display} looks badly hurt ({health}/{max} health).");
+    }
+    format!("The {display} looks wounded ({health}/{max} health).")
+}
+
 /// Apply damage; returns new health.
 pub fn apply_damage(creature: &mut Object, amount: i64) -> i64 {
     let current = creature_health(creature);
@@ -198,5 +263,23 @@ mod tests {
         assert_eq!(format_health_clause(&creature, None), "You feel fit.");
         apply_damage(&mut creature, 85);
         assert!(format_health_clause(&creature, None).contains("badly hurt"));
+    }
+
+    #[test]
+    fn stats_summary_lists_stats_and_skills() {
+        let mut creature = bare_creature("player:hero-001");
+        init_creature_vitality(&mut creature, &human_def());
+        let summary = format_creature_stats_summary(&creature);
+        assert!(summary.contains("Strength 10"));
+        assert!(summary.contains("Dexterity 12"));
+        assert!(summary.contains("Survival 1"));
+    }
+
+    #[test]
+    fn defeated_creature_reports_zero_health() {
+        let mut creature = bare_creature("player:hero-001");
+        init_creature_vitality(&mut creature, &human_def());
+        apply_damage(&mut creature, 500);
+        assert!(creature_is_defeated(&creature));
     }
 }

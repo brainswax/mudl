@@ -7,6 +7,7 @@ use crate::object::{Object, ObjectId};
 pub mod body_plan;
 pub mod carried;
 pub mod container;
+pub mod creature;
 pub mod equipment;
 pub mod examine;
 pub mod examine_target;
