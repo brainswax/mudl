@@ -2,12 +2,18 @@
 
 pub mod ai;
 pub mod effects;
+pub mod spawner;
 pub mod vitality;
 
 pub use ai::{npc_behaviors, npcs_in_room, run_on_enter_behaviors, NpcAction, NpcBehavior};
 pub use effects::{
     active_effects, apply_effect, collect_active_effect_modifiers, effect_encumbrance_factor,
     effect_max_weight_bonus, refresh_effect_derived_properties, remove_effect, EffectModifiers,
+};
+pub use spawner::{
+    apply_spawner_def, count_active_spawns, is_spawner, is_spawner_infrastructure,
+    pick_weighted_entry, run_on_enter_spawners, spawn_creature, spawner_entries,
+    spawners_in_room, spawn_templates_to_property, SpawnResult,
 };
 pub use vitality::{
     apply_damage, creature_base_max_health, creature_def_for, creature_health,

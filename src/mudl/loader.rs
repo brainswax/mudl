@@ -5,8 +5,9 @@ use std::path::{Component, Path, PathBuf};
 use super::anatomy::{parse_anatomy_file, AnatomyRegistry};
 use super::item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
 use super::npc_def::parse_npc_file;
+use super::spawner_def::parse_spawner_file;
 use super::world_def::{parse_world_file, WorldDef};
-use crate::mudl::NpcDef;
+use crate::mudl::{NpcDef, SpawnTemplateDef, SpawnerDef};
 
 /// A loaded MUDL source — local file or remote URL fetched at load time.
 #[derive(Debug, Clone)]
@@ -37,6 +38,8 @@ pub struct LoadedWorld {
     pub item_prototypes: Vec<ItemPrototypeDef>,
     pub item_instances: Vec<ItemInstanceDef>,
     pub npc_defs: Vec<NpcDef>,
+    pub spawn_template_defs: Vec<SpawnTemplateDef>,
+    pub spawner_defs: Vec<SpawnerDef>,
     pub starting_location: Option<String>,
 }
 
@@ -197,6 +200,8 @@ fn load_world(
     let mut item_prototypes = Vec::new();
     let mut item_instances = Vec::new();
     let mut npc_defs = Vec::new();
+    let mut spawn_template_defs = Vec::new();
+    let mut spawner_defs = Vec::new();
     let mut resolved_start = starting_location;
 
     for source in &sources {
@@ -208,6 +213,9 @@ fn load_world(
         item_prototypes.extend(protos);
         item_instances.extend(items);
         npc_defs.extend(parse_npc_file(&file_content));
+        let (templates, spawners) = parse_spawner_file(&file_content);
+        spawn_template_defs.extend(templates);
+        spawner_defs.extend(spawners);
         if start.is_some() {
             resolved_start = start;
         }
@@ -231,6 +239,8 @@ fn load_world(
         item_prototypes,
         item_instances,
         npc_defs,
+        spawn_template_defs,
+        spawner_defs,
         starting_location: resolved_start,
     })
 }

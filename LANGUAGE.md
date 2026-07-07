@@ -235,6 +235,29 @@ Creature anatomy is defined in `creatures.mudl` via `@creature` blocks. Player t
 
 Supported behavior actions: `say`, `say_to`, `emote`. `on_enter` runs when a player enters the NPC's room.
 
+**Creature spawners** (locations only spawn randomly when a spawner is attached):
+
+```mudl
+@spawn-template mist-wisp
+  name=Mist Wisp
+  creature=human
+  @behavior on_enter emote drifts through the air.
+@end
+
+@spawner haunted-moon-phantoms
+  location=haunted-moon
+  trigger=on_enter
+  chance=0.7
+  max_active=1
+  @entry mist-wisp weight=3
+  @entry pale-lurker weight=1
+@end
+```
+
+- `trigger=on_enter` — roll on each player entry; `trigger=periodic` with `periodic_interval=N` — every Nth entry.
+- `chance` — spawn attempt probability (0.0–1.0). `max_active` — cap concurrent spawned creatures per spawner.
+- No spawner on a location → no random spawns (only explicit `@npc` or MUDL-placed creatures).
+
 **Slot types** (MVP):
 - `grasp` — hands; items with `hand_slot: left`, `right`, or `both` occupy these
 - `wear` — clothing/armor/containers worn on the body

@@ -218,6 +218,62 @@ pub async fn bootstrap_world_items<P: Persistence>(
     Ok(placements)
 }
 
+/// Spawn MUDL-defined creature spawners into persistence.
+pub async fn bootstrap_world_spawners<P: Persistence>(
+    factory: &ObjectFactory<P>,
+    owner: &ObjectId,
+    world: &LoadedWorld,
+    area_ids: &HashMap<String, ObjectId>,
+) -> anyhow::Result<()> {
+    use crate::creature::{apply_spawner_def, spawn_templates_to_property};
+    use std::collections::HashMap as StdHashMap;
+
+    let template_map: StdHashMap<_, _> = world
+        .spawn_template_defs
+        .iter()
+        .map(|t| (t.base_name.clone(), t.clone()))
+        .collect();
+
+    for def in &world.spawner_defs {
+        if def.location.is_empty() {
+            anyhow::bail!("Spawner '{}' missing location", def.base_name);
+        }
+        let spawner_id = ObjectId::new(format!("spawner:{}-001", def.base_name));
+        if factory.load_object(&spawner_id).await?.is_some() {
+            continue;
+        }
+        let location = area_ids
+            .get(&def.location)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Spawner '{}' targets unknown location '{}'",
+                    def.base_name,
+                    def.location
+                )
+            })?;
+
+        let mut spawner = Object {
+            id: spawner_id,
+            name: format!("{} spawner", def.base_name),
+            aliases: Vec::new(),
+            location: Some(location),
+            prototype: None,
+            owner: owner.clone(),
+            permissions: PermissionFlags::EVERYONE,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+        };
+        apply_spawner_def(&mut spawner, def, &template_map)?;
+        spawner.add_property(spawn_templates_to_property(&world.spawn_template_defs));
+        factory.persistence().save_object(&spawner).await?;
+    }
+    Ok(())
+}
+
 /// Spawn MUDL-defined NPCs into persistence.
 pub async fn bootstrap_world_npcs<P: Persistence>(
     factory: &ObjectFactory<P>,
@@ -351,6 +407,7 @@ pub async fn bootstrap_world<P: Persistence>(
     })?;
 
     bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
+    bootstrap_world_spawners(factory, &owner, world, &name_to_id).await?;
     bootstrap_world_npcs(factory, &owner, world, &name_to_id).await?;
 
     if factory.load_object(&owner).await?.is_none() {
@@ -1110,6 +1167,74 @@ mod tests {
         assert_eq!(
             crate::creature::effect_encumbrance_factor(weary_player),
             1.1
+        );
+    }
+
+    #[tokio::test]
+    async fn creature_spawner_attached_to_haunted_moon() {
+        use crate::creature::spawners_in_room;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let factory = ObjectFactory::new(persistence.clone());
+        let player_id = ObjectId::new("player:admin-001");
+        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+
+        bootstrap_world(&factory, player_id.clone(), &world)
+            .await
+            .unwrap();
+
+        let objects: HashMap<ObjectId, Object> = persistence
+            .list_objects(false)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.id.clone(), o))
+            .collect();
+
+        let moon = ObjectId::new("area:haunted-moon-001");
+        let clearing = ObjectId::new("area:the-void-001");
+        assert!(
+            spawners_in_room(&clearing, &objects).is_empty(),
+            "starting clearing has no spawners"
+        );
+        assert_eq!(spawners_in_room(&moon, &objects).len(), 1);
+
+        let mut session = Session::test_session(
+            player_id.clone(),
+            world.anatomy.clone(),
+            objects,
+            Some(clearing),
+        );
+
+        open_container(&mut session.inventory_context(), "mailbox").unwrap();
+        take_item(&mut session.inventory_context(), "brass key").unwrap();
+        unlock_container(&mut session.inventory_context(), "chest", Some("brass key")).unwrap();
+        open_container(&mut session.inventory_context(), "chest").unwrap();
+        take_item(&mut session.inventory_context(), "whisper charm").unwrap();
+
+        session.go("north").unwrap();
+        unlock_container(&mut session.inventory_context(), "oak", None).unwrap();
+        open_container(&mut session.inventory_context(), "oak").unwrap();
+        session.go("in").unwrap();
+        session.go("north").unwrap();
+
+        let moon_npcs: Vec<_> = session
+            .objects()
+            .values()
+            .filter(|o| {
+                o.object_type() == "npc"
+                    && o.location.as_ref() == Some(&moon)
+                    && o.get_property("spawned_by").is_some()
+            })
+            .collect();
+        assert!(
+            !moon_npcs.is_empty(),
+            "haunted-moon spawner should create a creature on enter"
+        );
+        assert!(
+            moon_npcs
+                .iter()
+                .any(|o| o.name == "Mist Wisp" || o.name == "Pale Lurker")
         );
     }
 }

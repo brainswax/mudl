@@ -306,6 +306,27 @@ impl Session {
             };
             lines.push(movement_line);
         }
+        let owner = self
+            .objects
+            .get(&self.player_id)
+            .map(|p| p.owner.clone())
+            .unwrap_or_else(|| self.player_id.clone());
+        for spawn in crate::creature::run_on_enter_spawners(
+            &target_id,
+            &self.player_id,
+            &owner,
+            &self.anatomy,
+            &mut self.objects,
+        ) {
+            self.dirty.mark(&spawn.npc_id);
+            if let Some(message) = spawn.message {
+                lines.push(message);
+            }
+        }
+        for spawner in crate::creature::spawners_in_room(&target_id, &self.objects) {
+            self.dirty.mark(&spawner.id);
+        }
+
         if let Some(room) = self.objects.get(&target_id) {
             let ctx = DisplayContext::new(self.player_id.clone(), DisplayMode::Player)
                 .with_objects(self.objects.clone())

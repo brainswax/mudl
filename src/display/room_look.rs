@@ -102,7 +102,9 @@ fn visible_content_phrases(room: &Object, ctx: &DisplayContext) -> Vec<String> {
     let mut items: Vec<&Object> = room
         .contents(&ctx.objects)
         .into_iter()
-        .filter(|item| item.id != ctx.observer)
+        .filter(|item| {
+            item.id != ctx.observer && !crate::creature::is_spawner_infrastructure(item)
+        })
         .collect();
     items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     items.iter().map(|item| room_item_phrase(item)).collect()

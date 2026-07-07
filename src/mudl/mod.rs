@@ -2,6 +2,7 @@ pub mod anatomy;
 pub mod item_def;
 pub mod loader;
 pub mod npc_def;
+pub mod spawner_def;
 pub mod roles;
 pub mod world_def;
 
@@ -10,6 +11,9 @@ pub use anatomy::{
     EffectDef, PlayerTemplate, SlotType,
 };
 pub use npc_def::{behaviors_to_values, parse_npc_file, NpcBehaviorDef, NpcDef};
+pub use spawner_def::{
+    parse_spawner_file, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef, SpawnerTrigger,
+};
 pub use loader::{
     default_module_dir, default_universe_path, load_module, load_universe, LoadedUniverse,
     LoadedWorld, MudlSource,

@@ -133,6 +133,39 @@
   read_text=The order held. The wood yields only one exit, and it will not be gentle.
 @end
 
+# --- Creature spawners (weighted, on-enter only in haunted rooms) ---
+
+@spawn-template mist-wisp
+  name=Mist Wisp
+  creature=human
+  @behavior on_enter emote drifts through the silvered air without sound.
+@end
+
+@spawn-template pale-lurker
+  name=Pale Lurker
+  creature=human
+  @behavior on_enter emote watches you from between the trees.
+@end
+
+@spawner haunted-moon-phantoms
+  location=haunted-moon
+  trigger=on_enter
+  chance=1.0
+  max_active=1
+  @entry mist-wisp weight=3
+  @entry pale-lurker weight=1
+@end
+
+@spawner haunted-mirror-phantoms
+  location=haunted-mirror
+  trigger=periodic
+  periodic_interval=3
+  chance=0.5
+  max_active=1
+  @entry mist-wisp weight=2
+  @entry pale-lurker weight=2
+@end
+
 # --- Haunted forest areas ---
 
 type: area
