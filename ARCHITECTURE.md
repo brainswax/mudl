@@ -59,7 +59,7 @@ The diagram below shows **actual** module dependencies today (solid = implemente
           │                               │
           ▼                               ▼
 ┌─────────────────────┐         ┌─────────────────────────────────────────┐
-│ Creature (M3)       │         │ Events (M4 partial)                       │
+│ Creature (M3)       │         │ Events (M4) + conditions                    │
 │ combat, behavior,   │         │ execute_event / event_script            │
 │ tactics, spawner    │         │ event_subscribers (spawner/loot bus)    │
 └─────────┬───────────┘         └─────────────────────────────────────────┘
@@ -167,16 +167,114 @@ portal prep → on_leave (place) → move player → execute_event(on_enter)
 
 **Principle:** World *content* and *reactions* belong in MUDL; *physics* (movement rules, combat math, awareness contests) stays in Rust until a sandboxed DSL runtime exists.
 
-## Architectural Review — Strengths (M1–M3)
+## Architectural Review (M1–M4)
 
-1. **Single move authority** — `MoveManager` + `LocationRef` keep the object graph coherent; inventory verbs delegate correctly.
-2. **MUDL-first bootstrap** — No hardcoded world geography; haunted forest is a drop-in expansion, not a Rust fork.
-3. **Composable roles** — Containers, wearables, portals, breakables stack via properties; `MudlRoleProps` bridges parser → factory.
-4. **Session as play authority** — `repl::Session` owns graph + dirty state; movement orchestrates spawners, loot, triggers, and behaviors in one place.
-5. **Presentation split** — Player (`look`) vs builder (`@examine`) vs debug (`@dump`) is clean and extensible.
-6. **Test coverage** — Integration tests exercise full bootstrap → play → combat → persist paths (haunted forest adventure, path watcher kill loot).
+*Review date: July 2026. **437** tests. Milestones 1–3 complete; Milestone 4 largely complete.*
 
-## Architectural Review — Anti-patterns & Gaps (roll into M4+)
+### Executive summary
+
+MUDL has a **coherent core** for a single-player REPL: one object graph, one move authority, MUDL-first content, and a unified event bus for room scripts and spawners. The architecture matches the stated principle — **content in MUDL, physics in Rust** — and five expansion packs prove extensibility without engine forks.
+
+The main gaps are **scale and multi-user readiness**: `repl::Session` merges world state and player view, `src/bin/repl.rs` is a 1.6k-line command router, `bootstrap.rs` is a 2.5k-line god module, and RBAC/concurrency are stubbed. None of these block continued content work; they **do** block IRC (M5) without a focused refactor pass.
+
+### Strengths
+
+| # | Area | Why it matters |
+|---|------|----------------|
+| 1 | **Single move authority** | `MoveManager` + `LocationRef` keep `location`, `contents`, and `body_slots` consistent; inventory verbs never bypass it. |
+| 2 | **MUDL-first bootstrap** | Geography, creatures, behaviors, spawners, and expansions load from flat files — no Rust fork per adventure. |
+| 3 | **Composable roles** | `MudlRoleProps` bridges parser → `ObjectFactory`; containers, wearables, portals, breakables stack cleanly. |
+| 4 | **Unified event bus (M4)** | `execute_event` → subscribers (scheduler, spawners) → host `@trigger` scripts; depth/cycle guard and `EventOutcome::errors`. |
+| 5 | **Hybrid scripting model** | Narrative scripts in `event_handlers`; AI tactics in `creature_behaviors` — bootstrap migrates legacy `@behavior` lines to triggers. |
+| 6 | **Presentation tiers** | Player / builder / debug modes are consistent across commands; `resolve_object` is possession-first. |
+| 7 | **Persistence abstraction** | `Persistence` trait + JSON blobs; `DirtyTracker` + incremental `persist_dirty` wired through `Session::persist_changes`. |
+| 8 | **Integration tests** | Full paths: bootstrap → movement → combat → kill loot → conditions → persist (haunted forest, expansion packs). |
+
+### Issues and technical debt (prioritized)
+
+#### P0 — Blocks M5 (multi-user / IRC)
+
+| Issue | Location | Impact | Recommendation |
+|-------|----------|--------|----------------|
+| **World + player conflated** | `repl::Session` holds full `HashMap<ObjectId, Object>` *and* `player_id` | Two IRC nicks cannot safely share one world without a shared `WorldState` + per-connection player view | Split `WorldState` (authoritative graph) from `PlayerSession` (actor, location cache, display prefs). IRC bot holds `Arc<RwLock<WorldState>>` + one lightweight session per nick. |
+| **No concurrency control** | Single-threaded REPL; `DISPATCH_STACK` is `thread_local` | Parallel commands → data races, duplicate spawns, lost updates | Per-world `DispatchGuard` on `WorldState`; serialize mutations per room or per world with `tokio::sync::Mutex`. Wrap multi-object moves in SQLite transactions. |
+| **RBAC stubbed** | `has_wizard_permission()` always `true` | Any IRC nick could run `@set` / `@delete` | Gateway checks `PermissionFlags` on actor object; map IRC auth → player ID. Enforce builder vs wizard tiers before meta-commands. |
+| **Last-write-wins persistence** | `SqlitePersistence::save_object` per row, no version field | Concurrent edits to same object silently overwrite | Add `revision` or `updated_at` on `Object`; optimistic lock on save; retry on conflict. |
+
+#### P1 — Quality / maintainability (pre- or early M5)
+
+| Issue | Location | Impact | Recommendation |
+|-------|----------|--------|----------------|
+| **Fat frontend adapter** | `src/bin/repl.rs` (~1.6k lines) | IRC would duplicate routing logic | Introduce `CommandDispatcher` in `src/command/` (or `src/gateway/`) returning `CommandResult { lines, dirty }`; REPL and IRC bot call the same API. |
+| **God-module bootstrap** | `world/bootstrap.rs` (~2.5k lines) | Hard to extend spawn phases or test in isolation | Split: `bootstrap/places.rs`, `bootstrap/creatures.rs`, `bootstrap/spawners.rs`, orchestrator only. |
+| **`event_script` growth** | `world/event_script.rs` (~1.3k lines) | Every new action needs Rust | Cap M4 actions; plan M6 sandbox. Short term: register actions via enum + `register_action` table driven from MUDL metadata. |
+| **Dual AI execution path** | `run_creature_behaviors()` after `execute_event(on_enter)` | Tactics (flee/attack/wander) still outside the bus; ordering is implicit in `Session::go` | Document ordering contract (done in room-entry diagram). Long term: optional `react` as subscriber or phase-3 of `on_enter`. |
+| **Inventory persist fallback** | `persist_inventory_dirty` → `persist_all` when dirty empty | Accidental full-graph writes if dirty not marked | Audit inventory/move paths; mark dirty in `MoveManager`; remove full-graph fallback in production builds. |
+| **Duplicate parsers** | `parse_behavior_line` in `npc_def.rs` and `spawner_def.rs` | Drift risk | Extract `mudl/behavior_line.rs` (listed in §4.4). |
+
+#### P2 — Correctness / extensibility (can parallel content work)
+
+| Issue | Location | Impact | Recommendation |
+|-------|----------|--------|----------------|
+| **`object` → `display` coupling** | `object/mod.rs` imports `Describable` | Core depends on presentation | Move `Describable` impl to `display/` via extension trait or wrapper. |
+| **No graph validator** | Ad-hoc prune on load | Orphan refs, dangling `contents` possible after bugs | `validate_graph(objects) -> Vec<GraphError>` on hydrate and after bootstrap. |
+| **Prototype resolver** | Factory copies at spawn only | Runtime `@set prototype` and display inheritance can diverge | Central `resolve_prototype_chain(id)` in world layer. |
+| **Legacy `npc_behaviors`** | `behavior.rs::legacy_npc_behaviors` | Dead code path for old content | Migrate remaining content; delete fallback. |
+| **Exits as property maps** | `exits` on place objects | No first-class exit objects (keys, locks per direction) | Defer until builder demand; `@link` works for MVP. |
+
+#### P3 — Nice to have
+
+| Issue | Recommendation |
+|-------|----------------|
+| `DisplayContext` clones full object map on `go` look | Pass `&HashMap` + arena; avoid clone per room render |
+| `AnatomyRegistry` per session | Share `Arc<AnatomyRegistry>` from universe load (immutable) |
+| Combat/formula hard-coding | `@formula` or data tables in MUDL when sandbox exists |
+| `move_manager` "stub" comment on move hooks | Update comment; hooks are live via `emit_on_move_event` |
+
+### Hard-coded vs data-driven — assessment
+
+The split is **healthy for MVP**:
+
+- **Correctly data-driven:** map, items, creatures, behaviors, spawners, loot tables, `@trigger` reactions, conditions, expansion packs.
+- **Correctly hard-coded:** movement validation, stack merge, combat math, awareness contests, weighted spawn rolls, `event_script` interpreter.
+- **Risk zone:** `event_script.rs` — each new builder-facing verb requires a Rust match arm. Without a sandbox, MUDL cannot be truly self-modifying; LLM-generated *scripts* are limited to the fixed action vocabulary.
+
+### M5 readiness (IRC / multi-user)
+
+```
+Today (M4)                         Target (M5)
+──────────                         ───────────
+
+repl.rs ──► Session               IRC bot ──┐
+              (world + player)              ├──► Gateway (auth, RBAC, rate limit)
+              full object map               │         │
+              thread_local events           │         ▼
+              SQLite per-save               └──► WorldState (shared, locked)
+                        │                            │
+                        ▼                            ▼
+                   repl.db                    PlayerSession × N
+                                              (actor_id, location, prefs)
+```
+
+| Ready today | Not ready |
+|-------------|-----------|
+| `repl::Session::go` orchestration reusable | Shared world with multiple simultaneous actors |
+| `Persistence` trait async-ready | Transactions across multi-object commands |
+| `EventContext` (actor/host/target) | Per-connection permission enforcement |
+| `command/` parsers shared | Thin transport adapters (REPL is thick) |
+| Incremental dirty persist | Optimistic concurrency / revision fields |
+| 437 tests (single-player assumptions) | Multi-player integration tests |
+
+**Minimum M5 slice:** (1) `WorldState` + `PlayerSession` split, (2) `Gateway::dispatch(actor, line) -> Outcome`, (3) real RBAC, (4) world `Mutex` + transactional saves, (5) IRC adapter ~200 lines calling gateway.
+
+### Recommended next steps
+
+1. **M4 tail (1–2 PRs):** shared `behavior_line` parser; remove `npc_behaviors` legacy; fix persist fallback; graph validator (warn-only).
+2. **M5 foundation (before IRC):** `WorldState`, `CommandDispatcher`, RBAC on `PermissionFlags`, SQLite transactions in `MoveManager`.
+3. **M5 transport:** IRC bot as thin client; session registry `HashMap<Nick, PlayerSession>`.
+4. **Post-M5:** sandboxed verb runtime; prototype resolver; `object`/`display` decoupling.
+
+## Resolved M4 issues (historical)
 
 ### 1. Dual scripting buses — **resolved (M4)**
 
@@ -216,12 +314,13 @@ Creatures now use a **single script surface** with split storage:
 | ~~No central scheduler~~ | ~~spawner `periodic`, loot `timer`~~ | Done — `world/scheduler.rs`, room `scheduler_tick_on_enter` |
 | ~~Resource/crafting spawners~~ | ~~`loot_spawner_def.rs` TODO~~ | Done — `@resource-spawner`, `on_harvest` event bus |
 
-### 5. M1 debt (unchanged)
+### 5. Carried debt (see prioritized table above)
 
-- `object` → `display` coupling
-- No graph validator on load
-- No SQLite transactions around multi-object moves
-- Prototype inheritance resolver not in world state (factory copy only)
+- `object` → `display` coupling (P2)
+- No graph validator on load (P2)
+- No SQLite transactions around multi-object moves (P0 for M5)
+- Prototype inheritance resolver not in world state (P2)
+- Fat `repl.rs` / `bootstrap.rs` (P1)
 
 ## High-Level Architecture (target)
 ```
@@ -271,11 +370,10 @@ Creatures now use a **single script surface** with split storage:
 - Events/Hooks: `event_handlers` map on every `Object`; MUDL `@trigger` attaches scripts for places, items, and creatures. `MoveManager` fires `on_move` via `emit_on_move_event`. Creature tactics (awareness, react) run through `run_creature_behaviors()` after per-creature `execute_host_event()` (see §4.1).
 - Prototype/parent system for inheritance and stackable/identical items.
 
-### 2. DSL Interpreter
-- Custom language ("MUDL") designed for MUD concepts.
-- Supports live execution, self-modification, and safe sandboxing.
-- Parser: pest or chumsky (Rust).
-- Runtime: Safe execution environment with restricted globals.
+### 2. DSL (MUDL) — loader + script interpreter
+- **Loader** (`src/mudl/`): line-oriented parsers for `@creature`, `@trigger`, map blocks, spawners, expansions — no pest/chumsky yet.
+- **Script runtime** (`world/event_script.rs`): fixed vocabulary of actions (`narrate`, `spawn`, `grant-effect`, `when … then …`). Validated at attach time; not a general sandbox.
+- **Planned**: sandboxed verb/event code for true self-modification and LLM-generated logic.
 
 ### 3. World State & Persistence
 - In-memory graph of objects + locations.
@@ -311,12 +409,12 @@ Creatures now use a **single script surface** with split storage:
 - Objects can add/remove properties/verbs at runtime.
 - LLM integration will generate valid DSL that the runtime applies (with validation).
 
-## Technology Stack (MVP)
-- **Language**: Rust (performance, safety, modern ecosystem).
-- **IRC**: `irc` crate or `ircbot`.
-- **Parser**: pest or chumsky.
-- **Persistence**: SQLite + serde.
-- **Async**: Tokio.
+## Technology Stack (as-built)
+- **Language**: Rust (2021 edition).
+- **Persistence**: SQLite via `sqlx` + serde JSON blobs.
+- **Async**: Tokio (`#[tokio::main]` in REPL; `Persistence` is async-ready).
+- **MUDL parsing**: Custom line/block parsers in `src/mudl/` (not pest/chumsky).
+- **IRC (M5)**: `irc` crate or similar — not yet integrated.
 
 ## Repository Layout
 
@@ -457,7 +555,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 |------|----------------|
 | `ObjectFactory::create*` | New object immediately (`save_object`) |
 | `create` / `create_at_location` / `@create` | Object + updated `location` |
-| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Full active object graph after mutation (`persist_all`); `DirtyTracker` + `persist_dirty` available for incremental saves |
+| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Dirty-marked objects via `Session::persist_changes`; `persist_inventory_dirty` still falls back to `persist_all` if dirty set empty (see P1 debt) |
 | `go` | Player `location` |
 | `@set`, `@unset`, `save` | Target object |
 | Bootstrap | World areas, exits, default player (idempotent) |
@@ -466,7 +564,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 **Roundtrip guarantee (M1)**: `milestone1_complex_scene_persist_reload_identical` builds a post-play graph (worn container, nested stack, two-handed wield, split ground piles), runs `persist_all` → `hydrate_world`, and asserts byte-identical `Object` equality for every node plus reference integrity across the graph.
 
-**Incremental saves**: `MoveContext.dirty` + `DirtyTracker` mark touched IDs during moves; REPL still calls `persist_all` after inventory verbs — wire dirty tracking through REPL before scaling object counts.
+**Incremental saves**: `DirtyTracker` marks touched IDs; REPL uses `Session::persist_changes` → `persist_dirty` after most commands. Remaining risk: `persist_inventory_dirty` full-graph fallback when dirty is empty — audit move/inventory paths before multi-user scale.
 
 **Soft deletes**: Objects are never hard-deleted. `is_deleted` and `deleted_at` on `Object` mark removal; `list_objects(false)` hides them from normal play. Wizard commands `@delete <target>` and `@undelete <id>` toggle the flag. Deleted objects remain loadable by ID for recovery.
 
@@ -497,20 +595,29 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 | ~~**P2**~~ | ~~Central `EventScheduler` (replace periodic/timer counters)~~ | Done — `world/scheduler.rs` |
 | ~~**P2**~~ | ~~`@resource-spawner` / harvest triggers~~ | Done — `resource/spawner.rs`, `harvest` command |
 
-### Defer (post-M4)
+### M5 — Multi-user / IRC (next milestone)
 
-- Gateway + per-player world views (multi-user / IRC)
+| Priority | Task | Rationale |
+|----------|------|-----------|
+| **P0** | `WorldState` + `PlayerSession` split | Shared world, per-connection actor |
+| **P0** | `Gateway` + real RBAC | `has_wizard_permission` → `PermissionFlags` on actor |
+| **P0** | World-level lock + SQLite transactions | Safe concurrent commands |
+| **P0** | Optimistic revision on `Object` save | Prevent silent overwrites |
+| **P1** | `CommandDispatcher` shared by REPL and IRC | DRY transport layer |
+| **P1** | Per-world `DispatchGuard` (not `thread_local`) | Re-entrant events under async |
+| **P2** | Multi-player integration tests | Two actors, same room, combat, take/drop races |
+
+### Defer (M6+)
+
 - Sandboxed DSL interpreter (replace `event_script` hardcoded actions)
 - Prototype inheritance resolver in world state (not just factory copy)
 - Location/exits as first-class exit objects (beyond `exits` map)
-- Graph consistency validator on load
-- SQLite transactions wrapping multi-object moves
 - `object` → `display` decoupling (`Describable` trait relocation)
+- Full LLM content pipeline (validates MUDL before apply)
+- WebSocket/web client
 
 ## Future Directions
 
-- IRC gateway with per-nick `Session` registry
-- Full LLM content generation pipeline (validates MUDL before apply)
-- Advanced self-modification (world rewriting its own rules via sandboxed runtime)
-- WebSocket/web client
+- IRC gateway with per-nick `PlayerSession` registry over shared `WorldState`
 - Procedural generation driven by `@trigger` + spawner composition
+- Advanced self-modification via sandboxed runtime (beyond fixed `event_script` actions)
