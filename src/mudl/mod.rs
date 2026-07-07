@@ -33,5 +33,7 @@ pub use roles::MudlRoleProps;
 pub use spawner_def::{
     parse_spawner_file, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef, SpawnerTrigger,
 };
-pub use trigger_def::{parse_trigger_line, TriggerDef};
+pub use trigger_def::{
+    known_events, parse_trigger_line, validate_event_name, validate_script_code, TriggerDef,
+};
 pub use world_def::{parse_world_file, WorldDef};

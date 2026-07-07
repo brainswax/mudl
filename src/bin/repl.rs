@@ -4,11 +4,15 @@ use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 use mudl::command::{
-    apply_set, apply_unset, bootstrap_active_universe, create_at_location_with_options,
-    create_key_for_container, has_wizard_permission, package_module, parse_command_line,
-    parse_create_command, parse_dig_command, parse_link_command, parse_set_command,
-    parse_unlink_command, parse_unset_command, reload_universe, resolve_container_target,
-    soft_delete_object, undelete_object, wizard_access_denied,
+    apply_set, apply_trigger_add, apply_trigger_clear, apply_trigger_remove, apply_trigger_set,
+    apply_unset, bootstrap_active_universe, create_at_location_with_options,
+    create_key_for_container, format_trigger_list, has_wizard_permission, narrate_trigger_added,
+    narrate_trigger_cleared, narrate_trigger_removed, narrate_trigger_set,
+    narrate_trigger_test_empty, package_module, parse_command_line, parse_create_command,
+    parse_dig_command, parse_link_command, parse_set_command, parse_trigger_command,
+    parse_unlink_command, parse_unset_command, preview_trigger_test, reload_universe,
+    resolve_container_target, resolve_trigger_target_name, soft_delete_object, trigger_command_help,
+    undelete_object, validate_trigger_host, wizard_access_denied, TriggerCommand, TriggerError,
 };
 use mudl::creature::{
     add_behavior_template, attack_creature, damage_creature, format_creature_behavior_list,
@@ -426,6 +430,9 @@ async fn main() -> Result<()> {
                         );
                         println!("  @listbehaviors <creature>   - wizard: list creature behaviors");
                         println!(
+                            "  @trigger …                  - wizard: attach/list/edit event scripts"
+                        );
+                        println!(
                             "  @undelete <id>              - wizard: restore soft-deleted object"
                         );
                         println!(
@@ -740,6 +747,142 @@ async fn main() -> Result<()> {
                                 println!("{}", narrate_wizard_not_found());
                             }
                             TargetResolution::Ambiguous(msg) => println!("{msg}"),
+                        }
+                    }
+                    "@trigger" => {
+                        let trigger_cmd = match parse_trigger_command(&parsed.args) {
+                            Ok(cmd) => cmd,
+                            Err(e) => {
+                                println!("{e}");
+                                continue;
+                            }
+                        };
+                        if matches!(trigger_cmd, TriggerCommand::Help) {
+                            println!("{}", trigger_command_help());
+                            continue;
+                        }
+                        let target_name = match &trigger_cmd {
+                            TriggerCommand::List { target }
+                            | TriggerCommand::Add { target, .. }
+                            | TriggerCommand::Remove { target, .. }
+                            | TriggerCommand::Clear { target, .. }
+                            | TriggerCommand::Set { target, .. }
+                            | TriggerCommand::Test { target, .. } => target.clone(),
+                            TriggerCommand::Help => unreachable!(),
+                        };
+                        let resolved = resolve_trigger_target_name(
+                            &target_name,
+                            session.current_location(),
+                            session.player_id(),
+                        );
+                        if resolved == "here" {
+                            println!("{}", narrate_no_location_builder("Specify a target or stand in a place."));
+                            continue;
+                        }
+                        match resolve_in_session(&mut session, &persistence, Some(&resolved)).await
+                        {
+                            Ok(TargetResolution::Found(id)) => {
+                                let mut obj = match session.object(&id).cloned() {
+                                    Some(obj) => obj,
+                                    None => {
+                                        println!("{}", narrate_wizard_not_found());
+                                        continue;
+                                    }
+                                };
+                                if let Err(e) = validate_trigger_host(&obj) {
+                                    println!("{e}");
+                                    continue;
+                                }
+                                let read_only = matches!(
+                                    &trigger_cmd,
+                                    TriggerCommand::List { .. } | TriggerCommand::Test { .. }
+                                );
+                                let outcome = match trigger_cmd {
+                                    TriggerCommand::List { .. } => {
+                                        println!("{}", format_trigger_list(&obj));
+                                        Ok(())
+                                    }
+                                    TriggerCommand::Add { event, code, .. } => {
+                                        match apply_trigger_add(&mut obj, &event, &code) {
+                                            Ok(()) => {
+                                                println!("{}", narrate_trigger_added(&obj, &event, &code));
+                                                Ok(())
+                                            }
+                                            Err(e) => Err(e),
+                                        }
+                                    }
+                                    TriggerCommand::Remove { event, index, .. } => {
+                                        match apply_trigger_remove(&mut obj, &event, index) {
+                                            Ok(removed) => {
+                                                println!(
+                                                    "{}",
+                                                    narrate_trigger_removed(&obj, &event, &removed)
+                                                );
+                                                Ok(())
+                                            }
+                                            Err(e) => Err(e),
+                                        }
+                                    }
+                                    TriggerCommand::Clear { event, .. } => {
+                                        let count = apply_trigger_clear(&mut obj, event.as_deref());
+                                        println!(
+                                            "{}",
+                                            narrate_trigger_cleared(&obj, count, event.as_deref())
+                                        );
+                                        Ok(())
+                                    }
+                                    TriggerCommand::Set {
+                                        event,
+                                        index,
+                                        code,
+                                        ..
+                                    } => match apply_trigger_set(&mut obj, &event, index, &code) {
+                                        Ok(()) => {
+                                            println!(
+                                                "{}",
+                                                narrate_trigger_set(&obj, &event, index, &code)
+                                            );
+                                            Ok(())
+                                        }
+                                        Err(e) => Err(e),
+                                    },
+                                    TriggerCommand::Test { event, .. } => {
+                                        let lines = preview_trigger_test(&obj, &event);
+                                        if lines.is_empty() {
+                                            println!("{}", narrate_trigger_test_empty(&obj, &event));
+                                        } else {
+                                            for line in lines {
+                                                println!("{line}");
+                                            }
+                                        }
+                                        Ok(())
+                                    }
+                                    TriggerCommand::Help => unreachable!(),
+                                };
+                                match outcome {
+                                    Ok(()) => {
+                                        if !read_only {
+                                            if let Err(e) = persistence.save_object(&obj).await {
+                                                error!(error = %e, "@trigger save failed");
+                                                println!("The change fades before it can take hold.");
+                                            }
+                                            session.upsert_object(obj);
+                                        }
+                                    }
+                                    Err(TriggerError::NotFound(msg) | TriggerError::Validation(msg)) => {
+                                        println!("{msg}");
+                                    }
+                                    Err(TriggerError::Usage(msg)) => println!("{msg}"),
+                                }
+                            }
+                            Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
+                            Ok(TargetResolution::NotFound) => {
+                                println!("{}", narrate_target_not_found(&resolved));
+                            }
+                            Err(e) => {
+                                error!(error = %e, "@trigger resolve failed");
+                                println!("You cannot reach that object to change it.");
+                            }
                         }
                     }
                     "@delete" => {

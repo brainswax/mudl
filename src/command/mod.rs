@@ -3,6 +3,7 @@
 pub mod editor;
 pub mod parse;
 pub mod place;
+pub mod trigger;
 
 pub use editor::{
     apply_set, apply_unset, parse_set_command, parse_unset_command, ParsedSetCommand,
@@ -14,6 +15,13 @@ pub use parse::{
 pub use place::{
     parse_dig_command, parse_link_command, parse_unlink_command, ParsedDigCommand,
     ParsedLinkCommand, ParsedUnlinkCommand,
+};
+pub use trigger::{
+    apply_trigger_add, apply_trigger_clear, apply_trigger_remove, apply_trigger_set,
+    format_trigger_list, narrate_trigger_added, narrate_trigger_cleared, narrate_trigger_removed,
+    narrate_trigger_set, narrate_trigger_test_empty, parse_trigger_command, preview_trigger_test,
+    resolve_trigger_target_name, trigger_command_help, validate_trigger_host, TriggerCommand,
+    TriggerError,
 };
 
 use std::collections::HashMap;

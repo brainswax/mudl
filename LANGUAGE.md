@@ -136,6 +136,21 @@ exits:
 ```
 
 Use **`@trigger`** for all creature scripts (say, emote, narrate, react). `@behavior-template` / `@use-behavior` supply AI tactics (`react`, `attack_damage`, `awareness_check`); inline `@behavior … react …` still works for react-only overrides. Legacy `@behavior on_enter say …` is migrated to triggers at bootstrap but prefer `@trigger` in new content.
+
+**Runtime builder command** (REPL / wizard):
+
+```
+@trigger help
+@trigger list [target]                    # default target: here (current room)
+@trigger <target> <event> <script>        # add trigger
+@trigger add <target> <event> <script>
+@trigger remove <target> <event> [n]    # remove #n (default: last)
+@trigger clear <target> [event]
+@trigger set <target> <event> <n> <script>
+@trigger test <target> <event>            # dry-run narrative preview
+```
+
+Targets: object/creature/place name, `here` / `.` (current room), `me` / `self` (player). Scripts are validated at attach time (unknown verbs and malformed `when … then …` are rejected). Changes persist to the live object immediately.
 ### 5. Built-in Primitives
 * say(msg), tell(player, msg)
 * move(thing, destination)
