@@ -108,7 +108,7 @@ fn visible_content_phrases(room: &Object, ctx: &DisplayContext) -> Vec<String> {
                 && !crate::loot::is_loot_spawner_infrastructure(item)
         })
         .collect();
-    items.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    items.sort_by_key(|a| a.name.to_lowercase());
     items.iter().map(|item| room_item_phrase(item)).collect()
 }
 
@@ -119,7 +119,10 @@ fn format_you_see_line(phrases: &[String]) -> String {
     format!("You see {} here.", join_natural_list(phrases))
 }
 
-fn format_room_parent_context(room: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
+fn format_room_parent_context(
+    room: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<String> {
     let parent = room.parent_place(objects)?;
     Some(format!("Inside {}.", parent.name))
 }
@@ -162,7 +165,9 @@ pub fn format_room_look_player(room: &Object, ctx: &DisplayContext) -> String {
 mod tests {
     use super::*;
     use crate::display::DisplayMode;
-    use crate::object::{DoorSpec, PermissionFlags, PortalKind, PortalSpec, Property, StackableSpec, Value};
+    use crate::object::{
+        DoorSpec, PermissionFlags, PortalKind, PortalSpec, Property, StackableSpec, Value,
+    };
 
     fn bare_room(id: &str, name: &str, desc: &str) -> Object {
         let mut room = Object {
@@ -329,7 +334,11 @@ mod tests {
     fn room_look_hides_view_through_locked_window() {
         let room_id = ObjectId::new("area:cottage-interior-001");
         let dest_id = ObjectId::new("area:cottage-rear-001");
-        let room = bare_room("area:cottage-interior-001", "Cottage Interior", "A warm room.");
+        let room = bare_room(
+            "area:cottage-interior-001",
+            "Cottage Interior",
+            "A warm room.",
+        );
         let rear = bare_room(
             "area:cottage-rear-001",
             "Behind the Cottage",

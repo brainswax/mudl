@@ -2,9 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::display::stackable::{
-    format_examine_stack_weight, format_examine_stackable_fallback,
-};
+use crate::display::stackable::{format_examine_stack_weight, format_examine_stackable_fallback};
 use crate::object::{
     format_weight_amount, is_unlimited_weight, player_carried_weight, player_effective_max_weight,
     Object, ObjectId,
@@ -37,7 +35,10 @@ pub fn format_examine_item_player(obj: &Object) -> String {
 }
 
 /// In-game weight line for legacy call sites (players only).
-pub fn format_weight_examine_player(obj: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
+pub fn format_weight_examine_player(
+    obj: &Object,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<String> {
     if obj.object_type() != "player" {
         return None;
     }

@@ -18,10 +18,7 @@ pub fn join_natural_list(items: &[String]) -> String {
 ///
 /// `["Rusty Sword", "Wooden Sword"]` → `a Rusty Sword and Wooden Sword`
 fn phrase_needs_article(phrase: &str) -> bool {
-    !phrase
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_digit())
+    !phrase.chars().next().is_some_and(|c| c.is_ascii_digit())
 }
 
 pub fn phrase_with_leading_article(items: &[String]) -> String {

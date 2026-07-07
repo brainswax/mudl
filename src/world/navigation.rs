@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::object::{ObjectId, Object};
+use crate::object::{Object, ObjectId};
 
 /// Canonical direction name after normalizing player input.
 pub fn normalize_direction(input: &str) -> Option<&'static str> {
@@ -44,9 +44,7 @@ pub fn resolve_exit<'a>(
     direction: &str,
 ) -> Option<(&'static str, &'a ObjectId)> {
     let canonical = normalize_direction(direction)?;
-    exits
-        .get(canonical)
-        .map(|target| (canonical, target))
+    exits.get(canonical).map(|target| (canonical, target))
 }
 
 /// All exit direction labels for a location, sorted for display consistency.
@@ -74,10 +72,7 @@ mod tests {
             movement_direction_from_line("go", &["north"]),
             Some("north")
         );
-        assert_eq!(
-            movement_direction_from_line("go", &["n"]),
-            Some("north")
-        );
+        assert_eq!(movement_direction_from_line("go", &["n"]), Some("north"));
         assert_eq!(movement_direction_from_line("south", &[]), Some("south"));
         assert_eq!(movement_direction_from_line("enter", &[]), Some("in"));
         assert_eq!(movement_direction_from_line("look", &[]), None);

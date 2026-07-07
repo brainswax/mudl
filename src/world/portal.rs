@@ -64,11 +64,7 @@ pub fn portals_in_room<'a>(
 ) -> Vec<&'a Object> {
     let mut portals: Vec<&Object> = objects
         .values()
-        .filter(|obj| {
-            obj.is_active()
-                && obj.is_portal()
-                && obj.location.as_ref() == Some(room_id)
-        })
+        .filter(|obj| obj.is_active() && obj.is_portal() && obj.location.as_ref() == Some(room_id))
         .collect();
     portals.sort_by(|a, b| {
         a.portal_direction()
@@ -196,10 +192,7 @@ mod tests {
         });
         window.set_portal_destination(rear_id);
 
-        let objects = HashMap::from([
-            (hall.id.clone(), hall),
-            (window.id.clone(), window),
-        ]);
+        let objects = HashMap::from([(hall.id.clone(), hall), (window.id.clone(), window)]);
 
         assert!(passable_portal_blocks_passage(&room_id, "east", &pantry_id, &objects).is_none());
     }

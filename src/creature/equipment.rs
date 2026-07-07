@@ -201,9 +201,7 @@ pub fn apply_equipment_regen_on_enter(
         return None;
     }
     creature.set_property_int("health", next);
-    Some(format!(
-        "You feel renewed ({before} → {next} health)."
-    ))
+    Some(format!("You feel renewed ({before} → {next} health)."))
 }
 
 #[cfg(test)]
@@ -417,7 +415,12 @@ mod tests {
             is_deleted: false,
             deleted_at: None,
         };
-        band.apply_equipment_mods(None, HashMap::new(), HashMap::new(), vec!["regeneration".to_string()]);
+        band.apply_equipment_mods(
+            None,
+            HashMap::new(),
+            HashMap::new(),
+            vec!["regeneration".to_string()],
+        );
         hero.set_property_map(
             "body_slots",
             HashMap::from([("torso".to_string(), band.id.clone())]),

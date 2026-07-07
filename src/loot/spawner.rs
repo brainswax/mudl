@@ -3,9 +3,7 @@
 use std::collections::HashMap;
 
 use crate::creature::spawner::pick_weighted_entry;
-use crate::mudl::{
-    LootSpawnerDef, LootSpawnerTrigger, LootTemplateDef, SpawnerEntryDef,
-};
+use crate::mudl::{LootSpawnerDef, LootSpawnerTrigger, LootTemplateDef, SpawnerEntryDef};
 use crate::object::{generate_object_id, Object, ObjectId, PermissionFlags, Property, Value};
 
 /// Result of a loot spawner tick — narrative feedback for the player.
@@ -220,7 +218,7 @@ fn trigger_fires(spawner: &Object, trigger: LootSpawnerTrigger, tick: u64) -> bo
         | LootSpawnerTrigger::OnBreak => true,
         LootSpawnerTrigger::Timer => {
             let interval = u64::from(loot_spawner_periodic_interval(spawner));
-            tick % interval == 0
+            tick.is_multiple_of(interval)
         }
     }
 }
@@ -234,7 +232,10 @@ pub fn apply_loot_spawner_def(
     spawner.set_property_bool("is_loot_spawner", true);
     spawner.set_property_string("loot_spawner_base", &def.base_name);
     spawner.set_property_string("loot_spawner_trigger", def.trigger.as_str());
-    spawner.set_property_int("loot_spawner_periodic_interval", i64::from(def.periodic_interval));
+    spawner.set_property_int(
+        "loot_spawner_periodic_interval",
+        i64::from(def.periodic_interval),
+    );
     spawner.set_property_numeric("loot_spawner_chance", def.chance);
     spawner.set_property_int("loot_spawner_max_active", i64::from(def.max_active));
     spawner.set_property_bool("loot_spawner_once", def.once);
@@ -304,10 +305,7 @@ pub fn loot_templates_to_property(templates: &[LootTemplateDef]) -> Property {
     }
 }
 
-fn resolve_loot_template<'a>(
-    template_name: &str,
-    spawner: &'a Object,
-) -> Option<LootTemplateDef> {
+fn resolve_loot_template(template_name: &str, spawner: &Object) -> Option<LootTemplateDef> {
     spawner.get_property("loot_templates").and_then(|prop| {
         if let Value::List(items) = &prop.value {
             items.iter().find_map(|entry| {
@@ -473,10 +471,7 @@ fn spawn_loot_item(
 }
 
 fn spawn_message(template: &LootTemplateDef, placement: &LootPlacement) -> String {
-    let label = template
-        .base_name
-        .replace('-', " ")
-        .to_lowercase();
+    let label = template.base_name.replace('-', " ").to_lowercase();
     match placement {
         LootPlacement::Container(_) => format!("You find {label} inside."),
         LootPlacement::Room(_) => format!("You notice {label} here."),
@@ -794,12 +789,22 @@ mod tests {
             (proto.id.clone(), proto),
         ]);
 
-        let first = run_on_open_loot_spawners(&ObjectId::new("item:scene-chest-001"), &player, &owner, &mut objects);
+        let first = run_on_open_loot_spawners(
+            &ObjectId::new("item:scene-chest-001"),
+            &player,
+            &owner,
+            &mut objects,
+        );
         assert_eq!(first.len(), 1);
         let chest = objects.get(&ObjectId::new("item:scene-chest-001")).unwrap();
         assert_eq!(chest.container_contents().len(), 1);
 
-        let second = run_on_open_loot_spawners(&ObjectId::new("item:scene-chest-001"), &player, &owner, &mut objects);
+        let second = run_on_open_loot_spawners(
+            &ObjectId::new("item:scene-chest-001"),
+            &player,
+            &owner,
+            &mut objects,
+        );
         assert!(second.is_empty(), "once=true prevents repeat drops");
     }
 }

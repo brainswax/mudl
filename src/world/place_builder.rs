@@ -44,7 +44,9 @@ impl fmt::Display for PlaceBuildError {
             Self::NotFound(name) => write!(f, "No place found matching '{name}'."),
             Self::InvalidDirection(dir) => write!(f, "'{dir}' is not a valid direction."),
             Self::ExitExists(dir) => write!(f, "An exit '{dir}' already leads somewhere."),
-            Self::InvalidPlaceType(kind) => write!(f, "Unknown place type '{kind}' (use area or room)."),
+            Self::InvalidPlaceType(kind) => {
+                write!(f, "Unknown place type '{kind}' (use area or room).")
+            }
             Self::NotAPlace(name) => write!(f, "'{name}' is not a navigable place."),
             Self::Hierarchy(msg) => write!(f, "{msg}"),
             Self::Validation(msg) => write!(f, "{msg}"),
@@ -55,10 +57,14 @@ impl fmt::Display for PlaceBuildError {
 impl std::error::Error for PlaceBuildError {}
 
 fn canonical_direction(direction: &str) -> Result<&'static str, PlaceBuildError> {
-    normalize_direction(direction).ok_or_else(|| PlaceBuildError::InvalidDirection(direction.to_string()))
+    normalize_direction(direction)
+        .ok_or_else(|| PlaceBuildError::InvalidDirection(direction.to_string()))
 }
 
-fn default_place_type(from: &Object, requested: Option<&str>) -> Result<&'static str, PlaceBuildError> {
+fn default_place_type(
+    from: &Object,
+    requested: Option<&str>,
+) -> Result<&'static str, PlaceBuildError> {
     if let Some(kind) = requested {
         return match kind.to_ascii_lowercase().as_str() {
             "area" => Ok("area"),
@@ -105,10 +111,7 @@ pub fn link_places(
     let dir = canonical_direction(direction)?;
     link_exit(from, dir, to, objects)?;
 
-    let mut notes = vec![format!(
-        "Linked {} exit '{}' → {}",
-        from.name, dir, to.name
-    )];
+    let mut notes = vec![format!("Linked {} exit '{}' → {}", from.name, dir, to.name)];
 
     if reciprocal {
         if let Some(reverse) = reverse_direction(dir) {
@@ -124,9 +127,8 @@ pub fn link_places(
                 }
             } else {
                 to.add_exit(reverse, from.id.clone());
-                validate_place_exits(to, objects).map_err(|errors| {
-                    PlaceBuildError::Validation(errors.join("; "))
-                })?;
+                validate_place_exits(to, objects)
+                    .map_err(|errors| PlaceBuildError::Validation(errors.join("; ")))?;
                 notes.push(format!(
                     "Linked {} exit '{}' → {}",
                     to.name, reverse, from.name
@@ -139,7 +141,10 @@ pub fn link_places(
 }
 
 /// Remove an exit from a place. Returns the former target id when one existed.
-pub fn unlink_exit(from: &mut Object, direction: &str) -> Result<Option<ObjectId>, PlaceBuildError> {
+pub fn unlink_exit(
+    from: &mut Object,
+    direction: &str,
+) -> Result<Option<ObjectId>, PlaceBuildError> {
     let dir = canonical_direction(direction)?;
     let exits = from.get_exits();
     let Some(target_id) = exits.get(dir).cloned() else {
@@ -169,10 +174,7 @@ pub async fn dig_place<P: Persistence>(
         return Err(PlaceBuildError::ExitExists(dir.to_string()));
     }
 
-    let place_type = default_place_type(
-        from,
-        request.options.place_type.as_deref(),
-    )?;
+    let place_type = default_place_type(from, request.options.place_type.as_deref())?;
     let parent = parent_for_new_room(from, place_type);
 
     let mut new_place = factory
@@ -227,7 +229,10 @@ pub struct DigResult {
 }
 
 /// Apply dig results to an object map and return every id that changed.
-pub fn apply_dig_result(objects: &mut HashMap<ObjectId, Object>, result: &DigResult) -> Vec<ObjectId> {
+pub fn apply_dig_result(
+    objects: &mut HashMap<ObjectId, Object>,
+    result: &DigResult,
+) -> Vec<ObjectId> {
     let DigResult {
         new_place,
         from_updated,
@@ -266,14 +271,15 @@ mod tests {
     fn link_places_adds_reciprocal_exits() {
         let mut a = bare_place("area:a-001", "Clearing");
         let mut b = bare_place("area:b-001", "Forest");
-        let objects = HashMap::from([
-            (a.id.clone(), a.clone()),
-            (b.id.clone(), b.clone()),
-        ]);
+        let objects = HashMap::from([(a.id.clone(), a.clone()), (b.id.clone(), b.clone())]);
 
         let notes = link_places(&mut a, &mut b, "north", &objects, true).unwrap();
-        assert!(notes.iter().any(|n| n.contains("Linked Clearing exit 'north'")));
-        assert!(notes.iter().any(|n| n.contains("Linked Forest exit 'south'")));
+        assert!(notes
+            .iter()
+            .any(|n| n.contains("Linked Clearing exit 'north'")));
+        assert!(notes
+            .iter()
+            .any(|n| n.contains("Linked Forest exit 'south'")));
         assert_eq!(a.get_exits().get("north"), Some(&b.id));
         assert_eq!(b.get_exits().get("south"), Some(&a.id));
     }

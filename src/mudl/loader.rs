@@ -5,8 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use super::anatomy::{parse_anatomy_file, AnatomyRegistry};
 use super::behavior_def::parse_behavior_file;
 use super::item_def::{parse_item_file, ItemInstanceDef, ItemPrototypeDef};
-use super::npc_def::parse_npc_file;
 use super::loot_spawner_def::parse_loot_spawner_file;
+use super::npc_def::parse_npc_file;
 use super::spawner_def::parse_spawner_file;
 use super::world_def::{parse_world_file, WorldDef};
 use crate::mudl::{LootSpawnerDef, LootTemplateDef, NpcDef, SpawnTemplateDef, SpawnerDef};
@@ -25,7 +25,6 @@ impl MudlSource {
             MudlSource::Remote { url, .. } => url.clone(),
         }
     }
-
 }
 
 /// A loaded world: self-contained game setting (locations, anatomy, creatures, items).
@@ -194,11 +193,7 @@ fn load_world(
         universe_root: universe_root.to_path_buf(),
     };
     let mut visited = HashSet::new();
-    let sources = expand_sources(
-        SourceRef::File(entrypoint.clone()),
-        &ctx,
-        &mut visited,
-    )?;
+    let sources = expand_sources(SourceRef::File(entrypoint.clone()), &ctx, &mut visited)?;
 
     let mut anatomy = AnatomyRegistry::default();
     let mut world_defs = Vec::new();
@@ -353,11 +348,7 @@ fn expand_from_content(
                     ctx.world_root.display()
                 );
             }
-            out.extend(expand_sources(
-                SourceRef::File(target),
-                ctx,
-                visited,
-            )?);
+            out.extend(expand_sources(SourceRef::File(target), ctx, visited)?);
             continue;
         }
         if let Some(import_spec) = trimmed.strip_prefix("@import ") {
@@ -372,11 +363,7 @@ fn expand_from_content(
     Ok(())
 }
 
-fn resolve_import(
-    spec: &str,
-    base: &ImportBase,
-    ctx: &ImportContext,
-) -> anyhow::Result<SourceRef> {
+fn resolve_import(spec: &str, base: &ImportBase, ctx: &ImportContext) -> anyhow::Result<SourceRef> {
     if is_url(spec) {
         return Ok(SourceRef::Url(spec.to_string()));
     }
@@ -411,10 +398,7 @@ fn resolve_import(
             list
         }
         ImportBase::Url(_) => {
-            vec![
-                ctx.world_root.join(spec),
-                ctx.universe_root.join(spec),
-            ]
+            vec![ctx.world_root.join(spec), ctx.universe_root.join(spec)]
         }
     };
 
@@ -597,27 +581,21 @@ mod tests {
             .find(|d| d.base_name == "the-void")
             .unwrap();
         assert_eq!(void.obj_type, "area");
-        assert!(
-            world
-                .world_defs
-                .iter()
-                .any(|d| d.base_name == "forest-path")
-        );
-        assert!(
-            world
-                .world_defs
-                .iter()
-                .any(|d| d.base_name == "cottage-interior")
-        );
+        assert!(world
+            .world_defs
+            .iter()
+            .any(|d| d.base_name == "forest-path"));
+        assert!(world
+            .world_defs
+            .iter()
+            .any(|d| d.base_name == "cottage-interior"));
         assert!(world.sources.len() >= 5);
         assert!(!world.item_prototypes.is_empty());
         assert!(!world.item_instances.is_empty());
-        assert!(
-            world
-                .item_instances
-                .iter()
-                .any(|i| i.base_name == "scene-mailbox")
-        );
+        assert!(world
+            .item_instances
+            .iter()
+            .any(|i| i.base_name == "scene-mailbox"));
         assert!(
             world
                 .world_defs
@@ -625,38 +603,34 @@ mod tests {
                 .any(|d| d.base_name == "haunted-entry"),
             "haunted forest expansion should load via @import"
         );
-        assert!(
-            world
-                .item_instances
-                .iter()
-                .any(|i| i.base_name == "forest-hollow-oak")
-        );
+        assert!(world
+            .item_instances
+            .iter()
+            .any(|i| i.base_name == "forest-hollow-oak"));
     }
 
     #[test]
     fn import_resolves_relative_to_world_root() {
         let universe = load_module("modules/default").unwrap();
         let world = universe.active_world().unwrap();
-        assert!(
-            world
-                .sources
-                .iter()
-                .any(|s| matches!(s, MudlSource::File(p) if p.ends_with("expansions/haunted_forest.mudl")))
-        );
+        assert!(world.sources.iter().any(
+            |s| matches!(s, MudlSource::File(p) if p.ends_with("expansions/haunted_forest.mudl"))
+        ));
     }
 
     #[test]
     fn import_file_url_loads_expansion() {
-        let expansion = PathBuf::from("modules/default/worlds/default_world/expansions/haunted_forest.mudl")
-            .canonicalize()
-            .unwrap();
+        let expansion =
+            PathBuf::from("modules/default/worlds/default_world/expansions/haunted_forest.mudl")
+                .canonicalize()
+                .unwrap();
         let url = format!("file://{}", expansion.display());
         let ctx = ImportContext {
             world_root: expansion.parent().unwrap().parent().unwrap().to_path_buf(),
             universe_root: PathBuf::from("modules/default"),
         };
-        let resolved = resolve_import(&url, &ImportBase::FileDir(ctx.world_root.clone()), &ctx)
-            .unwrap();
+        let resolved =
+            resolve_import(&url, &ImportBase::FileDir(ctx.world_root.clone()), &ctx).unwrap();
         match resolved {
             SourceRef::File(path) => {
                 let content = fs::read_to_string(path).unwrap();
@@ -695,7 +669,8 @@ mod tests {
             universe_root: dir.clone(),
         };
         let mut visited = HashSet::new();
-        let err = expand_sources(SourceRef::File(dir.join("a.mudl")), &ctx, &mut visited).unwrap_err();
+        let err =
+            expand_sources(SourceRef::File(dir.join("a.mudl")), &ctx, &mut visited).unwrap_err();
         assert!(err.to_string().contains("Circular"));
     }
 }

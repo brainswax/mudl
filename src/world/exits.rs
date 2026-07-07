@@ -41,10 +41,7 @@ pub fn pick_scatter_destination(
 }
 
 /// When entering `target`, redirect to `loop_to` if the place defines one (silent maze loop).
-pub fn apply_loop_entry(
-    target_id: &ObjectId,
-    objects: &HashMap<ObjectId, Object>,
-) -> ObjectId {
+pub fn apply_loop_entry(target_id: &ObjectId, objects: &HashMap<ObjectId, Object>) -> ObjectId {
     let Some(place) = objects.get(target_id) else {
         return target_id.clone();
     };
@@ -227,7 +224,10 @@ pub fn validate_reciprocal_exits(
 /// Validate every navigable place in the object graph.
 pub fn validate_world_places(objects: &HashMap<ObjectId, Object>) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
-    for place in objects.values().filter(|o| o.is_active() && o.is_location()) {
+    for place in objects
+        .values()
+        .filter(|o| o.is_active() && o.is_location())
+    {
         if let Err(msg) = validate_place_hierarchy(place, objects) {
             errors.push(msg);
         }
@@ -320,10 +320,7 @@ mod tests {
         a.add_exit("north", b_id.clone());
         let mut b = bare_place("area:b-001", "B", None);
         b.add_exit("south", c_id.clone());
-        let objects = HashMap::from([
-            (a.id.clone(), a.clone()),
-            (b.id.clone(), b.clone()),
-        ]);
+        let objects = HashMap::from([(a.id.clone(), a.clone()), (b.id.clone(), b.clone())]);
         let errors = validate_reciprocal_exits(&a, &objects).unwrap_err();
         assert!(errors[0].contains("points elsewhere"));
     }
@@ -367,10 +364,7 @@ mod tests {
             behavior: None,
         });
         let entry = bare_place("area:entry-001", "Entry", None);
-        let objects = HashMap::from([
-            (dead.id.clone(), dead.clone()),
-            (entry.id.clone(), entry),
-        ]);
+        let objects = HashMap::from([(dead.id.clone(), dead.clone()), (entry.id.clone(), entry)]);
         assert_eq!(apply_loop_entry(&dead_id, &objects), entry_id);
         assert_eq!(apply_loop_entry(&entry_id, &objects), entry_id);
     }
@@ -394,10 +388,7 @@ mod tests {
             behavior: None,
         });
         let void = bare_place("area:void-001", "Void", None);
-        let objects = HashMap::from([
-            (heart.id.clone(), heart.clone()),
-            (void.id.clone(), void),
-        ]);
+        let objects = HashMap::from([(heart.id.clone(), heart.clone()), (void.id.clone(), void)]);
         assert_eq!(
             apply_scatter_exit(&heart, "out", &spill, &player, &objects),
             void_id

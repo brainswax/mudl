@@ -6,26 +6,23 @@ use std::fmt;
 use crate::command::persist_inventory_dirty;
 use crate::display::{
     format_room_look_player, narrate_go, narrate_go_encumbered, narrate_no_exit,
-    narrate_scatter_exit, object_name,
-    narrate_no_location, narrate_overloaded, resolve_object, DisplayContext, DisplayFlags,
-    DisplayMode, ResolveScope, TargetResolution,
+    narrate_no_location, narrate_overloaded, narrate_scatter_exit, object_name, resolve_object,
+    DisplayContext, DisplayFlags, DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::object::{
-    player_encumbrance_level_with_anatomy, ObjectFactory, EncumbranceLevel,
-};
+use crate::inventory::InventoryContext;
 use crate::inventory::{prepare_gate_for_passage, InventoryError};
-use crate::world::portal::{
-    passable_portal_for_direction, portal_passage_block, portal_permits_exit,
-};
+use crate::mudl::AnatomyRegistry;
+use crate::object::{player_encumbrance_level_with_anatomy, EncumbranceLevel, ObjectFactory};
+use crate::object::{Object, ObjectId};
+use crate::persistence::Persistence;
+use crate::world::exits::{apply_loop_entry, apply_scatter_exit, can_traverse_exit};
+use crate::world::navigation::{normalize_direction, resolve_exit};
 use crate::world::place_builder::{
     apply_dig_result, dig_place, link_places, unlink_exit, DigRequest, DigResult, PlaceBuildError,
 };
-use crate::world::exits::{apply_loop_entry, apply_scatter_exit, can_traverse_exit};
-use crate::world::navigation::{normalize_direction, resolve_exit};
-use crate::inventory::InventoryContext;
-use crate::mudl::AnatomyRegistry;
-use crate::object::{Object, ObjectId};
-use crate::persistence::Persistence;
+use crate::world::portal::{
+    passable_portal_for_direction, portal_passage_block, portal_permits_exit,
+};
 use crate::world::{
     persist_all, persist_dirty, resolve_player_location, restore_session, DirtyTracker,
 };
@@ -194,8 +191,11 @@ impl Session {
 
     /// Re-resolve current location from the player object's persisted `location`.
     pub fn sync_location_from_player(&mut self) {
-        self.current_location =
-            resolve_player_location(&self.player_id, &self.objects, self.current_location.clone());
+        self.current_location = resolve_player_location(
+            &self.player_id,
+            &self.objects,
+            self.current_location.clone(),
+        );
     }
 
     /// Resolve a command target against this session's object graph.
@@ -253,11 +253,8 @@ impl Session {
         }
 
         let mut portal_prep_lines = Vec::new();
-        if let Some(portal) =
-            passable_portal_for_direction(&loc_id, dir_label, &self.objects)
-        {
-            if portal_permits_exit(portal, map_target_id)
-                && portal_passage_block(portal).is_some()
+        if let Some(portal) = passable_portal_for_direction(&loc_id, dir_label, &self.objects) {
+            if portal_permits_exit(portal, map_target_id) && portal_passage_block(portal).is_some()
             {
                 let portal_id = portal.id.clone();
                 let portal_name = portal.name.to_lowercase();
@@ -283,11 +280,7 @@ impl Session {
             .objects
             .get(&self.player_id)
             .map(|player| {
-                player_encumbrance_level_with_anatomy(
-                    player,
-                    &self.objects,
-                    Some(&self.anatomy),
-                )
+                player_encumbrance_level_with_anatomy(player, &self.objects, Some(&self.anatomy))
             })
             .ok_or(SessionError::PlayerMissing)?;
         if encumbrance == EncumbranceLevel::Overloaded {
@@ -423,7 +416,14 @@ impl Session {
             return Err(PlaceBuildError::NotAPlace(from.name.clone()));
         }
 
-        let result = dig_place(factory, &from, self.player_id.clone(), request, &self.objects).await?;
+        let result = dig_place(
+            factory,
+            &from,
+            self.player_id.clone(),
+            request,
+            &self.objects,
+        )
+        .await?;
         for id in apply_dig_result(&mut self.objects, &result) {
             self.dirty.mark(&id);
         }
@@ -488,8 +488,7 @@ impl Session {
             .ok_or_else(|| PlaceBuildError::NotFound(from_id.as_str().to_string()))?;
         let removed = unlink_exit(from, direction)?;
         self.dirty.mark(from_id);
-        let dir = crate::world::navigation::normalize_direction(direction)
-            .unwrap_or(direction);
+        let dir = crate::world::navigation::normalize_direction(direction).unwrap_or(direction);
         Ok(format!(
             "Removed {} exit '{}'{}",
             from_name,
@@ -533,7 +532,6 @@ mod tests {
     use crate::inventory::{drop_item, take_item};
     use crate::object::{PermissionFlags, StackableSpec};
     use crate::persistence::SqlitePersistence;
-
 
     fn bare(id: &str, name: &str) -> Object {
         Object {
@@ -596,10 +594,7 @@ mod tests {
         let mut room = bare("room:void-001", "The Void");
         room.set_property_map(
             "exits",
-            HashMap::from([(
-                "north".to_string(),
-                ObjectId::new("room:north-001"),
-            )]),
+            HashMap::from([("north".to_string(), ObjectId::new("room:north-001"))]),
         );
 
         let mut north = bare("room:north-001", "North Passage");
@@ -807,7 +802,10 @@ mod tests {
 
         session.persist_changes(&persistence).await.unwrap();
         let bars = persistence.load_object(&bars_id).await.unwrap().unwrap();
-        assert_eq!(bars.location.as_ref().map(|id| id.as_str()), Some("room:void-001"));
+        assert_eq!(
+            bars.location.as_ref().map(|id| id.as_str()),
+            Some("room:void-001")
+        );
     }
 
     #[tokio::test]
@@ -836,10 +834,7 @@ mod tests {
         assert_eq!(result.new_place.name, "Side Chamber");
         assert!(result.new_place.is_room());
         let room = session.object(session.current_location().unwrap()).unwrap();
-        assert_eq!(
-            room.get_exits().get("east"),
-            Some(&result.new_place.id)
-        );
+        assert_eq!(room.get_exits().get("east"), Some(&result.new_place.id));
     }
 
     #[tokio::test]
@@ -884,8 +879,7 @@ mod tests {
         objects.insert(rear.id.clone(), rear);
         objects.insert(window.id.clone(), window);
 
-        let mut session =
-            Session::test_session(player_id, human_anatomy(), objects, Some(hall_id));
+        let mut session = Session::test_session(player_id, human_anatomy(), objects, Some(hall_id));
         session.go("east").unwrap();
         assert_eq!(session.current_location(), Some(&pantry_id));
     }

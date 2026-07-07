@@ -33,6 +33,7 @@ fn parse_kv_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_lowercase(), value.trim().to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_kv(
     key: &str,
     value: &str,
@@ -54,7 +55,10 @@ fn apply_kv(
 }
 
 fn pairs_to_props(pairs: &[(String, String)]) -> MudlRoleProps {
-    let refs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    let refs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
     MudlRoleProps::from_pairs(&refs)
 }
 
@@ -432,15 +436,24 @@ mod tests {
             .iter()
             .find(|p| p.base_name == "chipped-blade")
             .unwrap();
-        assert_eq!(blade_proto.props.stat_mods.get("strength").copied(), Some(2));
+        assert_eq!(
+            blade_proto.props.stat_mods.get("strength").copied(),
+            Some(2)
+        );
 
         let vest_proto = prototypes
             .iter()
             .find(|p| p.base_name == "leather-vest")
             .unwrap();
         assert_eq!(vest_proto.props.mod_max_health, Some(5));
-        assert_eq!(vest_proto.props.stat_mods.get("constitution").copied(), Some(2));
-        assert_eq!(vest_proto.props.skill_mods.get("survival").copied(), Some(1));
+        assert_eq!(
+            vest_proto.props.stat_mods.get("constitution").copied(),
+            Some(2)
+        );
+        assert_eq!(
+            vest_proto.props.skill_mods.get("survival").copied(),
+            Some(1)
+        );
 
         let lantern_proto = prototypes
             .iter()

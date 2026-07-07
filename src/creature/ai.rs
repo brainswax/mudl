@@ -112,14 +112,6 @@ pub fn run_on_enter_behaviors(
     crate::creature::run_on_enter_creature_behaviors(room_id, player_id, &mut objects).lines
 }
 
-fn format_behavior_line(npc: &Object, action: &NpcAction) -> Option<String> {
-    match action {
-        NpcAction::Say(text) => Some(format!("{} says, \"{text}\"", npc.name)),
-        NpcAction::SayTo(text) => Some(text.clone()),
-        NpcAction::Emote(text) => Some(format!("{} {text}", npc.name)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,10 +140,7 @@ mod tests {
         npc.add_property(Property {
             name: "npc_behaviors".to_string(),
             value: Value::List(vec![Value::Map(HashMap::from([
-                (
-                    "event".to_string(),
-                    Value::String("on_enter".to_string()),
-                ),
+                ("event".to_string(), Value::String("on_enter".to_string())),
                 ("action".to_string(), Value::String("say".to_string())),
                 (
                     "text".to_string(),

@@ -64,14 +64,26 @@ pub fn creature_max_health(creature: &Object, anatomy: Option<&AnatomyRegistry>)
 
 /// Named stat value (base + temporary effect bonuses stored in `stat_mods`).
 pub fn creature_stat(creature: &Object, name: &str) -> i64 {
-    let base = creature.get_int_map("stats").get(name).copied().unwrap_or(0);
-    let bonus = creature.get_int_map("stat_mods").get(name).copied().unwrap_or(0);
+    let base = creature
+        .get_int_map("stats")
+        .get(name)
+        .copied()
+        .unwrap_or(0);
+    let bonus = creature
+        .get_int_map("stat_mods")
+        .get(name)
+        .copied()
+        .unwrap_or(0);
     base.saturating_add(bonus)
 }
 
 /// Named skill rank.
 pub fn creature_skill(creature: &Object, name: &str) -> i64 {
-    creature.get_int_map("skills").get(name).copied().unwrap_or(0)
+    creature
+        .get_int_map("skills")
+        .get(name)
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Whether a creature has been reduced to zero health.
@@ -198,10 +210,7 @@ pub fn format_health_clause(creature: &Object, anatomy: Option<&AnatomyRegistry>
 }
 
 /// Resolve a creature definition for an object (player template or explicit creature property).
-pub fn creature_def_for<'a>(
-    obj: &Object,
-    anatomy: &'a AnatomyRegistry,
-) -> Option<&'a CreatureDef> {
+pub fn creature_def_for<'a>(obj: &Object, anatomy: &'a AnatomyRegistry) -> Option<&'a CreatureDef> {
     let name = obj.creature_name()?;
     anatomy.creature(&name)
 }
@@ -226,10 +235,7 @@ mod tests {
             }],
             max_health: 100,
             base_max_weight: Some(90),
-            stats: HashMap::from([
-                ("strength".to_string(), 10),
-                ("dexterity".to_string(), 12),
-            ]),
+            stats: HashMap::from([("strength".to_string(), 10), ("dexterity".to_string(), 12)]),
             skills: HashMap::from([("survival".to_string(), 1)]),
         }
     }

@@ -20,46 +20,44 @@ pub mod room_look;
 pub mod self_examine;
 pub mod stackable;
 pub mod weight;
+pub use body_plan::{creature_definition, format_body_detail_player};
 pub use carried::format_look_self_summary;
 pub use container::{
     container_content_labels, format_container_contents_builder, format_examine_container_player,
     format_inside_container, format_look_container_player, format_open_container_message,
 };
-pub use stackable::{
-    format_examine_stack_weight, format_examine_stackable_fallback, format_look_stackable_sentence,
-    display_name_for_single_unit, format_stack_transfer_message, format_stackable_label,
-    item_lookup_variants, name_looks_plural, pluralize_item_name, singularize_item_name,
-    stack_quantity_phrase, StackRemainderLocation,
-};
-pub use object_look::{format_look_item_player, format_look_object_player};
-pub use readable::{effective_read_text, format_read_message};
-pub use room_look::format_room_look_player;
-pub use weight::format_examine_item_player;
-pub use body_plan::{creature_definition, format_body_detail_player};
 pub use examine::{
     builder_object_type, format_builder_examine_entity, format_builder_examine_room,
     format_prototype_examine_builder, format_prototype_examine_player,
 };
-pub use self_examine::format_examine_self;
 pub use examine_target::{
-    format_examine_output, format_no_parent_message, parse_examine_request, resolve_examine_request,
-    ExamineError, ExamineRequest, ExamineResolution, ExamineTarget,
+    format_examine_output, format_no_parent_message, parse_examine_request,
+    resolve_examine_request, ExamineError, ExamineRequest, ExamineResolution, ExamineTarget,
 };
 pub use narrative::{
-    format_property_value, location_label, narrate_create, narrate_create_builder, narrate_go,
-    narrate_go_encumbered, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
-    narrate_no_exit, narrate_overloaded,
-    narrate_dig, narrate_field_set, narrate_field_unset, narrate_link, narrate_no_location,
-    narrate_scatter_exit,
-    narrate_no_location_builder,
-    narrate_not_in_cache, narrate_property_added,
-    narrate_restore, narrate_saved, narrate_soft_delete, narrate_target_not_found,
-    narrate_verb_added, narrate_wizard_not_found, object_name, owner_label,
+    format_property_value, location_label, narrate_create, narrate_create_builder, narrate_dig,
+    narrate_field_set, narrate_field_unset, narrate_go, narrate_go_encumbered, narrate_link,
+    narrate_loaded, narrate_module_bundled, narrate_module_reloaded, narrate_no_exit,
+    narrate_no_location, narrate_no_location_builder, narrate_not_in_cache, narrate_overloaded,
+    narrate_property_added, narrate_restore, narrate_saved, narrate_scatter_exit,
+    narrate_soft_delete, narrate_target_not_found, narrate_verb_added, narrate_wizard_not_found,
+    object_name, owner_label,
 };
+pub use object_look::{format_look_item_player, format_look_object_player};
+pub use readable::{effective_read_text, format_read_message};
 pub use resolve::{
     format_disambiguation, is_in_player_possession, name_matches, resolve_object, short_id,
     ResolveScope, ResolvedMatch, TargetResolution,
 };
+pub use room_look::format_room_look_player;
+pub use self_examine::format_examine_self;
+pub use stackable::{
+    display_name_for_single_unit, format_examine_stack_weight, format_examine_stackable_fallback,
+    format_look_stackable_sentence, format_stack_transfer_message, format_stackable_label,
+    item_lookup_variants, name_looks_plural, pluralize_item_name, singularize_item_name,
+    stack_quantity_phrase, StackRemainderLocation,
+};
+pub use weight::format_examine_item_player;
 pub use weight::{format_weight_examine_builder, format_weight_examine_player};
 
 /// How an object should be rendered for a given command/audience.
@@ -827,8 +825,7 @@ mod tests {
         player.init_creature_role(anatomy.player_template("default").unwrap());
         player.set_property_int("max_weight", 100);
 
-        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player)
-            .with_anatomy(anatomy);
+        let ctx = DisplayContext::new(owner.clone(), DisplayMode::Player).with_anatomy(anatomy);
         let output = player.describe(&ctx);
 
         assert!(output.starts_with("You're a human."));

@@ -19,7 +19,10 @@ pub enum EditError {
 impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ReadOnly(msg) | Self::InvalidValue(msg) | Self::NotFound(msg) | Self::Validation(msg) => {
+            Self::ReadOnly(msg)
+            | Self::InvalidValue(msg)
+            | Self::NotFound(msg)
+            | Self::Validation(msg) => {
                 write!(f, "{msg}")
             }
         }
@@ -136,7 +139,9 @@ pub fn resolve_object_ref(
     let needle = token.to_ascii_lowercase();
     let mut matches: Vec<&Object> = objects
         .values()
-        .filter(|obj| obj.is_active() && (short_id(&obj.id) == needle || name_matches(&needle, obj)))
+        .filter(|obj| {
+            obj.is_active() && (short_id(&obj.id) == needle || name_matches(&needle, obj))
+        })
         .collect();
     matches.sort_by_key(|obj| obj.id.as_str());
 
@@ -192,13 +197,17 @@ fn validate_config_value(key: &str, value: &Value) -> Result<(), EditError> {
         }
         "capacity" | "max_weight" | "max_volume" | "stack_count" | "max_stack" => {
             if !matches!(value, Value::Int(_)) {
-                return Err(EditError::InvalidValue(format!("{key} requires an integer")));
+                return Err(EditError::InvalidValue(format!(
+                    "{key} requires an integer"
+                )));
             }
         }
-        "is_container" | "is_wearable" | "is_pocketable" | "stackable" => {
-            if !matches!(value, Value::Bool(_)) {
-                return Err(EditError::InvalidValue(format!("{key} requires true or false")));
-            }
+        "is_container" | "is_wearable" | "is_pocketable" | "stackable"
+            if !matches!(value, Value::Bool(_)) =>
+        {
+            return Err(EditError::InvalidValue(format!(
+                "{key} requires true or false"
+            )));
         }
         _ => {}
     }
@@ -216,24 +225,24 @@ pub fn set_field(
     let kind = classify_key(key);
     match kind {
         FieldKind::Immutable(field) => {
-            return Err(EditError::ReadOnly(format!("{field} cannot be changed")));
+            Err(EditError::ReadOnly(format!("{field} cannot be changed")))
         }
-        FieldKind::Status => {
-            return Err(EditError::ReadOnly(
-                "status fields are calculated; use @examine to view".to_string(),
-            ));
-        }
+        FieldKind::Status => Err(EditError::ReadOnly(
+            "status fields are calculated; use @examine to view".to_string(),
+        )),
         FieldKind::Verb(name) => {
             let code = raw_value.trim().to_string();
             if code.is_empty() {
-                return Err(EditError::InvalidValue("verb code cannot be empty".to_string()));
+                return Err(EditError::InvalidValue(
+                    "verb code cannot be empty".to_string(),
+                ));
             }
             obj.add_verb(Verb {
                 name: name.clone(),
                 code,
                 permissions: PermissionFlags::OWNER,
             });
-            return Ok(());
+            Ok(())
         }
         FieldKind::ObjectField(field) => match field {
             "name" => {
@@ -266,7 +275,9 @@ pub fn set_field(
                 }
                 Ok(())
             }
-            other => Err(EditError::Validation(format!("unknown object field: {other}"))),
+            other => Err(EditError::Validation(format!(
+                "unknown object field: {other}"
+            ))),
         },
         FieldKind::StateProperty(state_key) => {
             let value = parse_value_literal(raw_value)?;

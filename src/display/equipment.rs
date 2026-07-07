@@ -161,7 +161,10 @@ mod tests {
         let (holding, wearing) = collect_gear_lists(&player, &objects, plan);
         assert_eq!(holding, vec!["6 gold bars"]);
         assert!(wearing.is_empty());
-        assert!(!holding.iter().chain(wearing.iter()).any(|s| s.contains("unknown")));
+        assert!(!holding
+            .iter()
+            .chain(wearing.iter())
+            .any(|s| s.contains("unknown")));
     }
 
     #[test]

@@ -195,10 +195,7 @@ pub fn parse_spawner_file(content: &str) -> (Vec<SpawnTemplateDef>, Vec<SpawnerD
                         spawner.periodic_interval = value.parse().unwrap_or(5).max(1)
                     }
                     "chance" => {
-                        spawner.chance = value
-                            .parse::<f64>()
-                            .unwrap_or(1.0)
-                            .clamp(0.0, 1.0)
+                        spawner.chance = value.parse::<f64>().unwrap_or(1.0).clamp(0.0, 1.0)
                     }
                     "max_active" => spawner.max_active = value.parse().unwrap_or(1),
                     _ => {}

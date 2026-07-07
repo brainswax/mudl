@@ -192,7 +192,11 @@ pub struct PortalSpec {
 }
 
 impl PortalSpec {
-    pub fn new(kind: PortalKind, direction: impl Into<String>, destination: impl Into<String>) -> Self {
+    pub fn new(
+        kind: PortalKind,
+        direction: impl Into<String>,
+        destination: impl Into<String>,
+    ) -> Self {
         Self {
             kind,
             direction: direction.into(),
@@ -613,7 +617,8 @@ impl Object {
         self.set_property_bool("is_open", spec.open);
         self.set_property_bool(
             "portal_passable",
-            spec.passable.unwrap_or_else(|| spec.kind.default_passable()),
+            spec.passable
+                .unwrap_or_else(|| spec.kind.default_passable()),
         );
         self.set_property_bool(
             "portal_transparent",
@@ -802,7 +807,8 @@ impl Object {
         if let Some(bonus) = max_weight_bonus.filter(|b| *b != 0) {
             self.set_property_int("mod_max_weight", bonus);
         }
-        if let Some(factor) = encumbrance_factor.filter(|f| f.is_finite() && (*f - 1.0).abs() > 1e-9)
+        if let Some(factor) =
+            encumbrance_factor.filter(|f| f.is_finite() && (*f - 1.0).abs() > 1e-9)
         {
             self.set_property_numeric("mod_encumbrance", factor);
         }
@@ -821,8 +827,7 @@ impl Object {
     }
 
     pub fn has_carry_modifiers(&self) -> bool {
-        self.carry_max_weight_bonus() != 0
-            || (self.carry_encumbrance_factor() - 1.0).abs() > 1e-9
+        self.carry_max_weight_bonus() != 0 || (self.carry_encumbrance_factor() - 1.0).abs() > 1e-9
     }
 
     pub fn apply_item_phys(&mut self, spec: &ItemPhysSpec) {
@@ -978,10 +983,8 @@ impl Object {
     }
 
     pub fn set_int_map(&mut self, name: &str, map: HashMap<String, i64>) {
-        let value_map: HashMap<String, Value> = map
-            .into_iter()
-            .map(|(k, v)| (k, Value::Int(v)))
-            .collect();
+        let value_map: HashMap<String, Value> =
+            map.into_iter().map(|(k, v)| (k, Value::Int(v))).collect();
         self.add_property(Property {
             name: name.to_string(),
             value: Value::Map(value_map),
@@ -1045,14 +1048,12 @@ impl Object {
     }
 
     pub fn set_property_numeric(&mut self, name: &str, value: f64) {
-        let stored = if value.fract().abs() < 1e-9
-            && value >= i64::MIN as f64
-            && value <= i64::MAX as f64
-        {
-            Value::Int(value.round() as i64)
-        } else {
-            Value::Float(value)
-        };
+        let stored =
+            if value.fract().abs() < 1e-9 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+                Value::Int(value.round() as i64)
+            } else {
+                Value::Float(value)
+            };
         self.add_property(Property {
             name: name.to_string(),
             value: stored,
@@ -1124,9 +1125,7 @@ impl Object {
     /// Whether this object has text the player can read.
     pub fn is_readable(&self) -> bool {
         self.get_bool_property("is_readable").unwrap_or(false)
-            || self
-                .read_text()
-                .is_some_and(|text| !text.trim().is_empty())
+            || self.read_text().is_some_and(|text| !text.trim().is_empty())
     }
 
     /// Text shown by the `read` command.
@@ -1316,7 +1315,7 @@ mod tests {
 
         let mut key = bare_object("item:key-001");
         key.apply_key_role(&KeySpec::new("demo"));
-        let mut blade = bare_object("item:blade-001");
+        let blade = bare_object("item:blade-001");
 
         assert!(ring.container_accepts_item(&key));
         assert!(!ring.container_accepts_item(&blade));

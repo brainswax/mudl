@@ -26,14 +26,8 @@ pub fn format_look_self_summary(
 
     match (holding.is_empty(), wearing.is_empty()) {
         (true, true) => "You aren't holding or wearing anything.".to_string(),
-        (false, true) => format!(
-            "You are holding {}.",
-            phrase_with_leading_article(&holding)
-        ),
-        (true, false) => format!(
-            "You are wearing {}.",
-            phrase_with_leading_article(&wearing)
-        ),
+        (false, true) => format!("You are holding {}.", phrase_with_leading_article(&holding)),
+        (true, false) => format!("You are wearing {}.", phrase_with_leading_article(&wearing)),
         (false, false) => format!(
             "You are holding {} and wearing {}.",
             phrase_with_leading_article(&holding),

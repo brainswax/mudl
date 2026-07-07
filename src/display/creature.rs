@@ -7,11 +7,7 @@ use crate::object::Object;
 pub fn format_examine_creature_player(obj: &Object, anatomy: &AnatomyRegistry) -> String {
     let mut lines = Vec::new();
     if let Some(creature) = obj.creature_name() {
-        lines.push(format!(
-            "A {} named {}.",
-            creature,
-            obj.name.to_lowercase()
-        ));
+        lines.push(format!("A {} named {}.", creature, obj.name.to_lowercase()));
     } else {
         lines.push(format!("A creature named {}.", obj.name.to_lowercase()));
     }

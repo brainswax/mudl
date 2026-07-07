@@ -135,10 +135,7 @@ pub fn prune_stale_body_slots(creature: &mut Object, objects: &HashMap<ObjectId,
 }
 
 /// Prune stale slots on a creature object in the world map.
-pub fn prune_creature_body_slots(
-    creature_id: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-) {
+pub fn prune_creature_body_slots(creature_id: &ObjectId, objects: &mut HashMap<ObjectId, Object>) {
     let Some(creature) = objects.get(creature_id).cloned() else {
         return;
     };
@@ -226,13 +223,13 @@ pub fn is_carried_by(
 
 // --- Grasp slot placement ---
 
-fn left_grasp_slot<'a>(plan: &'a BodyPlan) -> Option<&'a BodySlotDef> {
+fn left_grasp_slot(plan: &BodyPlan) -> Option<&BodySlotDef> {
     plan.grasp_slots()
         .into_iter()
         .find(|s| s.name.contains("left"))
 }
 
-fn right_grasp_slot<'a>(plan: &'a BodyPlan) -> Option<&'a BodySlotDef> {
+fn right_grasp_slot(plan: &BodyPlan) -> Option<&BodySlotDef> {
     plan.grasp_slots()
         .into_iter()
         .find(|s| s.name.contains("right"))
@@ -263,10 +260,7 @@ pub fn grasp_slot_names(plan: &BodyPlan) -> Vec<String> {
 }
 
 /// Prune stale body slots before placing into grasp (wield/take-to-hands).
-pub fn prepare_grasp_placement(
-    player_id: &ObjectId,
-    objects: &mut HashMap<ObjectId, Object>,
-) {
+pub fn prepare_grasp_placement(player_id: &ObjectId, objects: &mut HashMap<ObjectId, Object>) {
     prune_creature_body_slots(player_id, objects);
 }
 
@@ -385,12 +379,18 @@ pub fn place_in_grasp_slots(
 ) -> Result<Vec<String>, PossessionError> {
     prepare_grasp_placement(player_id, objects);
 
-    let item = objects.get(item_id).ok_or(PossessionError::NotCarried)?.clone();
+    let item = objects
+        .get(item_id)
+        .ok_or(PossessionError::NotCarried)?
+        .clone();
     let player = objects.get(player_id).ok_or(PossessionError::NotCarried)?;
     let (target_slots, carried_label) =
         select_grasp_slots(player, &item, plan, objects, Some(item_id))?;
 
-    let mut player = objects.get(player_id).ok_or(PossessionError::NotCarried)?.clone();
+    let mut player = objects
+        .get(player_id)
+        .ok_or(PossessionError::NotCarried)?
+        .clone();
     for slot in &target_slots {
         set_body_slot(&mut player, slot, Some(item_id.clone()));
     }
@@ -447,10 +447,7 @@ mod tests {
 
         set_body_slot(&mut player, "right_hand", Some(bars_id.clone()));
 
-        let objects = HashMap::from([
-            (owner.clone(), player.clone()),
-            (bars_id.clone(), bars),
-        ]);
+        let objects = HashMap::from([(owner.clone(), player.clone()), (bars_id.clone(), bars)]);
 
         assert!(!body_slot_item_valid(&player, &bars_id, &objects));
 
@@ -521,8 +518,7 @@ mod tests {
         let sword = bare("item:sword-001", "sword");
         let objects = HashMap::from([(player.id.clone(), player.clone())]);
 
-        let (slots, label) =
-            select_grasp_slots(&player, &sword, &plan, &objects, None).unwrap();
+        let (slots, label) = select_grasp_slots(&player, &sword, &plan, &objects, None).unwrap();
         assert_eq!(slots, vec!["right_hand"]);
         assert_eq!(label.as_deref(), Some("right_hand"));
     }
@@ -535,8 +531,7 @@ mod tests {
         greatsword.set_property_string("hand_slot", "both");
         let objects = HashMap::from([(player.id.clone(), player.clone())]);
 
-        let (slots, _) =
-            select_grasp_slots(&player, &greatsword, &plan, &objects, None).unwrap();
+        let (slots, _) = select_grasp_slots(&player, &greatsword, &plan, &objects, None).unwrap();
         assert_eq!(slots, vec!["left_hand", "right_hand"]);
     }
 

@@ -161,7 +161,10 @@ mod tests {
 "#;
         let templates = parse_behavior_file(content);
         assert_eq!(templates.len(), 4);
-        let aggressive = templates.iter().find(|t| t.base_name == "aggressive").unwrap();
+        let aggressive = templates
+            .iter()
+            .find(|t| t.base_name == "aggressive")
+            .unwrap();
         assert_eq!(aggressive.react, CreatureReact::Attack);
         assert_eq!(aggressive.attack_damage, 12);
         assert_eq!(

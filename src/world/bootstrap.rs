@@ -103,17 +103,14 @@ async fn spawn_instance<P: Persistence>(
         .and_then(|name| prototypes.get(name).cloned());
 
     let name = instance_display_name(def, prototype_defs);
-    let description = def
-        .description
-        .as_deref()
-        .or_else(|| {
-            def.prototype.as_deref().and_then(|p| {
-                prototype_defs
-                    .iter()
-                    .find(|d| d.base_name == p)
-                    .and_then(|d| d.description.as_deref())
-            })
-        });
+    let description = def.description.as_deref().or_else(|| {
+        def.prototype.as_deref().and_then(|p| {
+            prototype_defs
+                .iter()
+                .find(|d| d.base_name == p)
+                .and_then(|d| d.description.as_deref())
+        })
+    });
     let aliases = merged_aliases(def, prototype_defs);
     let mut obj = factory
         .create_from_mudl_spec(
@@ -127,15 +124,13 @@ async fn spawn_instance<P: Persistence>(
         )
         .await?;
 
-    let parent_id = placements
-        .get(&def.location)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Unknown location '{}' for item '{}'",
-                def.location,
-                def.base_name
-            )
-        })?;
+    let parent_id = placements.get(&def.location).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Unknown location '{}' for item '{}'",
+            def.location,
+            def.base_name
+        )
+    })?;
 
     obj.location = Some(parent_id.clone());
 
@@ -238,10 +233,7 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
 
     for def in &world.spawner_defs {
         if def.location.is_empty() && def.target.is_empty() {
-            anyhow::bail!(
-                "Spawner '{}' missing location or target",
-                def.base_name
-            );
+            anyhow::bail!("Spawner '{}' missing location or target", def.base_name);
         }
         let spawner_id = ObjectId::new(format!("spawner:{}-001", def.base_name));
         if factory.load_object(&spawner_id).await?.is_some() {
@@ -287,7 +279,9 @@ pub async fn bootstrap_world_spawners<P: Persistence>(
             spawner.set_property_object_ref("spawner_target", target_id);
         }
         spawner.add_property(spawn_templates_to_property(&world.spawn_template_defs));
-        spawner.add_property(behavior_templates_to_property(&world.behavior_template_defs));
+        spawner.add_property(behavior_templates_to_property(
+            &world.behavior_template_defs,
+        ));
         factory.persistence().save_object(&spawner).await?;
     }
     Ok(())
@@ -486,9 +480,8 @@ pub async fn bootstrap_world<P: Persistence>(
             place_objects.insert(id.clone(), obj);
         }
     }
-    validate_world_places(&place_objects).map_err(|errors| {
-        anyhow::anyhow!("Invalid world exit graph: {}", errors.join("; "))
-    })?;
+    validate_world_places(&place_objects)
+        .map_err(|errors| anyhow::anyhow!("Invalid world exit graph: {}", errors.join("; ")))?;
 
     let placements = bootstrap_world_items(factory, &owner, world, &name_to_id).await?;
     bootstrap_world_npcs(factory, &owner, world, &name_to_id).await?;
@@ -544,21 +537,25 @@ pub async fn bootstrap_world<P: Persistence>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repl::session::Session;
-    use crate::world::exits::validate_world_places;
     use crate::inventory::{
         break_item, close_container, open_container, read_item, take_item, wield_item,
         InventoryContext,
     };
     use crate::mudl::load_module;
     use crate::persistence::SqlitePersistence;
+    use crate::repl::session::Session;
+    use crate::world::exits::validate_world_places;
 
     #[tokio::test]
     async fn bootstrap_wires_starting_area_exits() {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         let start = bootstrap_world(&factory, owner.clone(), &world)
             .await
@@ -592,7 +589,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         let start = bootstrap_world(&factory, owner.clone(), &world)
             .await
@@ -620,12 +621,12 @@ mod tests {
             "chest on ground"
         );
 
-        let mailbox = ground
-            .iter()
-            .find(|o| o.name == "Worn Mailbox")
-            .unwrap();
+        let mailbox = ground.iter().find(|o| o.name == "Worn Mailbox").unwrap();
         assert!(mailbox.is_container());
-        assert!(!mailbox.container_is_open(), "starting mailbox should be closed");
+        assert!(
+            !mailbox.container_is_open(),
+            "starting mailbox should be closed"
+        );
         assert!(mailbox.is_readable());
         assert!(mailbox.read_text().is_some());
         let mailbox_contents: Vec<_> = mailbox
@@ -643,12 +644,15 @@ mod tests {
         assert!(key.is_key());
         assert_eq!(key.key_lock_id().as_deref(), Some("chest-lock"));
 
-        let chest = ground
-            .iter()
-            .find(|o| o.name == "Travel Chest")
-            .unwrap();
-        assert!(!chest.container_is_open(), "starting chest should be closed");
-        assert!(chest.container_is_locked(), "starting chest should be locked");
+        let chest = ground.iter().find(|o| o.name == "Travel Chest").unwrap();
+        assert!(
+            !chest.container_is_open(),
+            "starting chest should be closed"
+        );
+        assert!(
+            chest.container_is_locked(),
+            "starting chest should be locked"
+        );
         assert_eq!(chest.container_lock_id().as_deref(), Some("chest-lock"));
         let chest_contents: Vec<_> = chest
             .container_contents()
@@ -662,10 +666,7 @@ mod tests {
         assert!(chest_contents.contains(&"Tinderbox"));
         assert!(!chest_contents.contains(&"Folded Note"));
 
-        let note = objects
-            .iter()
-            .find(|o| o.name == "Folded Note")
-            .unwrap();
+        let note = objects.iter().find(|o| o.name == "Folded Note").unwrap();
         assert!(note.is_readable());
         assert_eq!(
             note.read_text().as_deref(),
@@ -678,7 +679,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let room_id = bootstrap_world(&factory, player_id.clone(), &world)
@@ -744,7 +749,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, owner, &world).await.unwrap();
 
@@ -815,8 +824,7 @@ mod tests {
         let boots = objects
             .iter()
             .find(|o| {
-                o.name == "Boots of Carrying"
-                    && o.location.as_ref() == Some(&cottage_bedroom.id)
+                o.name == "Boots of Carrying" && o.location.as_ref() == Some(&cottage_bedroom.id)
             })
             .expect("boots of carrying in cottage bedroom");
         assert!(boots.is_wearable());
@@ -832,7 +840,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, owner, &world).await.unwrap();
 
@@ -864,7 +876,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, owner, &world).await.unwrap();
 
@@ -877,10 +893,7 @@ mod tests {
             .iter()
             .find(|o| o.name == "Bedroom")
             .expect("bedroom");
-        let pantry = objects
-            .iter()
-            .find(|o| o.name == "Pantry")
-            .expect("pantry");
+        let pantry = objects.iter().find(|o| o.name == "Pantry").expect("pantry");
 
         assert!(interior.is_area());
         assert!(bedroom.is_room());
@@ -908,7 +921,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
@@ -929,16 +946,17 @@ mod tests {
             .map(|o| o.id.clone())
             .expect("pantry");
 
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: Some(&start),
-            objects: &mut objects,
-            anatomy: &anatomy,
-            dirty: None,
-        };
-        open_container(&mut ctx, "mailbox").unwrap();
-        take_item(&mut ctx, "cottage key").unwrap();
-        drop(ctx);
+        {
+            let mut ctx = InventoryContext {
+                player_id: &player_id,
+                room_id: Some(&start),
+                objects: &mut objects,
+                anatomy: &anatomy,
+                dirty: None,
+            };
+            open_container(&mut ctx, "mailbox").unwrap();
+            take_item(&mut ctx, "cottage key").unwrap();
+        }
 
         let mut session = Session::test_session(
             player_id.clone(),
@@ -974,7 +992,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
@@ -1039,7 +1061,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, player_id, &world).await.unwrap();
 
@@ -1076,7 +1102,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
@@ -1093,22 +1123,22 @@ mod tests {
 
         validate_world_places(&objects).expect("haunted map validates");
 
-        let mut ctx = InventoryContext {
-            player_id: &player_id,
-            room_id: Some(&start),
-            objects: &mut objects,
-            anatomy: &anatomy,
-            dirty: None,
+        let boulder_hint = {
+            let mut ctx = InventoryContext {
+                player_id: &player_id,
+                room_id: Some(&start),
+                objects: &mut objects,
+                anatomy: &anatomy,
+                dirty: None,
+            };
+            let hint = read_item(&ctx, "boulder").unwrap();
+            open_container(&mut ctx, "mailbox").unwrap();
+            take_item(&mut ctx, "brass key").unwrap();
+            open_container(&mut ctx, "chest").unwrap();
+            take_item(&mut ctx, "whisper charm").unwrap();
+            hint
         };
-
-        let boulder_hint = read_item(&ctx, "boulder").unwrap();
         assert!(boulder_hint.contains("HOLLOW OAK"));
-
-        open_container(&mut ctx, "mailbox").unwrap();
-        take_item(&mut ctx, "brass key").unwrap();
-        open_container(&mut ctx, "chest").unwrap();
-        take_item(&mut ctx, "whisper charm").unwrap();
-        drop(ctx);
 
         let mut session = Session::test_session(
             player_id.clone(),
@@ -1138,7 +1168,10 @@ mod tests {
         assert!(entry_msg.contains("cannot be secured again"));
         assert!(entry_msg.contains("Tangled Threshold") || entry_msg.contains("held breath"));
         assert!(
-            session.objects().get(&charm_id).is_some_and(|o| o.is_deleted),
+            session
+                .objects()
+                .get(&charm_id)
+                .is_some_and(|o| o.is_deleted),
             "whisper charm should be consumed opening the hollow oak"
         );
         let oak = session
@@ -1150,7 +1183,10 @@ mod tests {
 
         let wrong_turn = session.go("east").unwrap();
         assert_eq!(
-            session.object(session.current_location().unwrap()).unwrap().name,
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
             "Tangled Threshold",
             "wrong turns loop silently to the threshold"
         );
@@ -1164,7 +1200,7 @@ mod tests {
         );
 
         session.go("north").unwrap();
-        let moon_read = read_item(&mut session.inventory_context(), "marker").unwrap();
+        let moon_read = read_item(&session.inventory_context(), "marker").unwrap();
         assert!(moon_read.contains("MOON"));
 
         session.go("east").unwrap();
@@ -1172,7 +1208,10 @@ mod tests {
         session.go("west").unwrap();
         session.go("north").unwrap();
         assert_eq!(
-            session.object(session.current_location().unwrap()).unwrap().name,
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
             "Pale Heart of the Wood"
         );
 
@@ -1198,9 +1237,10 @@ mod tests {
             Some(&heart_location)
         );
 
-        let mut ctx = session.inventory_context();
-        let reward_msg = open_container(&mut ctx, "reward chest").unwrap();
-        drop(ctx);
+        let reward_msg = {
+            let mut ctx = session.inventory_context();
+            open_container(&mut ctx, "reward chest").unwrap()
+        };
         assert!(
             reward_msg.contains("find"),
             "opening reward chest should spawn loot: {reward_msg}"
@@ -1272,7 +1312,10 @@ mod tests {
 
         session.go("in").unwrap();
         assert_eq!(
-            session.object(session.current_location().unwrap()).unwrap().name,
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
             "Tangled Threshold",
             "haunted forest is replayable"
         );
@@ -1285,14 +1328,18 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         bootstrap_world(&factory, player_id.clone(), &world)
             .await
             .unwrap();
 
-        let mut objects: HashMap<ObjectId, Object> = persistence
+        let objects: HashMap<ObjectId, Object> = persistence
             .list_objects(false)
             .await
             .unwrap()
@@ -1304,14 +1351,20 @@ mod tests {
             .values()
             .find(|o| o.name == "Chipped Blade")
             .expect("chipped blade in travel chest");
-        assert_eq!(blade.equipment_stat_mods().get("strength").copied(), Some(2));
+        assert_eq!(
+            blade.equipment_stat_mods().get("strength").copied(),
+            Some(2)
+        );
 
         let vest = objects
             .values()
             .find(|o| o.name == "Leather Vest")
             .expect("leather vest in cottage bedroom");
         assert_eq!(vest.equipment_max_health_bonus(), 5);
-        assert_eq!(vest.equipment_skill_mods().get("survival").copied(), Some(1));
+        assert_eq!(
+            vest.equipment_skill_mods().get("survival").copied(),
+            Some(1)
+        );
 
         let lantern = objects
             .values()
@@ -1348,7 +1401,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let owner = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, owner, &world).await.unwrap();
 
@@ -1359,14 +1416,15 @@ mod tests {
             .expect("path watcher");
         let entries = read_creature_behaviors(&npc);
         assert!(
-            entries.iter().any(|e| e.template_name.as_deref() == Some("guard")),
+            entries
+                .iter()
+                .any(|e| e.template_name.as_deref() == Some("guard")),
             "path watcher should have guard behavior template"
         );
         assert!(
             entries.iter().any(|e| {
                 e.entry_type == "script"
-                    && e.text.as_deref()
-                        == Some("The trees seem to lean closer when you pass.")
+                    && e.text.as_deref() == Some("The trees seem to lean closer when you pass.")
             }),
             "path watcher should keep inline on_enter script"
         );
@@ -1379,14 +1437,17 @@ mod tests {
             damage_creature, run_creature_behaviors,
         };
         use crate::display::{
-            creature::format_examine_creature_player, format_examine_self, Describable,
-            DisplayMode,
+            creature::format_examine_creature_player, format_examine_self, Describable, DisplayMode,
         };
 
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
             .await
@@ -1399,9 +1460,16 @@ mod tests {
         assert_eq!(player.get_int_property("max_weight"), Some(100));
 
         let npc_id = ObjectId::new("npc:path-watcher-001");
-        let npc = factory.load_object(&npc_id).await.unwrap().expect("path watcher");
+        let npc = factory
+            .load_object(&npc_id)
+            .await
+            .unwrap()
+            .expect("path watcher");
         assert_eq!(npc.name, "Path Watcher");
-        assert_eq!(npc.location.as_ref().map(|id| id.as_str()), Some("area:forest-path-001"));
+        assert_eq!(
+            npc.location.as_ref().map(|id| id.as_str()),
+            Some("area:forest-path-001")
+        );
         assert_eq!(creature_health(&npc), 100);
 
         let objects: HashMap<ObjectId, Object> = persistence
@@ -1422,12 +1490,8 @@ mod tests {
 
         let forest_path = ObjectId::new("area:forest-path-001");
         let mut behavior_objects = objects.clone();
-        let outcome = run_creature_behaviors(
-            "on_enter",
-            &forest_path,
-            &player_id,
-            &mut behavior_objects,
-        );
+        let outcome =
+            run_creature_behaviors("on_enter", &forest_path, &player_id, &mut behavior_objects);
         assert!(outcome.lines.len() >= 2, "guard + script should both fire");
         assert!(outcome
             .lines
@@ -1445,7 +1509,7 @@ mod tests {
         assert!(move_out.contains("trees seem to lean closer"));
 
         let damage_msg = {
-            let mut ctx = session.inventory_context();
+            let ctx = session.inventory_context();
             damage_creature(
                 ctx.player_id,
                 ctx.room_id,
@@ -1462,7 +1526,7 @@ mod tests {
         assert_eq!(creature_health(watcher), 60);
 
         {
-            let mut ctx = session.inventory_context();
+            let ctx = session.inventory_context();
             damage_creature(
                 ctx.player_id,
                 ctx.room_id,
@@ -1482,12 +1546,11 @@ mod tests {
         let watcher_describe = session.object(&npc_id).unwrap().describe(&display_ctx);
         assert!(watcher_describe.contains("wounded") || watcher_describe.contains("health"));
 
-        let mut encumbered_player = session
-            .object(&player_id)
-            .expect("player")
-            .clone();
+        let mut encumbered_player = session.object(&player_id).expect("player").clone();
         apply_effect(&mut encumbered_player, "weary", &world.anatomy);
-        session.objects_mut().insert(player_id.clone(), encumbered_player);
+        session
+            .objects_mut()
+            .insert(player_id.clone(), encumbered_player);
         let weary_player = session.object(&player_id).unwrap();
         assert_eq!(
             crate::creature::effect_encumbrance_factor(weary_player),
@@ -1502,7 +1565,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
         let anatomy = world.anatomy.clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
@@ -1570,13 +1637,17 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
             .await
             .unwrap();
 
-        let mut objects: HashMap<ObjectId, Object> = persistence
+        let objects: HashMap<ObjectId, Object> = persistence
             .list_objects(false)
             .await
             .unwrap()
@@ -1590,10 +1661,7 @@ mod tests {
             .find(|o| o.id.as_str().contains("haunted-moon-pot"))
             .map(|o| o.id.clone())
             .expect("clay pot instance in haunted moon");
-        assert_eq!(
-            objects.get(&pot_id).unwrap().location.as_ref(),
-            Some(&moon)
-        );
+        assert_eq!(objects.get(&pot_id).unwrap().location.as_ref(), Some(&moon));
 
         let pot_spawners: Vec<_> = objects
             .values()
@@ -1615,18 +1683,22 @@ mod tests {
             Some(start),
         );
 
-        let mut ctx = session.inventory_context();
-        open_container(&mut ctx, "mailbox").unwrap();
-        take_item(&mut ctx, "brass key").unwrap();
-        open_container(&mut ctx, "chest").unwrap();
-        take_item(&mut ctx, "whisper charm").unwrap();
-        drop(ctx);
+        {
+            let mut ctx = session.inventory_context();
+            open_container(&mut ctx, "mailbox").unwrap();
+            take_item(&mut ctx, "brass key").unwrap();
+            open_container(&mut ctx, "chest").unwrap();
+            take_item(&mut ctx, "whisper charm").unwrap();
+        }
 
         session.go("north").unwrap();
         session.go("in").unwrap();
         session.go("north").unwrap();
         assert_eq!(
-            session.object(session.current_location().unwrap()).unwrap().name,
+            session
+                .object(session.current_location().unwrap())
+                .unwrap()
+                .name,
             "Moonlit Glade"
         );
 
@@ -1640,11 +1712,15 @@ mod tests {
                     && o.name == "Mist Wisp"
             })
             .count();
-        assert!(wisp_count_before >= 1, "pot spawner should seed a mist wisp on enter");
+        assert!(
+            wisp_count_before >= 1,
+            "pot spawner should seed a mist wisp on enter"
+        );
 
-        let mut ctx = session.inventory_context();
-        let break_msg = break_item(&mut ctx, "pot").unwrap();
-        drop(ctx);
+        let break_msg = {
+            let mut ctx = session.inventory_context();
+            break_item(&mut ctx, "pot").unwrap()
+        };
 
         assert!(break_msg.contains("smash the clay pot"));
         assert!(break_msg.contains("find") || break_msg.contains("rations"));
@@ -1661,12 +1737,13 @@ mod tests {
             .objects()
             .values()
             .filter(|o| {
-                o.is_active()
-                    && o.name == "Trail Rations"
-                    && o.location.as_ref() == Some(&moon)
+                o.is_active() && o.name == "Trail Rations" && o.location.as_ref() == Some(&moon)
             })
             .count();
-        assert!(moon_rations >= 1, "breaking pot should spill loot into the glade");
+        assert!(
+            moon_rations >= 1,
+            "breaking pot should spill loot into the glade"
+        );
 
         session.go("south").unwrap();
         session.go("north").unwrap();
@@ -1695,7 +1772,11 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         bootstrap_world(&factory, player_id.clone(), &world)
             .await
@@ -1746,11 +1827,9 @@ mod tests {
             !moon_npcs.is_empty(),
             "haunted-moon spawner should create a creature on enter"
         );
-        assert!(
-            moon_npcs
-                .iter()
-                .any(|o| o.name == "Mist Wisp" || o.name == "Pale Lurker")
-        );
+        assert!(moon_npcs
+            .iter()
+            .any(|o| o.name == "Mist Wisp" || o.name == "Pale Lurker"));
     }
 
     #[tokio::test]
@@ -1761,14 +1840,18 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let factory = ObjectFactory::new(persistence.clone());
         let player_id = ObjectId::new("player:admin-001");
-        let world = load_module("modules/default").unwrap().active_world().unwrap().clone();
+        let world = load_module("modules/default")
+            .unwrap()
+            .active_world()
+            .unwrap()
+            .clone();
 
         let start = bootstrap_world(&factory, player_id.clone(), &world)
             .await
             .unwrap();
 
         let npc_id = ObjectId::new("npc:path-watcher-001");
-        let mut objects: HashMap<ObjectId, Object> = persistence
+        let objects: HashMap<ObjectId, Object> = persistence
             .list_objects(false)
             .await
             .unwrap()
@@ -1789,15 +1872,14 @@ mod tests {
             objects,
             Some(forest_path.clone()),
         );
-        session.objects_mut().get_mut(&player_id).unwrap().location =
-            Some(forest_path.clone());
+        session.objects_mut().get_mut(&player_id).unwrap().location = Some(forest_path.clone());
         session
             .objects_mut()
             .get_mut(&npc_id)
             .unwrap()
             .set_property_int("health", 1);
 
-        let mut ctx = session.inventory_context();
+        let ctx = session.inventory_context();
         let outcome = attack_creature(
             ctx.player_id,
             ctx.room_id,

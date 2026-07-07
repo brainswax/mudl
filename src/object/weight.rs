@@ -157,7 +157,8 @@ pub fn player_effective_max_weight_with_anatomy(
     }
     let mut bonus = crate::creature::effect_max_weight_bonus(player);
     if let Some(anatomy) = anatomy {
-        bonus += crate::creature::collect_equipment_modifiers(player, objects, anatomy).max_weight_bonus;
+        bonus +=
+            crate::creature::collect_equipment_modifiers(player, objects, anatomy).max_weight_bonus;
     } else {
         bonus += collect_worn_carry_modifiers(player, objects).max_weight_bonus;
     }

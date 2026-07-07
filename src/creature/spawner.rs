@@ -2,16 +2,15 @@
 
 use std::collections::HashMap;
 
-use crate::creature::{
-    build_creature_behavior_entries, creature_behaviors_to_property,
-    resolve_behavior_templates, init_creature_vitality,
-};
 use crate::creature::vitality::DEFAULT_MAX_HEALTH;
-use crate::mudl::{
-    AnatomyRegistry, NpcBehaviorDef, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef,
-    SpawnerTrigger,
+use crate::creature::{
+    build_creature_behavior_entries, creature_behaviors_to_property, init_creature_vitality,
+    resolve_behavior_templates,
 };
-use crate::mudl::{PlayerTemplate};
+use crate::mudl::PlayerTemplate;
+use crate::mudl::{
+    AnatomyRegistry, NpcBehaviorDef, SpawnTemplateDef, SpawnerDef, SpawnerEntryDef, SpawnerTrigger,
+};
 use crate::object::{generate_object_id, Object, ObjectId, PermissionFlags, Property, Value};
 
 /// Result of a spawner tick — optional narrative feedback for the player.
@@ -43,9 +42,7 @@ pub fn spawners_for_target<'a>(
     objects
         .values()
         .filter(|obj| {
-            obj.is_active()
-                && is_spawner(obj)
-                && spawner_target_id(obj).as_ref() == Some(target_id)
+            obj.is_active() && is_spawner(obj) && spawner_target_id(obj).as_ref() == Some(target_id)
         })
         .collect()
 }
@@ -78,9 +75,9 @@ pub fn spawners_in_room<'a>(
                 return true;
             }
             spawner_target_id(obj).is_some_and(|target_id| {
-                objects
-                    .get(&target_id)
-                    .is_some_and(|target| target.is_active() && target.location.as_ref() == Some(room_id))
+                objects.get(&target_id).is_some_and(|target| {
+                    target.is_active() && target.location.as_ref() == Some(room_id)
+                })
             })
         })
         .collect()
@@ -246,7 +243,7 @@ fn trigger_fires(spawner: &Object, enter_count: u64) -> bool {
         SpawnerTrigger::OnEnter => true,
         SpawnerTrigger::Periodic => {
             let interval = u64::from(spawner_periodic_interval(spawner));
-            enter_count % interval == 0
+            enter_count.is_multiple_of(interval)
         }
     }
 }
@@ -260,7 +257,10 @@ pub fn apply_spawner_def(
     spawner.set_property_bool("is_spawner", true);
     spawner.set_property_string("spawner_base", &def.base_name);
     spawner.set_property_string("spawner_trigger", def.trigger.as_str());
-    spawner.set_property_int("spawner_periodic_interval", i64::from(def.periodic_interval));
+    spawner.set_property_int(
+        "spawner_periodic_interval",
+        i64::from(def.periodic_interval),
+    );
     spawner.set_property_numeric("spawner_chance", def.chance);
     spawner.set_property_int("spawner_max_active", i64::from(def.max_active));
     spawner.set_property_int("spawner_enter_count", 0);
@@ -309,18 +309,9 @@ pub fn spawn_templates_to_property(templates: &[SpawnTemplateDef]) -> Property {
                 .iter()
                 .map(|behavior| {
                     Value::Map(HashMap::from([
-                        (
-                            "event".to_string(),
-                            Value::String(behavior.event.clone()),
-                        ),
-                        (
-                            "action".to_string(),
-                            Value::String(behavior.action.clone()),
-                        ),
-                        (
-                            "text".to_string(),
-                            Value::String(behavior.text.clone()),
-                        ),
+                        ("event".to_string(), Value::String(behavior.event.clone())),
+                        ("action".to_string(), Value::String(behavior.action.clone())),
+                        ("text".to_string(), Value::String(behavior.text.clone())),
                     ]))
                 })
                 .collect();
@@ -360,10 +351,7 @@ pub fn spawn_templates_to_property(templates: &[SpawnTemplateDef]) -> Property {
     }
 }
 
-fn resolve_spawn_template<'a>(
-    template_name: &str,
-    spawner: &'a Object,
-) -> Option<SpawnTemplateDef> {
+fn resolve_spawn_template(template_name: &str, spawner: &Object) -> Option<SpawnTemplateDef> {
     spawner.get_property("spawn_templates").and_then(|prop| {
         if let Value::List(items) = &prop.value {
             items.iter().find_map(|entry| {
@@ -563,10 +551,7 @@ pub fn despawn_creatures_from_spawner(
         .filter(|obj| {
             obj.is_active()
                 && obj.object_type() == "npc"
-                && obj
-                    .get_object_ref_property("spawned_by")
-                    .as_ref()
-                    == Some(spawner_id)
+                && obj.get_object_ref_property("spawned_by").as_ref() == Some(spawner_id)
         })
         .map(|obj| obj.id.clone())
         .collect();
@@ -764,20 +749,23 @@ mod tests {
         let player = ObjectId::new("player:hero-001");
         let owner = ObjectId::new("player:admin-001");
         let anatomy = AnatomyRegistry::default();
-        let mut objects = HashMap::from([(room.clone(), Object {
-            id: room.clone(),
-            name: "Moonlit Glade".to_string(),
-            aliases: Vec::new(),
-            location: None,
-            prototype: None,
-            owner: owner.clone(),
-            permissions: PermissionFlags::EVERYONE,
-            properties: HashMap::new(),
-            verbs: HashMap::new(),
-            event_handlers: HashMap::new(),
-            is_deleted: false,
-            deleted_at: None,
-        })]);
+        let mut objects = HashMap::from([(
+            room.clone(),
+            Object {
+                id: room.clone(),
+                name: "Moonlit Glade".to_string(),
+                aliases: Vec::new(),
+                location: None,
+                prototype: None,
+                owner: owner.clone(),
+                permissions: PermissionFlags::EVERYONE,
+                properties: HashMap::new(),
+                verbs: HashMap::new(),
+                event_handlers: HashMap::new(),
+                is_deleted: false,
+                deleted_at: None,
+            },
+        )]);
 
         let empty = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects);
         assert!(empty.is_empty());
@@ -786,7 +774,9 @@ mod tests {
         objects.insert(spawner.id.clone(), spawner);
         let spawned = run_on_enter_spawners(&room, &player, &owner, &anatomy, &mut objects);
         assert_eq!(spawned.len(), 1);
-        assert!(objects.values().any(|o| o.object_type() == "npc" && o.name == "Mist Wisp"));
+        assert!(objects
+            .values()
+            .any(|o| o.object_type() == "npc" && o.name == "Mist Wisp"));
     }
 
     #[test]
@@ -798,20 +788,23 @@ mod tests {
         let mut spawner = spawner_object(&room);
         spawner.set_property_int("spawner_max_active", 1);
         let mut objects = HashMap::from([
-            (room.clone(), Object {
-                id: room.clone(),
-                name: "room".to_string(),
-                aliases: Vec::new(),
-                location: None,
-                prototype: None,
-                owner: owner.clone(),
-                permissions: PermissionFlags::EVERYONE,
-                properties: HashMap::new(),
-                verbs: HashMap::new(),
-                event_handlers: HashMap::new(),
-                is_deleted: false,
-                deleted_at: None,
-            }),
+            (
+                room.clone(),
+                Object {
+                    id: room.clone(),
+                    name: "room".to_string(),
+                    aliases: Vec::new(),
+                    location: None,
+                    prototype: None,
+                    owner: owner.clone(),
+                    permissions: PermissionFlags::EVERYONE,
+                    properties: HashMap::new(),
+                    verbs: HashMap::new(),
+                    event_handlers: HashMap::new(),
+                    is_deleted: false,
+                    deleted_at: None,
+                },
+            ),
             (spawner.id.clone(), spawner),
         ]);
 

@@ -10,19 +10,17 @@ use mudl::command::{
     parse_unlink_command, parse_unset_command, reload_universe, resolve_container_target,
     soft_delete_object, undelete_object, wizard_access_denied,
 };
-use mudl::display::{
-    format_examine_output, format_no_parent_message, narrate_create, narrate_field_set,
-    narrate_field_unset, narrate_loaded, narrate_module_bundled, narrate_module_reloaded,
-    narrate_no_location, narrate_no_location_builder,
-    narrate_dig, narrate_link, narrate_not_in_cache, narrate_saved, narrate_target_not_found,
-    narrate_wizard_not_found,
-    parse_examine_request, resolve_examine_request, resolve_target, Describable,
-    DisplayContext, DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope,
-    TargetResolution,
-};
 use mudl::creature::{
     add_behavior_template, attack_creature, damage_creature, format_creature_behavior_list,
     heal_creature, parse_vital_amount_args, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
+};
+use mudl::display::{
+    format_examine_output, format_no_parent_message, narrate_create, narrate_dig,
+    narrate_field_set, narrate_field_unset, narrate_link, narrate_loaded, narrate_module_bundled,
+    narrate_module_reloaded, narrate_no_location, narrate_no_location_builder,
+    narrate_not_in_cache, narrate_saved, narrate_target_not_found, narrate_wizard_not_found,
+    parse_examine_request, resolve_examine_request, resolve_target, Describable, DisplayContext,
+    DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope, TargetResolution,
 };
 use mudl::inventory::{
     break_item, close_container, describe_inventory, drop_item, lock_container, open_container,
@@ -123,8 +121,8 @@ async fn run_look_command(
         }
         Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
         Ok(TargetResolution::NotFound) => {
-            if target.is_some() {
-                println!("{}", narrate_target_not_found(target.unwrap()));
+            if let Some(name) = target {
+                println!("{}", narrate_target_not_found(name));
             } else {
                 println!(
                     "{}",
@@ -179,7 +177,10 @@ async fn run_examine_command(
                 if let Some(obj) = ctx.objects.get(&id) {
                     render_object(obj, &ctx, builder, false);
                 } else {
-                    println!("{}", narrate_target_not_found(args.first().unwrap_or(&"target")));
+                    println!(
+                        "{}",
+                        narrate_target_not_found(args.first().unwrap_or(&"target"))
+                    );
                 }
             }
         }
@@ -188,7 +189,10 @@ async fn run_examine_command(
             if let Some(obj) = ctx.objects.get(&id) {
                 println!("{}", format_no_parent_message(obj));
             } else {
-                println!("{}", narrate_target_not_found(args.first().unwrap_or(&"target")));
+                println!(
+                    "{}",
+                    narrate_target_not_found(args.first().unwrap_or(&"target"))
+                );
             }
         }
         Err(ExamineError::NotFound) => {
@@ -331,8 +335,7 @@ async fn main() -> Result<()> {
                     match session.go(dir) {
                         Ok(msg) => {
                             println!("{msg}");
-                            if let Err(e) = persist_session(&mut session, &persistence).await
-                            {
+                            if let Err(e) = persist_session(&mut session, &persistence).await {
                                 error!(error = %e, "persist after go failed");
                             }
                         }
@@ -346,19 +349,17 @@ async fn main() -> Result<()> {
                         println!("Commands:");
                         println!("  create <type> <name...>     - e.g. create sword Rusty Sword");
                         println!("  list                        - list objects in session memory");
-                        println!(
-                            "  look [target]  (l)          - in-character brief view"
-                        );
-                        println!(
-                            "  @look [target]              - wizard: structured builder view"
-                        );
+                        println!("  look [target]  (l)          - in-character brief view");
+                        println!("  @look [target]              - wizard: structured builder view");
                         println!(
                             "  examine [target]  (x)       - in-character detail (self, .body)"
                         );
                         println!(
                             "  @examine [target] [parent]  - wizard: properties, anatomy, prototype"
                         );
-                        println!("  @dump [target]              - wizard: full JSON dump of an object");
+                        println!(
+                            "  @dump [target]              - wizard: full JSON dump of an object"
+                        );
                         println!(
                             "  inventory  (i)              - show hands, pockets, and containers"
                         );
@@ -371,7 +372,9 @@ async fn main() -> Result<()> {
                             "  remove <item> from <container> - take an item out of a container"
                         );
                         println!("  wield <item>                - hold/wield an item in your hand");
-                        println!("  read <object>               - read text on a note, sign, or mailbox");
+                        println!(
+                            "  read <object>               - read text on a note, sign, or mailbox"
+                        );
                         println!(
                             "  open/close <container|door|window> - open or close a container or portal"
                         );
@@ -403,15 +406,11 @@ async fn main() -> Result<()> {
                         println!(
                             "  @damage <creature> [amount] - wizard: apply damage to a creature"
                         );
-                        println!(
-                            "  @heal <creature> [amount]   - wizard: heal a creature"
-                        );
+                        println!("  @heal <creature> [amount]   - wizard: heal a creature");
                         println!(
                             "  @addbehavior <creature> <template> - wizard: attach behavior template"
                         );
-                        println!(
-                            "  @listbehaviors <creature>   - wizard: list creature behaviors"
-                        );
+                        println!("  @listbehaviors <creature>   - wizard: list creature behaviors");
                         println!(
                             "  @undelete <id>              - wizard: restore soft-deleted object"
                         );
@@ -491,7 +490,9 @@ async fn main() -> Result<()> {
                         .await
                         {
                             error!(error = %e, "look failed");
-                            println!("Something stirs in the void, but you cannot make sense of it.");
+                            println!(
+                                "Something stirs in the void, but you cannot make sense of it."
+                            );
                         }
                     }
                     "@look" => {
@@ -537,8 +538,7 @@ async fn main() -> Result<()> {
                     }
                     "@dump" => {
                         let target = parts.get(1).copied();
-                        match resolve_in_session(&mut session, &persistence, target).await
-                        {
+                        match resolve_in_session(&mut session, &persistence, target).await {
                             Ok(TargetResolution::Found(id)) => {
                                 if let Some(obj) = session.object(&id) {
                                     println!("{}", obj.dump());
@@ -554,10 +554,7 @@ async fn main() -> Result<()> {
                             Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
                             Ok(TargetResolution::NotFound) => {
                                 if parts.get(1).is_some() {
-                                    println!(
-                                        "{}",
-                                        narrate_target_not_found(parts.get(1).unwrap())
-                                    );
+                                    println!("{}", narrate_target_not_found(parts.get(1).unwrap()));
                                 } else {
                                     println!(
                                         "{}",
@@ -577,7 +574,7 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let target = parts[1..].join(" ");
-                        let mut ctx = session.inventory_context();
+                        let ctx = session.inventory_context();
                         match attack_creature(
                             ctx.player_id,
                             ctx.room_id,
@@ -593,9 +590,7 @@ async fn main() -> Result<()> {
                                 if let Some(loc) = outcome.respawn_location {
                                     session.set_current_location(loc);
                                 }
-                                if let Err(e) =
-                                    persist_session(&mut session, &persistence).await
-                                {
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after attack failed");
                                 }
                             }
@@ -606,7 +601,7 @@ async fn main() -> Result<()> {
                         let rest = parts[1..].join(" ");
                         match parse_vital_amount_args(&rest, DEFAULT_DAMAGE_AMOUNT) {
                             Ok(req) => {
-                                let mut ctx = session.inventory_context();
+                                let ctx = session.inventory_context();
                                 match damage_creature(
                                     ctx.player_id,
                                     ctx.room_id,
@@ -634,7 +629,7 @@ async fn main() -> Result<()> {
                         let rest = parts[1..].join(" ");
                         match parse_vital_amount_args(&rest, DEFAULT_HEAL_AMOUNT) {
                             Ok(req) => {
-                                let mut ctx = session.inventory_context();
+                                let ctx = session.inventory_context();
                                 match heal_creature(
                                     ctx.player_id,
                                     ctx.room_id,
@@ -871,8 +866,7 @@ async fn main() -> Result<()> {
                         match open_container(&mut ctx, &container_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after open failed");
                                 }
                             }
@@ -889,8 +883,7 @@ async fn main() -> Result<()> {
                         match close_container(&mut ctx, &container_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after close failed");
                                 }
                             }
@@ -919,8 +912,7 @@ async fn main() -> Result<()> {
                         match break_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after break failed");
                                 }
                             }
@@ -937,8 +929,7 @@ async fn main() -> Result<()> {
                         match lock_container(&mut ctx, &container_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after lock failed");
                                 }
                             }
@@ -1027,8 +1018,7 @@ async fn main() -> Result<()> {
                         match wield_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after wield failed");
                                 }
                             }
@@ -1118,8 +1108,7 @@ async fn main() -> Result<()> {
                         match wear_item(&mut ctx, &item_name) {
                             Ok(msg) => {
                                 println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after wear failed");
                                 }
                             }
@@ -1147,12 +1136,8 @@ async fn main() -> Result<()> {
                             .await
                         {
                             Ok(result) => {
-                                println!(
-                                    "{}",
-                                    narrate_dig(&result.new_place, &result.notes)
-                                );
-                                if let Err(e) = persist_session(&mut session, &persistence).await
-                                {
+                                println!("{}", narrate_dig(&result.new_place, &result.notes));
+                                if let Err(e) = persist_session(&mut session, &persistence).await {
                                     error!(error = %e, "persist after @dig failed");
                                 }
                             }
@@ -1178,7 +1163,10 @@ async fn main() -> Result<()> {
                             session.resolve_target(&link_cmd.target, ResolveScope::General);
 
                         match (from_resolution, target_resolution) {
-                            (TargetResolution::Found(from_id), TargetResolution::Found(target_id)) => {
+                            (
+                                TargetResolution::Found(from_id),
+                                TargetResolution::Found(target_id),
+                            ) => {
                                 match session.link_exit(
                                     &from_id,
                                     &link_cmd.direction,
@@ -1204,10 +1192,9 @@ async fn main() -> Result<()> {
                                     "Set a current location or specify @link <from> <dir> <target>."
                                 )
                             ),
-                            (_, TargetResolution::NotFound) => println!(
-                                "{}",
-                                narrate_target_not_found(&link_cmd.target)
-                            ),
+                            (_, TargetResolution::NotFound) => {
+                                println!("{}", narrate_target_not_found(&link_cmd.target))
+                            }
                         }
                     }
                     "@unlink" => {
@@ -1256,12 +1243,8 @@ async fn main() -> Result<()> {
                                 continue;
                             }
                         };
-                        match resolve_in_session(
-                            &mut session,
-                            &persistence,
-                            Some(&set_cmd.target),
-                        )
-                        .await
+                        match resolve_in_session(&mut session, &persistence, Some(&set_cmd.target))
+                            .await
                         {
                             Ok(TargetResolution::Found(id)) => {
                                 let mut obj = match session.object(&id).cloned() {
@@ -1288,10 +1271,7 @@ async fn main() -> Result<()> {
                                             error!(error = %e, "@set save failed");
                                             println!("The change fades before it can take hold.");
                                         } else {
-                                            println!(
-                                                "{}",
-                                                narrate_field_set(&obj, &set_cmd.key)
-                                            );
+                                            println!("{}", narrate_field_set(&obj, &set_cmd.key));
                                         }
                                         session.upsert_object(obj);
                                     }

@@ -11,12 +11,10 @@
 
 use std::collections::HashMap;
 
-use crate::creature::init_creature_vitality;
 use crate::creature::build_creature_behavior_entries;
 use crate::creature::creature_behaviors_to_property;
-use crate::mudl::{
-    AnatomyRegistry, BehaviorTemplateDef, MudlRoleProps, NpcDef, PlayerTemplate,
-};
+use crate::creature::init_creature_vitality;
+use crate::mudl::{AnatomyRegistry, BehaviorTemplateDef, MudlRoleProps, NpcDef, PlayerTemplate};
 use crate::object::{
     constrain_id_base, generate_object_id, id_base_from_display_name,
     roles::{ContainerSpec, KeySpec, StackableSpec, WearableSpec},
@@ -54,7 +52,9 @@ impl<P: Persistence> ObjectFactory<P> {
                 gender: "neutral".to_string(),
             });
         let slug = id_base_from_display_name(display_name);
-        let mut player = self.allocate_named("player", &slug, display_name, owner).await?;
+        let mut player = self
+            .allocate_named("player", &slug, display_name, owner)
+            .await?;
         player.init_creature_role(&template);
         if let Some(def) = anatomy.creature(&template.creature) {
             init_creature_vitality(&mut player, def);
@@ -104,11 +104,8 @@ impl<P: Persistence> ObjectFactory<P> {
         if let Some(loc) = location {
             npc.location = Some(loc);
         }
-        let behavior_entries = build_creature_behavior_entries(
-            &def.behaviors,
-            &def.use_behaviors,
-            behavior_templates,
-        );
+        let behavior_entries =
+            build_creature_behavior_entries(&def.behaviors, &def.use_behaviors, behavior_templates);
         if !behavior_entries.is_empty() {
             npc.add_property(creature_behaviors_to_property(&behavior_entries));
         }
@@ -118,7 +115,9 @@ impl<P: Persistence> ObjectFactory<P> {
 
     pub async fn create_item(&self, display_name: &str, owner: ObjectId) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut item = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         Self::fill_item_defaults(&mut item, true);
         self.commit(&item).await?;
         Ok(item)
@@ -158,7 +157,9 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut container = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut container = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         self.attach_prototype(&mut container, prototype).await?;
         container.apply_container_role(&spec);
         self.commit(&container).await?;
@@ -174,7 +175,9 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut key = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut key = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         self.attach_prototype(&mut key, prototype).await?;
         key.apply_key_role(&KeySpec::new(lock_id));
         Self::fill_item_defaults(&mut key, true);
@@ -191,7 +194,9 @@ impl<P: Persistence> ObjectFactory<P> {
         prototype: Option<ObjectId>,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut item = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         self.attach_prototype(&mut item, prototype).await?;
         item.apply_wearable_role(&spec);
         Self::fill_item_defaults(&mut item, false);
@@ -208,7 +213,9 @@ impl<P: Persistence> ObjectFactory<P> {
         count: u32,
     ) -> anyhow::Result<Object> {
         let slug = id_base_from_display_name(display_name);
-        let mut item = self.allocate_named("item", &slug, display_name, owner).await?;
+        let mut item = self
+            .allocate_named("item", &slug, display_name, owner)
+            .await?;
         self.attach_prototype(&mut item, prototype).await?;
         Self::fill_item_defaults(&mut item, true);
         item.apply_stackable_role(&StackableSpec {
@@ -353,6 +360,7 @@ impl<P: Persistence> ObjectFactory<P> {
     }
 
     /// Materialize an item from MUDL prototype/instance definitions.
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_from_mudl_spec(
         &self,
         base_name: &str,
@@ -488,7 +496,10 @@ mod tests {
         let factory = memory_factory().await;
         let owner = ObjectId::new("player:hero-001");
 
-        let mut proto = factory.create_item("Gold Coin", owner.clone()).await.unwrap();
+        let mut proto = factory
+            .create_item("Gold Coin", owner.clone())
+            .await
+            .unwrap();
         proto.set_property_numeric("weight", 0.25);
         factory.persistence().save_object(&proto).await.unwrap();
 
@@ -553,7 +564,7 @@ mod tests {
                     max_volume: Some(30),
                     wearable: false,
                     wear_slot: None,
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -570,12 +581,7 @@ mod tests {
         let owner = ObjectId::new("player:hero-001");
 
         let cloak = factory
-            .create_wearable(
-                "Cloak",
-                owner,
-                WearableSpec::new("back", 2.5, 3.0),
-                None,
-            )
+            .create_wearable("Cloak", owner, WearableSpec::new("back", 2.5, 3.0), None)
             .await
             .unwrap();
 
@@ -591,7 +597,10 @@ mod tests {
         let factory = memory_factory().await;
         let owner = ObjectId::new("player:hero-001");
 
-        let mut proto = factory.create_item("Robe Template", owner.clone()).await.unwrap();
+        let mut proto = factory
+            .create_item("Robe Template", owner.clone())
+            .await
+            .unwrap();
         proto.set_property_numeric("weight", 5.0);
         factory.persistence().save_object(&proto).await.unwrap();
 

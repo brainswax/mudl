@@ -167,13 +167,28 @@ mod tests {
         assert!(bases.contains(&"cottage-pantry"));
 
         let clearing = defs.iter().find(|d| d.base_name == "the-void").unwrap();
-        assert_eq!(clearing.exits.get("north").map(String::as_str), Some("forest-path"));
-        assert_eq!(clearing.exits.get("east").map(String::as_str), Some("cottage-rear"));
+        assert_eq!(
+            clearing.exits.get("north").map(String::as_str),
+            Some("forest-path")
+        );
+        assert_eq!(
+            clearing.exits.get("east").map(String::as_str),
+            Some("cottage-rear")
+        );
 
-        let front = defs.iter().find(|d| d.base_name == "cottage-front").unwrap();
-        assert_eq!(front.exits.get("in").map(String::as_str), Some("cottage-interior"));
+        let front = defs
+            .iter()
+            .find(|d| d.base_name == "cottage-front")
+            .unwrap();
+        assert_eq!(
+            front.exits.get("in").map(String::as_str),
+            Some("cottage-interior")
+        );
 
-        let bedroom = defs.iter().find(|d| d.base_name == "cottage-bedroom").unwrap();
+        let bedroom = defs
+            .iter()
+            .find(|d| d.base_name == "cottage-bedroom")
+            .unwrap();
         assert_eq!(bedroom.obj_type, "room");
         assert_eq!(bedroom.location.as_deref(), Some("cottage-interior"));
         assert_eq!(
@@ -181,7 +196,10 @@ mod tests {
             Some("cottage-interior")
         );
 
-        let interior = defs.iter().find(|d| d.base_name == "cottage-interior").unwrap();
+        let interior = defs
+            .iter()
+            .find(|d| d.base_name == "cottage-interior")
+            .unwrap();
         assert_eq!(
             interior.exits.get("west").map(String::as_str),
             Some("cottage-bedroom")
@@ -194,11 +212,16 @@ mod tests {
 
     #[test]
     fn parse_haunted_map_scatter_and_dead_ends() {
-        let content = include_str!("../../modules/default/worlds/default_world/expansions/haunted_forest.mudl");
+        let content = include_str!(
+            "../../modules/default/worlds/default_world/expansions/haunted_forest.mudl"
+        );
         let (defs, _) = parse_world_file(content);
         assert_eq!(defs.len(), 13);
 
-        let heart = defs.iter().find(|d| d.base_name == "haunted-heart").unwrap();
+        let heart = defs
+            .iter()
+            .find(|d| d.base_name == "haunted-heart")
+            .unwrap();
         assert_eq!(
             heart.scatter_to,
             vec![
@@ -209,7 +232,10 @@ mod tests {
         );
         assert_eq!(heart.scatter_direction.as_deref(), Some("out"));
 
-        let wither = defs.iter().find(|d| d.base_name == "haunted-wither").unwrap();
+        let wither = defs
+            .iter()
+            .find(|d| d.base_name == "haunted-wither")
+            .unwrap();
         assert_eq!(
             wither.exits.get("out").map(String::as_str),
             Some("haunted-entry")

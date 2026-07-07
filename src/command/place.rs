@@ -161,7 +161,7 @@ pub fn parse_link_command(input: &str) -> anyhow::Result<ParsedLinkCommand> {
     }
 
     let tokens: Vec<&str> = rest.split_whitespace().collect();
-    let reciprocal = !tokens.iter().any(|t| *t == "--one-way");
+    let reciprocal = !tokens.contains(&"--one-way");
     let tokens: Vec<&str> = tokens
         .into_iter()
         .filter(|t| *t != "--one-way" && *t != "--reciprocal")
@@ -188,8 +188,8 @@ pub fn parse_link_command(input: &str) -> anyhow::Result<ParsedLinkCommand> {
 
 /// Parse `@unlink <direction>` or `@unlink <from> <direction>`.
 pub fn parse_unlink_command(input: &str) -> anyhow::Result<ParsedUnlinkCommand> {
-    let rest = strip_verb(input, "unlink")
-        .ok_or_else(|| anyhow::anyhow!("Usage: @unlink <direction>"))?;
+    let rest =
+        strip_verb(input, "unlink").ok_or_else(|| anyhow::anyhow!("Usage: @unlink <direction>"))?;
     if rest.is_empty() {
         anyhow::bail!("Usage: @unlink <direction>");
     }

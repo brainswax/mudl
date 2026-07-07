@@ -41,15 +41,15 @@ impl BehaviorOutcome {
 }
 
 fn behavior_entry_map(entry: &CreatureBehaviorEntry) -> Value {
-    let mut map = HashMap::from([(
-        "type".to_string(),
-        Value::String(entry.entry_type.clone()),
-    )]);
+    let mut map = HashMap::from([("type".to_string(), Value::String(entry.entry_type.clone()))]);
     if let Some(name) = &entry.template_name {
         map.insert("template".to_string(), Value::String(name.clone()));
     }
     if let Some(react) = entry.react {
-        map.insert("react".to_string(), Value::String(react.as_str().to_string()));
+        map.insert(
+            "react".to_string(),
+            Value::String(react.as_str().to_string()),
+        );
     }
     if let Some(event) = &entry.event {
         map.insert("event".to_string(), Value::String(event.clone()));
@@ -358,13 +358,11 @@ fn legacy_npc_behaviors(obj: &Object) -> Vec<CreatureBehaviorEntry> {
 }
 
 /// Attach a behavior template to a creature at runtime (builder command).
-pub fn add_behavior_template(
-    creature: &mut Object,
-    template: &BehaviorTemplateDef,
-) -> bool {
+pub fn add_behavior_template(creature: &mut Object, template: &BehaviorTemplateDef) -> bool {
     let mut entries = read_creature_behaviors(creature);
     if entries.iter().any(|e| {
-        e.entry_type == "template" && e.template_name.as_deref() == Some(template.base_name.as_str())
+        e.entry_type == "template"
+            && e.template_name.as_deref() == Some(template.base_name.as_str())
     }) {
         return false;
     }
@@ -390,10 +388,7 @@ pub fn format_creature_behavior_list(creature: &Object) -> String {
     for (idx, entry) in entries.iter().enumerate() {
         match entry.entry_type.as_str() {
             "template" => {
-                let react = entry
-                    .react
-                    .map(|r| r.as_str())
-                    .unwrap_or("ignore");
+                let react = entry.react.map(|r| r.as_str()).unwrap_or("ignore");
                 lines.push(format!(
                     "  {}. template {} (react={react})",
                     idx + 1,
@@ -541,15 +536,12 @@ pub fn run_creature_behaviors(
             }
         }
 
-        let reacts: Vec<CreatureReact> = entries
-            .iter()
-            .filter_map(|e| e.react)
-            .collect();
+        let reacts: Vec<CreatureReact> = entries.iter().filter_map(|e| e.react).collect();
         if reacts.is_empty() {
             continue;
         }
 
-        if reacts.iter().any(|r| *r == CreatureReact::Flee) {
+        if reacts.contains(&CreatureReact::Flee) {
             outcome.push_line(format!(
                 "{} {}",
                 npc_snapshot.name,
@@ -563,7 +555,7 @@ pub fn run_creature_behaviors(
             continue;
         }
 
-        if reacts.iter().any(|r| *r == CreatureReact::Attack) {
+        if reacts.contains(&CreatureReact::Attack) {
             let damage = entries
                 .iter()
                 .filter_map(|e| e.attack_damage)
@@ -580,7 +572,7 @@ pub fn run_creature_behaviors(
                     ));
                 }
             }
-        } else if reacts.iter().any(|r| *r == CreatureReact::Warn) {
+        } else if reacts.contains(&CreatureReact::Warn) {
             let already_spoke = entries.iter().any(|e| {
                 e.react == Some(CreatureReact::Warn)
                     && matches!(e.action.as_deref(), Some("say" | "emote" | "say_to"))
@@ -591,14 +583,14 @@ pub fn run_creature_behaviors(
             }
         }
 
-        if reacts.iter().any(|r| *r == CreatureReact::Wander) {
+        if reacts.contains(&CreatureReact::Wander) {
             let interval = entries
                 .iter()
                 .filter_map(|e| e.wander_interval)
                 .min()
                 .unwrap_or(3)
                 .max(1);
-            if tick % u64::from(interval) == 0 {
+            if tick.is_multiple_of(u64::from(interval)) {
                 let wander_text = entries
                     .iter()
                     .find(|e| e.react == Some(CreatureReact::Wander))
@@ -731,7 +723,7 @@ mod tests {
     fn aggressive_behavior_damages_player() {
         let room = ObjectId::new("area:haunted-moon-001");
         let player_id = ObjectId::new("player:hero-001");
-        let mut player = npc("player:hero-001", "Hero", &room);
+        let player = npc("player:hero-001", "Hero", &room);
 
         let templates = HashMap::from([(
             "aggressive".to_string(),
@@ -746,18 +738,11 @@ mod tests {
         let mut lurker = npc("npc:lurker-001", "Lurker", &room);
         lurker.add_property(creature_behaviors_to_property(&entries));
 
-        let mut objects =
-            HashMap::from([(player.id.clone(), player), (lurker.id.clone(), lurker)]);
+        let mut objects = HashMap::from([(player.id.clone(), player), (lurker.id.clone(), lurker)]);
 
         let outcome = run_creature_behaviors("on_enter", &room, &player_id, &mut objects);
-        assert!(outcome
-            .lines
-            .iter()
-            .any(|l| l.contains("attacks you")));
-        assert_eq!(
-            creature_health(objects.get(&player_id).unwrap()),
-            85
-        );
+        assert!(outcome.lines.iter().any(|l| l.contains("attacks you")));
+        assert_eq!(creature_health(objects.get(&player_id).unwrap()), 85);
     }
 
     #[test]

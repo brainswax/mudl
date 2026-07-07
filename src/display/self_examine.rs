@@ -92,7 +92,10 @@ pub fn format_examine_self(
     let Some(plan) = anatomy.body_plan(&creature) else {
         let identity = format_identity_sentence(&creature, &[], &[]);
         let health = crate::creature::format_health_clause(player, Some(anatomy));
-        return format!("{identity} {health} {}", format_weight_clause(player, objects));
+        return format!(
+            "{identity} {health} {}",
+            format_weight_clause(player, objects)
+        );
     };
 
     let (holding, wearing) = collect_gear_lists(player, objects, plan);

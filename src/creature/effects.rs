@@ -125,7 +125,9 @@ pub fn effect_encumbrance_factor(creature: &Object) -> f64 {
 
 /// Bonus max carry weight from cached effect modifiers.
 pub fn effect_max_weight_bonus(creature: &Object) -> i64 {
-    creature.get_int_property("effect_mod_max_weight").unwrap_or(0)
+    creature
+        .get_int_property("effect_mod_max_weight")
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -188,7 +190,10 @@ mod tests {
         apply_effect(&mut creature, "weary", &anatomy);
         assert_eq!(active_effects(&creature), vec!["weary"]);
         assert_eq!(effect_encumbrance_factor(&creature), 1.1);
-        assert_eq!(creature.get_int_map("stat_mods").get("dexterity").copied(), Some(-2));
+        assert_eq!(
+            creature.get_int_map("stat_mods").get("dexterity").copied(),
+            Some(-2)
+        );
         remove_effect(&mut creature, "weary", &anatomy);
         assert!(active_effects(&creature).is_empty());
     }

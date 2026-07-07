@@ -12,8 +12,8 @@ use crate::display::{resolve_object, ResolveScope, TargetResolution};
 use crate::loot::run_on_kill_loot_spawners;
 use crate::mudl::{AnatomyRegistry, CreatureReact};
 use crate::object::{
-    generate_object_id, id_base_from_display_name, ContainerSpec, Object, ObjectId, PermissionFlags,
-    Property, Value,
+    generate_object_id, id_base_from_display_name, ContainerSpec, Object, ObjectId,
+    PermissionFlags, Property, Value,
 };
 
 /// Default damage when a wizard omits the amount.
@@ -81,7 +81,10 @@ pub struct VitalAmountRequest {
 }
 
 /// Parse `damage <target...> [amount]` / `heal <target...> [amount]`.
-pub fn parse_vital_amount_args(rest: &str, default_amount: i64) -> Result<VitalAmountRequest, CreatureCombatError> {
+pub fn parse_vital_amount_args(
+    rest: &str,
+    default_amount: i64,
+) -> Result<VitalAmountRequest, CreatureCombatError> {
     let tokens: Vec<&str> = rest.split_whitespace().collect();
     if tokens.is_empty() {
         return Err(CreatureCombatError::InvalidAmount(
@@ -175,10 +178,7 @@ pub fn compute_combat_damage(
     (attack_power - defense).max(1)
 }
 
-fn wielded_weapon_label(
-    attacker: &Object,
-    objects: &HashMap<ObjectId, Object>,
-) -> Option<String> {
+fn wielded_weapon_label(attacker: &Object, objects: &HashMap<ObjectId, Object>) -> Option<String> {
     for (slot, item_id) in attacker.body_slots() {
         if !slot.contains("hand") {
             continue;
@@ -405,14 +405,10 @@ fn format_attack_line(
                 "You strike {target} with your {weapon} for {damage} damage ({after}/{max} health)."
             );
         }
-        return format!(
-            "You strike {target} for {damage} damage ({after}/{max} health)."
-        );
+        return format!("You strike {target} for {damage} damage ({after}/{max} health).");
     }
     let attacker = attacker_name.to_lowercase();
-    format!(
-        "{attacker} strikes you for {damage} damage ({after}/{max} health remaining)."
-    )
+    format!("{attacker} strikes you for {damage} damage ({after}/{max} health remaining).")
 }
 
 fn format_retaliation_line(attacker_name: &str, damage: i64, after: i64, max: i64) -> String {
@@ -513,7 +509,9 @@ pub fn attack_creature(
             let after = apply_damage(player, retaliate);
             outcome.mark_dirty(actor_id);
             mark_dirty(&mut dirty, actor_id);
-            outcome.push_line(format_retaliation_line(&npc.name, retaliate, after, player_max));
+            outcome.push_line(format_retaliation_line(
+                &npc.name, retaliate, after, player_max,
+            ));
             if after == 0 {
                 handle_player_death(
                     actor_id,
@@ -648,7 +646,7 @@ pub fn format_damage_message(
 pub fn format_heal_message(
     name: &str,
     addressing_self: bool,
-    before: i64,
+    _before: i64,
     after: i64,
     max: i64,
 ) -> String {
@@ -726,7 +724,7 @@ mod tests {
     #[test]
     fn compute_combat_damage_uses_stats_and_equipment() {
         let anatomy = AnatomyRegistry::default();
-        let room = ObjectId::new("area:room-001");
+        let _room = ObjectId::new("area:room-001");
         let mut attacker = creature("player:hero-001", "Hero");
         let defender = creature("npc:watcher-001", "Path Watcher");
         let mut blade = Object {
@@ -809,7 +807,7 @@ mod tests {
         player.location = Some(room.clone());
         let mut watcher = creature("npc:watcher-001", "Path Watcher");
         watcher.set_property_int("health", 5);
-        let mut blade = Object {
+        let blade = Object {
             id: ObjectId::new("item:blade-001"),
             name: "Rusty Knife".to_string(),
             aliases: Vec::new(),
@@ -849,8 +847,15 @@ mod tests {
             .find(|o| o.get_bool_property("is_corpse").unwrap_or(false))
             .expect("corpse");
         assert_eq!(corpse.location.as_ref(), Some(&room));
-        assert_eq!(objects.get(&blade_id).unwrap().location.as_ref(), Some(&corpse.id));
-        assert!(objects.get(&watcher.id).unwrap().carried_body_items().is_empty());
+        assert_eq!(
+            objects.get(&blade_id).unwrap().location.as_ref(),
+            Some(&corpse.id)
+        );
+        assert!(objects
+            .get(&watcher.id)
+            .unwrap()
+            .carried_body_items()
+            .is_empty());
     }
 
     #[test]
@@ -862,7 +867,7 @@ mod tests {
         player.location = Some(room.clone());
         player.set_property_object_ref("home_location", home.clone());
         player.set_property_int("health", 8);
-        let mut vest = Object {
+        let vest = Object {
             id: ObjectId::new("item:vest-001"),
             name: "Leather Vest".to_string(),
             aliases: Vec::new(),
@@ -916,14 +921,17 @@ mod tests {
             .values()
             .find(|o| o.get_bool_property("is_corpse").unwrap_or(false))
             .expect("player corpse");
-        assert_eq!(objects.get(&vest_id).unwrap().location.as_ref(), Some(&corpse.id));
+        assert_eq!(
+            objects.get(&vest_id).unwrap().location.as_ref(),
+            Some(&corpse.id)
+        );
     }
 
     #[test]
     fn damage_and_heal_creature_update_health() {
         let actor = ObjectId::new("player:admin-001");
         let room = ObjectId::new("area:room-001");
-        let mut watcher = creature("npc:watcher-001", "Path Watcher");
+        let watcher = creature("npc:watcher-001", "Path Watcher");
         let mut objects = HashMap::from([(watcher.id.clone(), watcher.clone())]);
         let anatomy = AnatomyRegistry::default();
 

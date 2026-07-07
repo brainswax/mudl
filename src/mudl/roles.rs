@@ -94,9 +94,7 @@ impl MudlRoleProps {
                 "door_destination" | "portal_destination" | "destination" => {
                     props.door_destination = Some(value.to_string())
                 }
-                "portal_passable" | "passable" => {
-                    props.portal_passable = Some(*value == "true")
-                }
+                "portal_passable" | "passable" => props.portal_passable = Some(*value == "true"),
                 "portal_transparent" | "transparent" => {
                     props.portal_transparent = Some(*value == "true")
                 }
@@ -375,10 +373,7 @@ mod tests {
 
     #[test]
     fn mudl_role_props_parse_is_open() {
-        let props = MudlRoleProps::from_pairs(&[
-            ("is_container", "true"),
-            ("is_open", "false"),
-        ]);
+        let props = MudlRoleProps::from_pairs(&[("is_container", "true"), ("is_open", "false")]);
         let mut obj = bare("item:chest-001");
         props.apply_to(&mut obj);
         assert!(!obj.container_is_open());
@@ -400,10 +395,8 @@ mod tests {
 
     #[test]
     fn mudl_role_props_apply_readable() {
-        let props = MudlRoleProps::from_pairs(&[
-            ("readable", "true"),
-            ("read_text", "Mind the dark."),
-        ]);
+        let props =
+            MudlRoleProps::from_pairs(&[("readable", "true"), ("read_text", "Mind the dark.")]);
         let mut obj = bare("item:note-001");
         props.apply_to(&mut obj);
         assert!(obj.is_readable());
@@ -412,16 +405,11 @@ mod tests {
 
     #[test]
     fn mudl_role_props_apply_allowed_types_on_container() {
-        let props = MudlRoleProps::from_pairs(&[
-            ("is_container", "true"),
-            ("allowed_types", "key"),
-        ]);
+        let props =
+            MudlRoleProps::from_pairs(&[("is_container", "true"), ("allowed_types", "key")]);
         let mut obj = bare("item:ring-001");
         props.apply_to(&mut obj);
-        assert_eq!(
-            obj.container_allowed_types(),
-            Some(vec!["key".to_string()])
-        );
+        assert_eq!(obj.container_allowed_types(), Some(vec!["key".to_string()]));
     }
 
     #[test]

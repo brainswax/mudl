@@ -3,20 +3,20 @@
 use std::collections::HashMap;
 
 use crate::mudl::{AnatomyRegistry, BodyPlan};
+use crate::object::LocationRef;
+use crate::object::{
+    is_unlimited_weight, player_carried_weight, player_effective_max_weight, player_weight_bearer,
+    transfer_weight, would_exceed_player_max_weight, Object, ObjectId,
+};
+use crate::world::dirty::DirtyTracker;
 use crate::world::possession::{
     clear_creature_slots_for_item, grasp_slot_available, is_in_player_possession,
     place_in_grasp_slots, prune_creature_body_slots, PossessionError,
 };
-use crate::object::LocationRef;
-use crate::object::{
-    is_unlimited_weight, player_carried_weight, player_effective_max_weight, transfer_weight,
-    player_weight_bearer, would_exceed_player_max_weight, Object, ObjectId,
-};
 use crate::world::stack_transfer::{
-    compute_stack_transfer_plan, cap_stack_transfer_plan_to_weight, fit_failure_reason,
+    cap_stack_transfer_plan_to_weight, compute_stack_transfer_plan, fit_failure_reason,
     split_stack_id, StackTransferPlan,
 };
-use crate::world::dirty::DirtyTracker;
 
 /// Errors returned by move operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +37,10 @@ pub enum MoveError {
     ContainerClosed(String),
     ContainerLocked(String),
     /// Item type is not permitted in a type-restricted container.
-    TypeNotAllowed { container: String, allowed: Vec<String> },
+    TypeNotAllowed {
+        container: String,
+        allowed: Vec<String>,
+    },
     NotWearable,
     InvalidTarget(String),
     NoBodyPlan,
@@ -239,10 +242,7 @@ fn max_carry_units_for_weight(
     (room / unit_w).floor().max(0.0) as u32
 }
 
-fn inventory_transfer_failure(
-    item: &Object,
-    weight_cap: u32,
-) -> MoveError {
+fn inventory_transfer_failure(item: &Object, weight_cap: u32) -> MoveError {
     if weight_cap == 0 && item.unit_weight() > 0.0 {
         MoveError::TooHeavy(item.name.clone())
     } else {
@@ -268,9 +268,7 @@ fn merge_stack_units(
         1
     };
     if units == 0 || units > stack_count {
-        return Err(MoveError::InvalidTarget(
-            "Invalid merge quantity.".into(),
-        ));
+        return Err(MoveError::InvalidTarget("Invalid merge quantity.".into()));
     }
 
     let mut target = ctx
@@ -368,8 +366,7 @@ fn place_new_stack(
 
     match dst {
         LocationRef::Container(container_id, _) => {
-            let placed_id =
-                place_new_stack_in_container(ctx, source_id, src, container_id, units)?;
+            let placed_id = place_new_stack_in_container(ctx, source_id, src, container_id, units)?;
             Ok(if current_primary == source_id {
                 placed_id
             } else {
@@ -424,14 +421,7 @@ fn execute_stack_transfer_plan(
     }
 
     if plan.new_stack_units > 0 {
-        primary_id = place_new_stack(
-            ctx,
-            source_id,
-            src,
-            dst,
-            plan.new_stack_units,
-            &primary_id,
-        )?;
+        primary_id = place_new_stack(ctx, source_id, src, dst, plan.new_stack_units, &primary_id)?;
     }
 
     Ok((total, primary_id))
@@ -507,7 +497,11 @@ fn partial_stack_transfer(
             placed.location = Some(holder.clone());
             placed.set_carried_slot(Some(slot));
             ctx.objects.insert(new_id.clone(), placed);
-            let mut holder_obj = ctx.objects.get(holder).ok_or(MoveError::NotCarried)?.clone();
+            let mut holder_obj = ctx
+                .objects
+                .get(holder)
+                .ok_or(MoveError::NotCarried)?
+                .clone();
             holder_obj.set_body_slot(slot, Some(new_id.clone()));
             ctx.objects.insert(holder.clone(), holder_obj);
         }
@@ -565,11 +559,7 @@ fn remove_from_source(
                 .get(holder)
                 .ok_or(MoveError::NotCarried)?
                 .clone();
-            if !holder_obj
-                .body_slots()
-                .values()
-                .any(|id| id == obj_id)
-            {
+            if !holder_obj.body_slots().values().any(|id| id == obj_id) {
                 return Err(MoveError::NotAtSource);
             }
             clear_creature_slots_for_item(holder, obj_id, ctx.objects);
@@ -706,10 +696,11 @@ fn verify_at_source(
             Ok(())
         }
         // Two-handed items may appear in multiple grasp slots; any slot on the holder counts.
-        (
-            LocationRef::BodySlot(expected_holder, _),
-            LocationRef::BodySlot(actual_holder, _),
-        ) if expected_holder == actual_holder => Ok(()),
+        (LocationRef::BodySlot(expected_holder, _), LocationRef::BodySlot(actual_holder, _))
+            if expected_holder == actual_holder =>
+        {
+            Ok(())
+        }
         (LocationRef::Container(expected, _), LocationRef::Container(actual, _))
             if expected == actual =>
         {
@@ -854,10 +845,8 @@ pub fn move_object(
         }
     }
     for obj in ctx.objects.values() {
-        if obj.location.as_ref() == dst.holder_id() {
-            if !touched.contains(&obj.id) {
-                touched.push(obj.id.clone());
-            }
+        if obj.location.as_ref() == dst.holder_id() && !touched.contains(&obj.id) {
+            touched.push(obj.id.clone());
         }
     }
 
@@ -870,11 +859,7 @@ pub fn move_object(
 
     let creatures_to_prune: Vec<ObjectId> = touched
         .iter()
-        .filter(|id| {
-            ctx.objects
-                .get(*id)
-                .is_some_and(|o| o.has_creature_role())
-        })
+        .filter(|id| ctx.objects.get(*id).is_some_and(|o| o.has_creature_role()))
         .cloned()
         .collect();
     for creature_id in creatures_to_prune {
@@ -1041,7 +1026,7 @@ mod tests {
                     max_volume: Some(20),
                     wearable: true,
                     wear_slot: Some("torso".to_string()),
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )
@@ -1370,7 +1355,7 @@ mod tests {
 
         let result = move_to_room(&mut ctx, &held_id, &room_id, None).unwrap();
         assert_eq!(result.units_transferred, Some(7));
-        assert!(objects.get(&held_id).is_none());
+        assert!(!objects.contains_key(&held_id));
 
         let merged = objects.get(&ObjectId::new("item:bars-ground")).unwrap();
         assert_eq!(merged.stack_count(), 12);
@@ -1415,7 +1400,10 @@ mod tests {
         let player = objects.get(&player_id).unwrap();
         assert!(player.body_slot_item("left_hand").is_none());
         assert!(player.body_slot_item("right_hand").is_none());
-        assert_eq!(objects.get(&sword_id).unwrap().location.as_ref(), Some(&room_id));
+        assert_eq!(
+            objects.get(&sword_id).unwrap().location.as_ref(),
+            Some(&room_id)
+        );
     }
 
     #[tokio::test]
@@ -1434,7 +1422,7 @@ mod tests {
                     max_volume: None,
                     wearable: false,
                     wear_slot: None,
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )

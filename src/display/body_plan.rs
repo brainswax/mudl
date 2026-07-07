@@ -21,10 +21,7 @@ pub fn format_available_slots(plan: &BodyPlan) -> String {
 pub fn format_body_detail_player(plan: &BodyPlan, addressing_self: bool) -> String {
     let slots = format_available_slots(plan);
     if addressing_self {
-        format!(
-            "You are {}. Available slots: {}.",
-            plan.name, slots
-        )
+        format!("You are {}. Available slots: {}.", plan.name, slots)
     } else {
         format!(
             "{} anatomy. Available slots: {}.",
@@ -89,10 +86,7 @@ pub fn format_anatomy_section(
                 .unwrap_or_else(|| "empty".to_string());
             format!(
                 "{} ({}, capacity {}): {}",
-                slot.name,
-                type_label,
-                slot.capacity,
-                occupant
+                slot.name, type_label, slot.capacity, occupant
             )
         })
         .collect()
@@ -142,10 +136,7 @@ pub fn format_body_plan_examine_builder(plan: &BodyPlan) -> String {
 }
 
 /// Resolve a creature name against loaded anatomy (for `examine human`).
-pub fn creature_definition<'a>(
-    name: &str,
-    anatomy: &'a AnatomyRegistry,
-) -> Option<&'a BodyPlan> {
+pub fn creature_definition<'a>(name: &str, anatomy: &'a AnatomyRegistry) -> Option<&'a BodyPlan> {
     anatomy.body_plan(&name.to_lowercase())
 }
 

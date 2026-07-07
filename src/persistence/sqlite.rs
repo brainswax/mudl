@@ -331,8 +331,15 @@ mod tests {
             Some(&bars_id)
         );
 
-        let reloaded_backpack = persistence.load_object(&backpack_id).await.unwrap().unwrap();
-        assert_eq!(reloaded_backpack.container_contents(), vec![coins_id.clone()]);
+        let reloaded_backpack = persistence
+            .load_object(&backpack_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reloaded_backpack.container_contents(),
+            vec![coins_id.clone()]
+        );
 
         let reloaded_coins = persistence.load_object(&coins_id).await.unwrap().unwrap();
         assert_eq!(reloaded_coins.stack_count(), 20);
@@ -397,7 +404,8 @@ mod tests {
                 .get(id)
                 .unwrap_or_else(|| panic!("object {} missing after reload", id.as_str()));
             assert_eq!(
-                original, reloaded,
+                original,
+                reloaded,
                 "object {} differs after persistence roundtrip",
                 id.as_str()
             );
@@ -511,13 +519,7 @@ mod tests {
         let player_after = before.get(&owner).unwrap();
         assert_eq!(
             player_after.body_slot_item("torso").as_ref(),
-            Some(
-                &before
-                    .values()
-                    .find(|o| o.name == "backpack")
-                    .unwrap()
-                    .id
-            )
+            Some(&before.values().find(|o| o.name == "backpack").unwrap().id)
         );
         assert!(
             player_after.body_slot_item("left_hand").is_some()
@@ -531,22 +533,31 @@ mod tests {
         assert_eq!(ground_bars.len(), 2);
         let ground_counts: Vec<u32> = ground_bars.iter().map(|o| o.stack_count()).collect();
         assert!(ground_counts.contains(&3), "split ground pile preserved");
-        assert!(ground_counts.contains(&10), "main pile restored after take/drop cycle");
+        assert!(
+            ground_counts.contains(&10),
+            "main pile restored after take/drop cycle"
+        );
         let total_on_ground: u32 = ground_counts.iter().sum();
         assert_eq!(total_on_ground, 13);
 
-        let greatsword_id = before.values().find(|o| o.name == "Greatsword").unwrap().id.clone();
+        let greatsword_id = before
+            .values()
+            .find(|o| o.name == "Greatsword")
+            .unwrap()
+            .id
+            .clone();
         assert!(
             before.get(&greatsword_id).unwrap().carried_slot().is_some(),
             "wielded item should record carried_slot"
         );
 
-        let backpack_id = before.values().find(|o| o.name == "backpack").unwrap().id.clone();
-        let stored_coins_id = before
-            .get(&backpack_id)
+        let backpack_id = before
+            .values()
+            .find(|o| o.name == "backpack")
             .unwrap()
-            .container_contents()[0]
+            .id
             .clone();
+        let stored_coins_id = before.get(&backpack_id).unwrap().container_contents()[0].clone();
         assert_eq!(before.get(&stored_coins_id).unwrap().stack_count(), 5);
 
         persist_all(&persistence, &before).await.unwrap();

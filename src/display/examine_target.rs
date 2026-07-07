@@ -110,9 +110,7 @@ pub fn try_body_plan_name(
     if needle == "self" || needle == "me" || needle == "here" {
         return None;
     }
-    if creature_definition(&needle, anatomy).is_none() {
-        return None;
-    }
+    creature_definition(&needle, anatomy)?;
     match resolve_object(
         name,
         observer,
@@ -161,11 +159,12 @@ pub fn resolve_examine_request(
             }
         }
         ExamineRequest::Target(ExamineTarget::BodyOf(name)) => {
-            let lookup_name = if name.eq_ignore_ascii_case("self") || name.eq_ignore_ascii_case("me") {
-                "self"
-            } else {
-                name.as_str()
-            };
+            let lookup_name =
+                if name.eq_ignore_ascii_case("self") || name.eq_ignore_ascii_case("me") {
+                    "self"
+                } else {
+                    name.as_str()
+                };
             let object_id = match resolve_object(
                 lookup_name,
                 observer,
@@ -178,21 +177,19 @@ pub fn resolve_examine_request(
                 TargetResolution::NotFound => return Err(ExamineError::NotFound),
             };
             let obj = objects.get(&object_id).ok_or(ExamineError::NotFound)?;
-            let plan_name = obj
-                .creature_name()
-                .unwrap_or_else(|| name.to_lowercase());
+            let plan_name = obj.creature_name().unwrap_or_else(|| name.to_lowercase());
             Ok(ExamineResolution::BodyOf {
                 object_id,
                 plan_name,
             })
         }
         ExamineRequest::Target(ExamineTarget::PrototypeOf(name)) => {
-            let lookup_name = if name.eq_ignore_ascii_case("self") || name.eq_ignore_ascii_case("me")
-            {
-                "self"
-            } else {
-                name.as_str()
-            };
+            let lookup_name =
+                if name.eq_ignore_ascii_case("self") || name.eq_ignore_ascii_case("me") {
+                    "self"
+                } else {
+                    name.as_str()
+                };
             let instance_id = match resolve_object(
                 lookup_name,
                 observer,
@@ -241,9 +238,7 @@ pub fn format_examine_output(
             let instance = ctx.objects.get(instance_id)?;
             let prototype = ctx.objects.get(prototype_id)?;
             Some(match ctx.mode {
-                DisplayMode::Builder => {
-                    format_prototype_examine_builder(instance, prototype, ctx)
-                }
+                DisplayMode::Builder => format_prototype_examine_builder(instance, prototype, ctx),
                 _ => format_prototype_examine_player(instance, prototype, ctx),
             })
         }
@@ -254,7 +249,10 @@ pub fn format_examine_output(
                 _ => format_body_plan_examine_player(plan, None),
             })
         }
-        ExamineResolution::BodyOf { object_id, plan_name } => {
+        ExamineResolution::BodyOf {
+            object_id,
+            plan_name,
+        } => {
             let plan = ctx.anatomy.body_plan(plan_name)?;
             let addressing_self = *object_id == ctx.observer;
             Some(match ctx.mode {
@@ -273,7 +271,10 @@ pub fn format_no_parent_message(instance: &Object) -> String {
             instance.name
         )
     } else {
-        format!("The {} has no parent prototype.", instance.name.to_lowercase())
+        format!(
+            "The {} has no parent prototype.",
+            instance.name.to_lowercase()
+        )
     }
 }
 
@@ -337,14 +338,8 @@ mod tests {
 
         let objects = HashMap::from([(observer.clone(), player)]);
         let request = parse_examine_request(&["self", "body"]);
-        let resolution = resolve_examine_request(
-            &request,
-            &anatomy,
-            &observer,
-            None,
-            &objects,
-        )
-        .unwrap();
+        let resolution =
+            resolve_examine_request(&request, &anatomy, &observer, None, &objects).unwrap();
         assert_eq!(
             resolution,
             ExamineResolution::BodyOf {
@@ -380,14 +375,8 @@ mod tests {
         let observer = ObjectId::new("player:admin-001");
         let objects = HashMap::new();
         let request = parse_examine_request(&["human"]);
-        let resolution = resolve_examine_request(
-            &request,
-            &anatomy,
-            &observer,
-            None,
-            &objects,
-        )
-        .unwrap();
+        let resolution =
+            resolve_examine_request(&request, &anatomy, &observer, None, &objects).unwrap();
         assert_eq!(resolution, ExamineResolution::BodyPlan("human".into()));
     }
 
@@ -476,14 +465,8 @@ mod tests {
 
         let objects = HashMap::from([(observer.clone(), player)]);
         let request = parse_examine_request(&["#parent"]);
-        let resolution = resolve_examine_request(
-            &request,
-            &anatomy,
-            &observer,
-            None,
-            &objects,
-        )
-        .unwrap();
+        let resolution =
+            resolve_examine_request(&request, &anatomy, &observer, None, &objects).unwrap();
         assert_eq!(resolution, ExamineResolution::BodyPlan("human".into()));
     }
 
@@ -531,10 +514,7 @@ mod tests {
             deleted_at: None,
         };
 
-        let objects = HashMap::from([
-            (proto_id, proto),
-            (coin_id.clone(), coin.clone()),
-        ]);
+        let objects = HashMap::from([(proto_id, proto), (coin_id.clone(), coin.clone())]);
         let ctx = DisplayContext::new(observer, DisplayMode::Player).with_objects(objects);
         let output = format_examine_output(
             &ExamineResolution::Prototype {

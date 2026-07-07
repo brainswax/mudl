@@ -15,6 +15,11 @@ pub use behavior::{
     read_creature_behaviors, resolve_behavior_templates, run_creature_behaviors,
     run_on_enter_creature_behaviors, BehaviorOutcome, CreatureBehaviorEntry,
 };
+pub use combat::{
+    attack_creature, compute_combat_damage, damage_creature, heal_creature,
+    parse_vital_amount_args, AttackOutcome, CreatureCombatError, VitalAmountRequest,
+    DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
+};
 pub use effects::{
     active_effects, apply_effect, collect_active_effect_modifiers, effect_encumbrance_factor,
     effect_max_weight_bonus, refresh_effect_derived_properties, remove_effect, EffectModifiers,
@@ -27,13 +32,8 @@ pub use equipment::{
 pub use spawner::{
     apply_spawner_def, count_active_spawns, despawn_creatures_from_spawner,
     destroy_spawners_for_target, is_spawner, is_spawner_infrastructure, pick_weighted_entry,
-    run_on_enter_spawners, spawn_creature, spawner_entries, spawner_room_id, spawners_for_target,
-    spawners_in_room, spawn_templates_to_property, SpawnResult,
-};
-pub use combat::{
-    attack_creature, compute_combat_damage, damage_creature, heal_creature, parse_vital_amount_args,
-    AttackOutcome, CreatureCombatError, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
-    VitalAmountRequest,
+    run_on_enter_spawners, spawn_creature, spawn_templates_to_property, spawner_entries,
+    spawner_room_id, spawners_for_target, spawners_in_room, SpawnResult,
 };
 pub use vitality::{
     apply_damage, creature_base_max_health, creature_def_for, creature_health,

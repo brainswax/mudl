@@ -18,10 +18,10 @@ pub use place::{
 
 use std::collections::HashMap;
 
+use crate::display::{resolve_object, ResolveScope, TargetResolution};
 use crate::inventory::{take_item, InventoryContext, InventoryError};
 use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse, MudlRoleProps};
 use crate::object::{ContainerSpec, Object, ObjectFactory, ObjectId, WearableSpec};
-use crate::display::{resolve_object, ResolveScope, TargetResolution};
 use crate::persistence::Persistence;
 use crate::world::{
     bootstrap_world, bundle_module, persist_all, persist_dirty, DirtyTracker, ModuleManifest,
@@ -309,9 +309,7 @@ pub async fn create_at_location_with_options<P: Persistence>(
                 .lock_id
                 .clone()
                 .or_else(|| options.mudl_props.lock_id.clone())
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Usage: @create key <name> lock_id=<lock>")
-                })?;
+                .ok_or_else(|| anyhow::anyhow!("Usage: @create key <name> lock_id=<lock>"))?;
             factory
                 .create_key(
                     display_name,
@@ -430,7 +428,10 @@ pub fn resolve_container_target(
         objects,
         ResolveScope::PossessionOrRoom,
     ) {
-        TargetResolution::Found(id) => objects.get(&id).filter(|o| o.is_container()).map(|o| o.id.clone()),
+        TargetResolution::Found(id) => objects
+            .get(&id)
+            .filter(|o| o.is_container())
+            .map(|o| o.id.clone()),
         _ => None,
     }
 }
@@ -896,10 +897,9 @@ mod tests {
 
     #[test]
     fn parse_create_command_parses_weight_and_volume() {
-        let parsed = parse_create_command(
-            "create container backpack max_weight=100 weight=10 capacity=20",
-        )
-        .unwrap();
+        let parsed =
+            parse_create_command("create container backpack max_weight=100 weight=10 capacity=20")
+                .unwrap();
         assert_eq!(parsed.type_name, "container");
         assert_eq!(parsed.display_name, "backpack");
         assert_eq!(parsed.options.capacity, Some(20));
@@ -949,8 +949,7 @@ mod tests {
 
         let mut objects = HashMap::new();
         objects.insert(coins.id.clone(), coins.clone());
-        let builder_ctx =
-            DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
+        let builder_ctx = DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let examine_out = coins.describe_detailed(&builder_ctx);
         assert!(examine_out.contains("weight: 0.1"));
         assert!(examine_out.contains("weight: 2.1"));
@@ -962,10 +961,9 @@ mod tests {
         let anatomy = test_anatomy();
         let owner = ObjectId::new("player:hero-001");
 
-        let parsed = parse_create_command(
-            "create container backpack max_weight=100 weight=10 capacity=20",
-        )
-        .unwrap();
+        let parsed =
+            parse_create_command("create container backpack max_weight=100 weight=10 capacity=20")
+                .unwrap();
         let backpack = create_at_location_with_options(
             &factory,
             &parsed.type_name,
@@ -984,8 +982,7 @@ mod tests {
 
         let mut objects = HashMap::new();
         objects.insert(backpack.id.clone(), backpack.clone());
-        let builder_ctx =
-            DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
+        let builder_ctx = DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let examine_out = backpack.describe_detailed(&builder_ctx);
         assert!(examine_out.contains("properties:"));
         assert!(examine_out.contains("weight: 10"));
@@ -1030,9 +1027,11 @@ mod tests {
         let owner = ObjectId::new("player:hero-001");
         let area_id = ObjectId::new("area:the-void-001");
 
-        let mut opts = CreateOptions::default();
-        opts.capacity = Some(3);
-        opts.max_weight = Some(25);
+        let opts = CreateOptions {
+            capacity: Some(3),
+            max_weight: Some(25),
+            ..Default::default()
+        };
 
         let bag = create_at_location_with_options(
             &factory,
@@ -1097,8 +1096,7 @@ mod tests {
         assert!(!player_out.contains("id:"));
         assert!(!player_out.contains("properties:"));
 
-        let builder_ctx =
-            DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
+        let builder_ctx = DisplayContext::new(owner, DisplayMode::Builder).with_objects(objects);
         let builder_out = coins.describe_detailed(&builder_ctx);
         assert!(builder_out.contains("id: coins-001"));
         assert!(builder_out.contains("properties:"));
@@ -1120,8 +1118,10 @@ mod tests {
         let anatomy = test_anatomy();
         let owner = ObjectId::new("player:hero-001");
 
-        let mut opts = CreateOptions::default();
-        opts.stack_count = Some(42);
+        let opts = CreateOptions {
+            stack_count: Some(42),
+            ..Default::default()
+        };
 
         let coins = create_at_location_with_options(
             &factory,
@@ -1154,7 +1154,7 @@ mod tests {
                     max_volume: None,
                     wearable: true,
                     wear_slot: Some("torso".to_string()),
-            ..crate::object::ContainerSpec::default()
+                    ..crate::object::ContainerSpec::default()
                 },
                 None,
             )

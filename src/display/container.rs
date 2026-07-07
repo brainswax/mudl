@@ -2,9 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::object::{
-    format_weight_amount, is_unlimited_weight, Object, ObjectId,
-};
+use crate::object::{format_weight_amount, is_unlimited_weight, Object, ObjectId};
 
 use super::grammar::{join_natural_list, phrase_with_leading_article};
 pub use super::stackable::format_stackable_label;
@@ -45,10 +43,7 @@ pub fn format_look_container_player(
     if labels.is_empty() {
         return format!("The {name} is empty.");
     }
-    format!(
-        "The {name} contains {}.",
-        join_natural_list(&labels)
-    )
+    format!("The {name} contains {}.", join_natural_list(&labels))
 }
 
 /// Legacy alias — prefer [`format_look_container_player`].
@@ -106,10 +101,7 @@ pub fn format_examine_container_player(
     let opener = if labels.is_empty() {
         format!("The {name} is empty")
     } else {
-        format!(
-            "The {name} contains {}",
-            join_natural_list(&labels)
-        )
+        format!("The {name} contains {}", join_natural_list(&labels))
     };
 
     let mut text = format!("{opener} and has a capacity of {used}/{max_slots}.");
@@ -253,7 +245,7 @@ mod tests {
             open: true,
             ..crate::object::ContainerSpec::default()
         });
-        let mut note = bare("item:note-001", "Folded Note");
+        let note = bare("item:note-001", "Folded Note");
         mailbox.set_property_list("contents", vec![note.id.clone()]);
 
         let mut objects = HashMap::new();
@@ -296,7 +288,7 @@ mod tests {
             open: false,
             ..crate::object::ContainerSpec::default()
         });
-        let mut lantern = bare("item:lantern-001", "iron lantern");
+        let lantern = bare("item:lantern-001", "iron lantern");
         chest.set_property_list("contents", vec![lantern.id.clone()]);
 
         let mut objects = HashMap::new();
