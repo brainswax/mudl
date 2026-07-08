@@ -352,6 +352,20 @@ The split is **healthy for MVP**:
 
 **Not shipped:** Command parity, builder execution over IRC, rate limiting, and transport-agnostic dispatch. These block meaningful group playtesting of combat expansions and any LLM-driven editing.
 
+### M5 security review (July 2026)
+
+Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
+
+| Severity | Count | Representative findings |
+|----------|-------|-------------------------|
+| **P0** | 4 | Passwordless `login` / `login player:<id>` (SEC-01); REPL+IRC split-brain on one SQLite file (SEC-23); no rate limiting (SEC-50); IRC `look <target>` uses `ResolveScope::General` — cross-room intel (SEC-60) |
+| **P1** | 9 | IRC nick trust boundary (SEC-03); permissions on player JSON (SEC-11); MUDL `@trigger` script power (SEC-32); OOC/movement flood (SEC-51–52) |
+| **P2+** | 8 | `IRC_MOCK` impersonation (SEC-04); unencrypted SQLite at rest (SEC-24); logout persist rollback (SEC-43) |
+
+**Safe today:** parameterized SQL (SEC-20); in-process world mutex + revision CAS (SEC-40/22); IRC meta execution blocked after RBAC (SEC-34); player text not evaluated as MUDL (SEC-30).
+
+**Operator policy until P0 remediated:** single live writer (IRC *or* REPL), registered IRC nicks, treat player IDs as secrets, no public deployment without rate limits. Remediation mapped to milestones in `SECURITY.md`.
+
 | Delivered (M5) | Deferred to roadmap |
 |----------------|---------------------|
 | `SessionManager` + `ConnectionRegistry` | **M6** `GameTransport` + Slack; remove dead `Gateway` |
@@ -366,6 +380,10 @@ The split is **healthy for MVP**:
 
 | Priority | Work | Milestone | Rationale |
 |----------|------|-----------|-----------|
+| **P0** | **SEC-01** — authenticated login binding (token, allowlist, or IRC account map) | Pre-M6 | Blocks account takeover on public IRC |
+| **P0** | **SEC-50** — rate limiting on `dispatch_command` entry | M6/M9 | Blocks command/OOC/move floods |
+| **P0** | **SEC-60** — IRC `look` → `ResolveScope::RoomOnly` | Pre-M6 | Blocks cross-room information disclosure |
+| **P0** | **SEC-23** — single-writer ops policy or unified service process | Ops/M7 | Blocks REPL+IRC split-brain on one DB |
 | **P0** | Delete dead `Gateway`; document `SessionManager` as sole registry | Pre-M6 | Reduces architectural confusion |
 | **P0** | Extract `CommandDispatcher` + `CommandResult` | M6 | Blocks Slack without a third router copy |
 | **P0** | Generalize `IrcTransport` → `GameTransport` trait | M6 | Slack/WebSocket share deliver/join/part semantics |
