@@ -29,7 +29,7 @@ The diagram below shows **actual** module dependencies today (solid = implemente
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  Frontends: REPL (src/bin/repl.rs)          IRC / Gateway (planned)    │
+│  Frontends: REPL (src/bin/repl.rs)          IRC bot (src/bin/irc.rs)   │
 └───────────────────────────────┬─────────────────────────────────────────┘
                                 │ repl::Session { SharedWorld, PlayerSession }
                                 ▼
@@ -259,17 +259,20 @@ repl.rs ──► Session               IRC bot ──┐
 
 | Ready today | Not ready |
 |-------------|-----------|
-| `repl::Session::go` orchestration reusable | Multiple simultaneous actors (world lock serializes today) |
-| `Persistence` trait async-ready | Per-connection permission enforcement |
-| `EventContext` (actor/host/target) | Thin transport adapters (REPL is thick) |
-| `command/` parsers shared | Multi-player integration tests |
-| Incremental dirty persist + optimistic `revision` | IRC transport / session registry |
-| `SharedWorld` + `WorldState` / `PlayerSession` split | Real RBAC (`PermissionFlags` on actor) |
-| Per-world `DispatchStack` (depth/cycle guard) | `Gateway::dispatch(actor, line) -> Outcome` |
-| Transactional `save_objects_batch` | Per-room fine-grained locking (optional) |
-| 442 tests (single-player assumptions) | Two-actor race / conflict integration tests |
+| `repl::Session::go` orchestration reusable | Per-room fine-grained locking (optional) |
+| `Persistence` trait async-ready | Full builder command surface over IRC |
+| `EventContext` (actor/host/target) | Thin REPL adapter (REPL still thick) |
+| `command/` parsers shared | Rate limiting / flood protection |
+| Incremental dirty persist + optimistic `revision` | ~~IRC transport / session registry~~ |
+| `SharedWorld` + `WorldState` / `PlayerSession` split | ~~Multi-player integration tests~~ |
+| Per-world `DispatchStack` (depth/cycle guard) | ~~`Gateway::dispatch(actor, line) -> Outcome`~~ (IRC `dispatch_command`) |
+| Transactional `save_objects_batch` | Combat/inventory full parity on IRC |
+| Real RBAC (`PermissionFlags` on actor) | LLM / GitHub authoring hooks |
+| `SessionManager` login/logout + disconnect persist | |
+| `IrcBot` — TLS + IRCv3 caps, room visibility, tells, channels | |
+| 482 tests (incl. multi-user IRC) | |
 
-**Minimum M5 slice:** (1) ~~`WorldState` + `PlayerSession` split~~, (2) `Gateway::dispatch(actor, line) -> Outcome`, (3) real RBAC, (4) ~~world `Mutex` + transactional saves~~, (5) IRC adapter ~200 lines calling gateway.
+**Minimum M5 slice:** (1) ~~`WorldState` + `PlayerSession` split~~, (2) ~~`dispatch_command` + IRC bot~~, (3) ~~real RBAC~~, (4) ~~world `Mutex` + transactional saves~~, (5) ~~IRC adapter calling gateway~~.
 
 ### Recommended next steps
 
@@ -420,7 +423,7 @@ Creatures now use a **single script surface** with split storage:
 - **Persistence**: SQLite via `sqlx` + serde JSON blobs.
 - **Async**: Tokio (`#[tokio::main]` in REPL; `Persistence` is async-ready).
 - **MUDL parsing**: Custom line/block parsers in `src/mudl/` (not pest/chumsky).
-- **IRC (M5)**: `irc` crate or similar — not yet integrated.
+- **IRC (M5)**: `src/irc/` — TLS via `rustls`/`tokio-rustls`, IRCv3 `CAP LS 302` negotiation, `IrcBot` + `SessionManager`.
 
 ## Repository Layout
 

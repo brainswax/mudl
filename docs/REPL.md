@@ -1,6 +1,6 @@
 # MUDL REPL Documentation
 
-The MUDL REPL is the primary way to play and build today. It wraps `repl::Session` — object graph, movement, combat, events, and SQLite persistence — in a thin command-line adapter. IRC will use the same session model later.
+The MUDL REPL is the primary way to play and build today. It wraps `repl::Session` — object graph, movement, combat, events, and SQLite persistence — in a thin command-line adapter. The IRC bot ([IRC.md](IRC.md)) uses the same `SessionManager` + `PlayerSession` model for multi-user play over **IRCv3 + TLS** (port 6697 by default).
 
 All data persists in SQLite (`repl.db` by default) between runs.
 

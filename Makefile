@@ -28,6 +28,9 @@ build: ## Build the project
 run-repl: ## Run the REPL
 	cargo run --bin repl
 
+run-irc: ## Run the IRC bot (set IRC_MOCK=1 for stdin mock mode)
+	cargo run --bin irc
+
 clean: ## Clean build artifacts
 	cargo clean
 

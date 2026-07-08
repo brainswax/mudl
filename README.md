@@ -21,7 +21,7 @@ If you have ever wanted a MUD where the **world is data you can edit live**, whe
 - **Builders** who want a readable language for rooms, creatures, `@trigger` scripts, and expansion packs — without recompiling the server for every change.
 - **Engine contributors** interested in async Rust, DSL design, object graphs, and SQLite-backed persistence.
 
-The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitHub), and safe runtime self-modification. The REPL, MUDL loader, combat, events, and five official expansion packs are working now; IRC and the gateway layer are next.
+The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitHub), and safe runtime self-modification. The REPL, MUDL loader, combat, events, five official expansion packs, and an IRC bot with multi-session support are working now; builder commands over IRC and rate limiting are next.
 
 ---
 
@@ -38,8 +38,9 @@ The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitH
 | **Expansion packs** | Five drop-in adventures (haunted forest, swamp, spider den, beach resort, fey glade) |
 | **Persistence** | SQLite with stable `type:base-name-###` IDs and full object JSON roundtrip |
 | **Builder tools** | `@set` / `@unset`, `@dig` / `@link`, `@trigger`, `@examine`, place building |
-| **Clean architecture** | Pure core engine; gateway RBAC (Player / Builder / Wizard) planned as a thin layer |
-| **Tests** | 437 unit/integration tests across loader, inventory, combat, events, and persistence |
+| **IRC bot (M5)** | IRCv3 + TLS, multi-user `SessionManager`, room visibility, tells, channels |
+| **Clean architecture** | Pure core engine; gateway RBAC (Player / Builder / Wizard) on `PermissionFlags` |
+| **Tests** | 488 unit/integration tests across loader, inventory, combat, events, IRC, and persistence |
 
 ---
 
@@ -61,8 +62,12 @@ cp .env.example .env   # optional
 cargo build --bin repl
 cargo run --bin repl
 
+# IRC bot (mock mode reads stdin as "nick command"):
+IRC_MOCK=1 cargo run --bin irc
+
 # Or:
 make run-repl
+make run-irc
 make dev               # fmt + check + clippy + test
 ```
 
