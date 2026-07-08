@@ -8,7 +8,7 @@ use crate::command::parse_command_line;
 use crate::command::{authorize_meta_command, authorize_plain_command, CommandLine};
 use crate::display::{
     format_room_look_player, narrate_no_location, narrate_target_not_found, Describable,
-    DisplayMode, ResolveScope, TargetResolution,
+    DisplayMode, TargetResolution,
 };
 use crate::gateway::{
     normalize_nick, parse_login_args, rate_limit_kind_for_line, resolve_player_for_login,
@@ -22,7 +22,7 @@ use super::channels::{room_channel_name, room_join_notice};
 use super::config::IrcConfig;
 use super::social::{format_emote, format_say, format_tell, format_tell_sent};
 use super::visibility::{
-    actor_display_name_async, players_in_room_async, resolve_connected_nick,
+    actor_display_name_async, irc_look_scope, players_in_room_async, resolve_connected_nick,
 };
 
 /// IRC routing instructions produced by command dispatch.
@@ -367,11 +367,11 @@ async fn dispatch_look<P: Persistence + Clone + Send + Sync>(
         return DispatchOutcome::default();
     };
 
-    let target = args.first().map(String::as_str);
+    let target_name = (!args.is_empty()).then(|| args.join(" "));
     let resolution = {
         let session = handle.lock().await;
-        if let Some(name) = target {
-            session.resolve_target_async(name, ResolveScope::General).await
+        if let Some(name) = target_name.as_deref() {
+            session.resolve_target_async(name, irc_look_scope()).await
         } else if let Some(loc) = session.current_location() {
             TargetResolution::Found(loc.clone())
         } else {
@@ -404,7 +404,7 @@ async fn dispatch_look<P: Persistence + Clone + Send + Sync>(
                 } else {
                     lines.push(obj.describe(&ctx));
                 }
-            } else if let Some(name) = target {
+            } else if let Some(name) = target_name.as_deref() {
                 lines.push(narrate_target_not_found(name));
             } else {
                 lines.push(narrate_no_location());
@@ -412,7 +412,7 @@ async fn dispatch_look<P: Persistence + Clone + Send + Sync>(
         }
         TargetResolution::Ambiguous(msg) => lines.push(msg),
         TargetResolution::NotFound => {
-            if let Some(name) = target {
+            if let Some(name) = target_name.as_deref() {
                 lines.push(narrate_target_not_found(name));
             } else {
                 lines.push(narrate_no_location());
@@ -952,6 +952,100 @@ mod tests {
             dispatch_command(manager.clone(), "any-nick", "login tok-only", &config).await;
         assert!(outcome.to_sender.iter().any(|l| l.contains("Welcome")));
         assert!(manager.lock().await.is_connected("any-nick"));
+    }
+
+    async fn manager_with_sword_at(
+        room_id: &ObjectId,
+    ) -> (Arc<Mutex<SessionManager<SqlitePersistence>>>, IrcConfig) {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let room = ObjectId::new("room:void-001");
+        let north = ObjectId::new("room:north-001");
+
+        let mut hero1 = bare("player:hero-001", "Alice");
+        hero1.location = Some(room.clone());
+        let mut hero2 = bare("player:hero-002", "Bob");
+        hero2.location = Some(room.clone());
+
+        let mut place = bare("room:void-001", "The Void");
+        place.set_property_map(
+            "exits",
+            HashMap::from([("north".to_string(), north.clone())]),
+        );
+        let mut north_room = bare("room:north-001", "North");
+        north_room.add_exit("south", room.clone());
+
+        let mut sword = bare("item:rusty-sword", "rusty sword");
+        sword.location = Some(room_id.clone());
+
+        persistence.save_object(&hero1).await.unwrap();
+        persistence.save_object(&hero2).await.unwrap();
+        persistence.save_object(&place).await.unwrap();
+        persistence.save_object(&north_room).await.unwrap();
+        persistence.save_object(&sword).await.unwrap();
+
+        let manager = SessionManager::open(persistence, crate::mudl::AnatomyRegistry::default())
+            .await
+            .unwrap();
+        (Arc::new(Mutex::new(manager)), IrcConfig::default())
+    }
+
+    #[tokio::test]
+    async fn look_resolves_targets_in_current_room() {
+        let room = ObjectId::new("room:void-001");
+        let (manager, config) = manager_with_sword_at(&room).await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+
+        let outcome = dispatch_command(manager, "alice", "look rusty sword", &config).await;
+        assert!(
+            outcome
+                .to_sender
+                .iter()
+                .any(|l| l.contains("rusty sword") && !l.contains("don't see")),
+            "expected in-room target description, got: {:?}",
+            outcome.to_sender
+        );
+    }
+
+    #[tokio::test]
+    async fn look_rejects_cross_room_targets_by_name() {
+        let north = ObjectId::new("room:north-001");
+        let (manager, config) = manager_with_sword_at(&north).await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+
+        let outcome = dispatch_command(manager, "alice", "look rusty sword", &config).await;
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("don't see anything like \"rusty sword\"")));
+    }
+
+    #[tokio::test]
+    async fn look_rejects_cross_room_player_by_id() {
+        let (manager, config) = manager_arc().await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+        dispatch_command(Arc::clone(&manager), "bob", "login", &config).await;
+        dispatch_command(Arc::clone(&manager), "bob", "go north", &config).await;
+
+        let outcome =
+            dispatch_command(manager, "alice", "look player:hero-002", &config).await;
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("don't see anything like \"player:hero-002\"")));
+    }
+
+    #[tokio::test]
+    async fn look_finds_co_located_player() {
+        let (manager, config) = manager_arc().await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+        dispatch_command(Arc::clone(&manager), "bob", "login", &config).await;
+
+        let outcome = dispatch_command(manager, "alice", "look bob", &config).await;
+        assert!(
+            outcome.to_sender.iter().any(|l| l.contains("Bob")),
+            "expected co-located player description, got: {:?}",
+            outcome.to_sender
+        );
     }
 
     #[tokio::test]

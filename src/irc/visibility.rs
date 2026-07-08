@@ -5,11 +5,21 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use crate::display::ResolveScope;
 use crate::gateway::normalize_nick;
 use crate::gateway::SessionManager;
 use crate::object::ObjectId;
 use crate::persistence::Persistence;
 use crate::repl::Session;
+
+/// Scope for IRC player `look` — current room only (SEC-60).
+///
+/// Builder `@look` over IRC remains deferred; REPL wizard `@look` uses [`ResolveScope::General`].
+pub const IRC_LOOK_SCOPE: ResolveScope = ResolveScope::RoomOnly;
+
+pub fn irc_look_scope() -> ResolveScope {
+    IRC_LOOK_SCOPE
+}
 
 /// Connected nick whose [`Session`] shares a location.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +141,7 @@ pub fn nick_room_map<P: Persistence + Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::display::ResolveScope;
     use crate::gateway::SessionManager;
     use crate::object::{Object, PermissionFlags};
     use crate::persistence::SqlitePersistence;
@@ -193,6 +204,11 @@ mod tests {
             .await
             .unwrap();
         manager
+    }
+
+    #[test]
+    fn irc_look_scope_is_room_only() {
+        assert_eq!(irc_look_scope(), ResolveScope::RoomOnly);
     }
 
     #[tokio::test]
