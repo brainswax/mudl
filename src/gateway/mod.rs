@@ -26,6 +26,8 @@ mod load;
 #[cfg(test)]
 mod m5_scenarios;
 #[cfg(test)]
+mod m6_scenarios;
+#[cfg(test)]
 mod multi_user;
 
 pub use login_auth::{

@@ -14,12 +14,15 @@ use super::dispatch::{dispatch_command, DispatchOutcome, PresenceSync};
 use super::events::{classify_slack_channel, SlackChannelKind, SlackEventBody, SlackMessageEvent};
 use super::input::normalize_slack_command_input;
 use super::presence::encode_notice;
+use super::session::SlackSessionRegistry;
 
 /// Slack gateway bot backed by a shared [`SessionManager`].
 pub struct SlackBot<P, T> {
     manager: Arc<Mutex<SessionManager<P>>>,
     transport: Arc<T>,
     config: SlackConfig,
+    /// DM conversation ids per connected Slack user (delivery sidecar).
+    slack_sessions: Arc<Mutex<SlackSessionRegistry>>,
 }
 
 impl<P, T> SlackBot<P, T>
@@ -32,7 +35,12 @@ where
             manager: Arc::new(Mutex::new(manager)),
             transport,
             config,
+            slack_sessions: Arc::new(Mutex::new(SlackSessionRegistry::default())),
         }
+    }
+
+    pub fn slack_sessions(&self) -> Arc<Mutex<SlackSessionRegistry>> {
+        Arc::clone(&self.slack_sessions)
     }
 
     pub fn config(&self) -> &SlackConfig {
@@ -67,8 +75,22 @@ where
             &self.config,
         )
         .await;
+        self.sync_slack_session(&outcome).await;
         self.deliver(&outcome).await;
         Ok(outcome)
+    }
+
+    async fn sync_slack_session(&self, outcome: &DispatchOutcome) {
+        let connected = {
+            let manager = self.manager.lock().await;
+            manager.is_connected(&outcome.user_id)
+        };
+        let mut sessions = self.slack_sessions.lock().await;
+        if connected {
+            sessions.record(&outcome.user_id, &outcome.reply_channel);
+        } else {
+            sessions.remove(&outcome.user_id);
+        }
     }
 
     async fn handle_message(&self, message: SlackMessageEvent) -> anyhow::Result<()> {
@@ -142,9 +164,11 @@ where
 
         let line = format_ooc(&display, trimmed);
         self.send_to_presence(&self.config.world_channel, &line).await;
+        let sessions = self.slack_sessions.lock().await;
         for user_id in connected {
             if user_id != message.user {
-                self.transport.send_direct(&user_id, &line).await;
+                let target = sessions.delivery_target(&user_id);
+                self.transport.send_direct(&target, &line).await;
             }
         }
         Ok(())

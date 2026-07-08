@@ -272,6 +272,7 @@ fn parse_env_tokens(raw: Option<&str>) -> HashMap<String, String> {
 }
 
 /// `MUDL_LOGIN_IDENTITY_BINDINGS=alice=player:hero-001,bob=player:hero-002`
+/// (Slack: `U01234ABC=player:hero-001` — keys normalized to lowercase)
 fn parse_identity_bindings(raw: Option<&str>) -> HashMap<String, ObjectId> {
     let Some(raw) = raw else {
         return HashMap::new();

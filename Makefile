@@ -25,8 +25,8 @@ test: ## Run tests
 test-m5: ## Run M5 multi-user and IRC tests
 	cargo test gateway:: && cargo test irc::
 
-test-m6: ## Run M6 Slack transport tests
-	cargo test slack::
+test-m6: ## Run M6 Slack transport and session tests
+	cargo test slack:: && cargo test gateway::m6_scenarios
 
 build: ## Build the project
 	cargo build --all-targets --all-features

@@ -4,6 +4,24 @@
 
 Command dispatch via [`slack/dispatch.rs`](../src/slack/dispatch.rs) mirrors IRC — player verbs route through [`CommandDispatcher`](../src/command/dispatcher.rs).
 
+## Session management
+
+Each workspace member is bound to at most one player actor through the shared [`SessionManager`](../src/gateway/session_manager.rs):
+
+| Layer | Key | Holds |
+|-------|-----|-------|
+| **Game session** | Normalized Slack user id (`U…` / `W…`, case-insensitive) | `Arc<Mutex<Session>>` over shared `WorldState` |
+| **Delivery sidecar** | Same normalized id | DM conversation id (`D…`) in [`SlackSessionRegistry`](../src/slack/session.rs) |
+
+**Login flow** (DM to the bot):
+
+1. `dispatch_command` receives `user_id` + `reply_channel` from the Events API message.
+2. Open mode: `login` matches player **display name** to the Slack user id string (mock/dev uses names like `alice`; production uses `U…` ids — use `login <player-id>` or a token).
+3. Secured mode: `verify_login` checks `MUDL_LOGIN_TOKENS` and optional `MUDL_LOGIN_IDENTITY_BINDINGS` (keys are lowercase Slack user ids, e.g. `U01234ABC=player:hero-001`).
+4. `SessionManager::login(user_id, player_id, …)` registers the connection; `SlackBot` records the DM channel for OOC relay and future delivery.
+
+**Logout** (`quit` / `logout` / `exit`): `SessionManager::logout` persists player state, clears rate-limit buckets, and drops the registry entry; `SlackSessionRegistry` removes the DM mapping.
+
 ## Architecture
 
 ```
@@ -114,6 +132,12 @@ U_ALICE C_WORLD brb dinner
 
 Login tokens and rate limits use the same `MUDL_LOGIN_*` and `MUDL_RATE_LIMIT_*` variables as the IRC bot.
 
+| Variable | Slack usage |
+|----------|-------------|
+| `MUDL_LOGIN_REQUIRE_AUTH` | Require token before `SessionManager::login` (default `true`; `false` when `SLACK_MOCK=1`) |
+| `MUDL_LOGIN_TOKENS` | `player:id=secret` — same as IRC |
+| `MUDL_LOGIN_IDENTITY_BINDINGS` | `U01234ABC=player:hero-001` — binds a Slack member id to one actor (keys normalized to lowercase) |
+
 ## Security notes
 
 - Every Events API request is verified with `X-Slack-Signature` / `X-Slack-Request-Timestamp` (5-minute replay window).
@@ -123,10 +147,10 @@ Login tokens and rate limits use the same `MUDL_LOGIN_*` and `MUDL_RATE_LIMIT_*`
 ## Tests
 
 ```bash
-cargo test slack::
+make test-m6
 ```
 
-Covers payload parsing, signature verification, input normalization, bot acknowledgements, and the events HTTP handler.
+Covers payload parsing, signature verification, session login/logout, identity bindings, OOC relay, and `gateway::m6_scenarios` acceptance flows.
 
 ## Commands (DM the bot)
 
@@ -143,5 +167,4 @@ quit
 
 ## Next steps (M6)
 
-- `gateway::m6_scenarios` integration tests
 - Container verbs (`put`, `open`, …) over Slack

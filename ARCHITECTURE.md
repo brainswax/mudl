@@ -188,6 +188,7 @@ M5 adds concurrent players over one shared world graph via IRC (TLS/IRCv3) with 
 | `irc/bot.rs` | `IrcBot` — identity verification at PRIVMSG, OOC rate limits, `deliver` via [`GameTransport`](src/transport/mod.rs) |
 | `transport/mod.rs` | `GameTransport`, `MockTransport`, `OutgoingAction` — shared deliver/join/leave |
 | `slack/dispatch.rs` | `dispatch_command` → `CommandDispatcher` → `DispatchOutcome` (mirrors IRC adapter) |
+| `slack/session.rs` | `SlackSessionRegistry` — DM channel sidecar keyed by normalized Slack user id |
 | `slack/transport.rs` | `SlackWebTransport` — Web API mapping (`postMessage`, `join`, `leave`, DM open) |
 | `slack/presence.rs` | Recipient encoding (`C…:thread:TS`, `C…:notice:U…`) for multi-frontend dispatch |
 | `irc/transport.rs` | `IrcTransport` (`GameTransport` + `send_raw`), TLS stream adapter |
@@ -315,6 +316,7 @@ Lock order: **manager (brief) → per-session → world**. No re-entrant world l
 | `gateway::load` | 4 | Parallel command stress, deadlock avoidance, latency budget |
 | `gateway::edge_cases` | 10 | Reconnect, double logout, RBAC denials, revision conflict on logout, orphan reclaim |
 | `gateway::m5_scenarios` | 8 | Explicit login, shorthands, OOC login gate, channel sync, inventory isolation |
+| `gateway::m6_scenarios` | 6 | Slack user id login/logout, token + identity binding, OOC DM relay |
 | `irc::` | 57+ | Parsing, caps, channels, visibility, bot relay, dispatch, rate limits, identity |
 | `gateway::rbac` + `registry` | 7 | Tier checks, nick normalization |
 
@@ -790,7 +792,7 @@ Test suites: `gateway::multi_user`, `gateway::session_manager`, `gateway::load`,
 | ~~**P0**~~ | ~~`GameTransport` trait (from `IrcTransport`)~~ | **Done** — `send_direct` / `join` / `leave` / `send_notice` |
 | **P0** | `SlackBot` + `SessionManager` binding | Reuse M5 multi-user model; workspace user → player session |
 | **P0** | Channel/thread routing | OOC workspace channel vs per-room threads for in-character speech |
-| **P1** | Mock transport + `gateway::m6_scenarios` tests | Mirror `irc::` / `m5_scenarios` pattern for CI |
+| ~~**P1**~~ | ~~Mock transport + `gateway::m6_scenarios` tests~~ | **Done** — `gateway::m6_scenarios` + `slack::session` |
 | ~~**P1**~~ | ~~Refactor IRC to thin adapter over dispatcher~~ | **Done** — `irc/dispatch.rs` is login/rate-limit/delivery only |
 
 ### M7 — Wizard tools & persistence (planned)

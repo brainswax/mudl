@@ -12,6 +12,7 @@ mod events;
 mod input;
 mod presence;
 mod server;
+mod session;
 mod transport;
 mod verify;
 mod visibility;
@@ -26,12 +27,16 @@ pub use dispatch::{
 };
 pub use config::SlackConfig;
 pub use events::{
-    classify_slack_channel, parse_events_payload, SlackChannelKind, SlackEventCallback,
-    SlackEventsPayload, SlackMessageEvent,
+    classify_slack_channel, parse_events_payload, SlackChannelKind, SlackEventBody,
+    SlackEventCallback, SlackEventsPayload, SlackMessageEvent,
 };
 pub use input::normalize_slack_command_input;
 pub use presence::{encode_notice, encode_thread, parse_recipient, SlackRecipient};
 pub use server::{run_events_server, EventsServerState};
+pub use session::{
+    is_slack_member_id, normalize_slack_user_id, slack_logged_out_help, SlackSessionContext,
+    SlackSessionRegistry,
+};
 pub use transport::{OutgoingSlack, SlackTransport, SlackWebTransport};
 pub use verify::verify_slack_signature;
 pub use visibility::{resolve_connected_user_async, slack_look_scope, SLACK_LOOK_SCOPE};

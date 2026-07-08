@@ -23,6 +23,7 @@ use super::channels::{room_join_notice, room_presence};
 use super::config::SlackConfig;
 use crate::irc::players_in_room_async;
 
+use super::session::slack_logged_out_help;
 use super::visibility::{resolve_connected_user_async, slack_look_scope};
 
 /// Slack routing instructions produced by command dispatch.
@@ -305,7 +306,7 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
             reply_channel: reply_channel.to_string(),
             to_sender: vec![format!(
                 "You are not logged in. {}",
-                config.login_auth.logged_out_help()
+                slack_logged_out_help(&config.login_auth)
             )],
             ..Default::default()
         },
@@ -472,7 +473,7 @@ async fn dispatch_quit<P: Persistence + Clone + Send + Sync>(
 }
 
 fn logged_out_help_text(config: &SlackConfig) -> String {
-    config.login_auth.logged_out_help()
+    slack_logged_out_help(&config.login_auth)
 }
 
 fn slack_help_lines(config: &SlackConfig) -> Vec<String> {

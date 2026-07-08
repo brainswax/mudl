@@ -19,7 +19,7 @@ M5 is **safe for controlled playtests** on a single IRC bot instance when operat
 
 | Original P0 | Status (July 2026) |
 |-------------|-------------------|
-| SEC-01 passwordless login | **Mitigated** — `LoginAuthPolicy` (`MUDL_LOGIN_TOKENS`, identity bindings); permissive only in `IRC_MOCK` / dev |
+| SEC-01 passwordless login | **Mitigated** — `LoginAuthPolicy` (`MUDL_LOGIN_TOKENS`, identity bindings); permissive only in `IRC_MOCK` / `SLACK_MOCK` / dev |
 | SEC-23 split-brain | **Mitigated** — `WriterGuard` advisory lock (`MUDL_SINGLE_WRITER_ENABLED`, default on file DBs) |
 | SEC-50 no rate limiting | **Resolved** — token buckets on dispatch + OOC + movement (`gateway/rate_limit.rs`) |
 | SEC-60 cross-room look | **Resolved** — `irc_look_scope()` = `ResolveScope::RoomOnly` |
@@ -55,7 +55,7 @@ M5 is **safe for controlled playtests** on a single IRC bot instance when operat
 
 | ID | Location | Issue | Impact | Recommendation | Priority |
 |----|----------|-------|--------|----------------|----------|
-| **SEC-01** | `gateway/login_auth.rs`, `irc/dispatch.rs` | ~~**Passwordless login**~~ — **Mitigated (July 2026):** `LoginAuthPolicy` requires tokens on live IRC (`MUDL_LOGIN_TOKENS`, `login_token` property, optional `MUDL_LOGIN_IDENTITY_BINDINGS`). Open login remains for `IRC_MOCK` / `MUDL_LOGIN_REQUIRE_AUTH=false`. | Residual: operators must deploy tokens; binding map optional; no NickServ/SASL integration into MUDL login. | Rotate tokens; use identity bindings; enable `IRC_REQUIRE_ACCOUNT_TAG` on public networks. | **P1** (residual) |
+| **SEC-01** | `gateway/login_auth.rs`, `irc/dispatch.rs`, `slack/dispatch.rs` | ~~**Passwordless login**~~ — **Mitigated (July 2026):** `LoginAuthPolicy` requires tokens on live IRC/Slack (`MUDL_LOGIN_TOKENS`, `login_token` property, optional `MUDL_LOGIN_IDENTITY_BINDINGS` — IRC nicks or Slack `U…` ids, lowercase keys). Open login remains for `IRC_MOCK` / `SLACK_MOCK` / `MUDL_LOGIN_REQUIRE_AUTH=false`. | Residual: operators must deploy tokens; binding map optional; no NickServ/SASL integration into MUDL login. | Rotate tokens; use identity bindings (`U01234ABC=player:id` for Slack); enable `IRC_REQUIRE_ACCOUNT_TAG` on public IRC networks. | **P1** (residual) |
 | **SEC-02** | `gateway/session_manager.rs` `build_connection` | **One actor, one session** enforced (`is_actor_bound`); nick reuse blocked (`RegistryError::NickInUse`). | Mitigates duplicate-world presence for same player; does **not** stop SEC-01 initial bind. | Keep; extend with auth before bind. | — |
 | **SEC-03** | `irc/message.rs`, `irc/nick.rs`, `irc/identity.rs`, `IrcBot` | **IRC nick from wire** — validated/sanitized at parse; optional `IRC_REQUIRE_ACCOUNT_TAG` + `MUDL_IRC_ACCOUNT_BINDINGS`; OOC sanitized (no embedded newlines/control chars). | Residual: MUDL does not run SASL — operators must enforce network-level nick ownership. | Deploy SASL/`+r` on IRC network + MUDL tokens; enable `IRC_REQUIRE_ACCOUNT_TAG` for public playtests. | **P1** (mitigated) |
 | **SEC-04** | `bin/irc.rs` `run_mock_bot` (`IRC_MOCK=1`) | Stdin lines choose arbitrary nick + command with **no auth**. | Local dev only; if `IRC_MOCK` enabled on a shared host, full impersonation. | Refuse `IRC_MOCK` unless `RUST_ENV=development` or explicit opt-in; document in operator guide. | **P2** |
@@ -166,7 +166,7 @@ M5 is **safe for controlled playtests** on a single IRC bot instance when operat
 For **controlled playtests** (not unattended public Internet):
 
 1. **Single writer** — leave `MUDL_SINGLE_WRITER_ENABLED` at default (`true`); run IRC bot **or** REPL, not both against the same file DB.
-2. **Login tokens** — set `MUDL_LOGIN_REQUIRE_AUTH=true` and `MUDL_LOGIN_TOKENS=player:id=secret,…`; optional `MUDL_LOGIN_IDENTITY_BINDINGS=nick=player:id`.
+2. **Login tokens** — set `MUDL_LOGIN_REQUIRE_AUTH=true` and `MUDL_LOGIN_TOKENS=player:id=secret,…`; optional `MUDL_LOGIN_IDENTITY_BINDINGS=nick=player:id` (IRC) or `U01234ABC=player:id` (Slack).
 3. **Rate limits** — leave `MUDL_RATE_LIMIT_ENABLED` at default (`true`); tune `MUDL_RATE_LIMIT_COMMANDS`, `_MOVEMENT`, `_OOC` if needed.
 4. **IRC identity** — for public networks, enable `IRC_REQUIRE_ACCOUNT_TAG=true` and/or `MUDL_IRC_ACCOUNT_BINDINGS`; require SASL/`+r` on the IRC network.
 5. Keep **`IRC_MOCK` unset** on any shared machine.
@@ -177,9 +177,9 @@ For **controlled playtests** (not unattended public Internet):
 
 | Variable | Purpose | Default (live IRC) |
 |----------|---------|-------------------|
-| `MUDL_LOGIN_REQUIRE_AUTH` | Require login token | `true` (false when `IRC_MOCK=1`) |
+| `MUDL_LOGIN_REQUIRE_AUTH` | Require login token | `true` (false when `IRC_MOCK=1` or `SLACK_MOCK=1`) |
 | `MUDL_LOGIN_TOKENS` | `player:id=token` map | unset → login denied when auth required |
-| `MUDL_LOGIN_IDENTITY_BINDINGS` | `nick=player:id` optional bind | unset |
+| `MUDL_LOGIN_IDENTITY_BINDINGS` | `nick=player:id` or `U…=player:id` optional bind | unset |
 | `MUDL_SINGLE_WRITER_ENABLED` | Advisory DB writer lock | `true` for file DBs |
 | `MUDL_WRITER_MODE` | Lock metadata (`repl`/`irc`) | per binary |
 | `MUDL_RATE_LIMIT_ENABLED` | Token-bucket throttling | `true` |
