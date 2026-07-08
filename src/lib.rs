@@ -2,6 +2,7 @@ pub mod command;
 pub mod gateway;
 pub mod transport;
 pub mod irc;
+pub mod slack;
 pub mod creature;
 pub mod display;
 pub mod inventory;

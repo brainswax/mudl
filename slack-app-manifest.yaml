@@ -1,0 +1,46 @@
+# MUDL Slack App manifest — import at https://api.slack.com/apps?new_app=1
+# Select "From an app manifest", choose a workspace, and paste this file.
+#
+# After install, copy credentials into .env:
+#   SLACK_BOT_TOKEN=xoxb-…
+#   SLACK_SIGNING_SECRET=…
+#   SLACK_APP_ID=A…
+#   SLACK_WORLD_CHANNEL=C…  (channel ID for #mudl-ooc or similar)
+
+display_information:
+  name: MUDL
+  description: IRC-first programmable MUD — Slack transport for group playtesting
+  background_color: "#1a1a2e"
+
+features:
+  bot_user:
+    display_name: MUDL
+    always_online: true
+
+oauth_config:
+  scopes:
+    bot:
+      - app_mentions:read
+      - channels:history
+      - channels:read
+      - chat:write
+      - groups:history
+      - groups:read
+      - im:history
+      - im:read
+      - im:write
+      - users:read
+
+settings:
+  event_subscriptions:
+    request_url: https://YOUR_PUBLIC_HOST/slack/events
+    bot_events:
+      - app_mention
+      - message.channels
+      - message.groups
+      - message.im
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

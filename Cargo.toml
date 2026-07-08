@@ -13,9 +13,16 @@ all = "deny"
 name = "irc"
 path = "src/bin/irc.rs"
 
+[[bin]]
+name = "slack"
+path = "src/bin/slack.rs"
+
 [dependencies]
 anyhow = "1.0.103"
 async-trait = "0.1.80"
+axum = "0.7"
+hmac = "0.12"
+sha2 = "0.10"
 bitflags = { version = "2.6", features = ["serde"] }
 dotenv = "0.15"
 fs2 = "0.4"
@@ -32,3 +39,6 @@ webpki-roots = "0.26"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 ureq = "2.12"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

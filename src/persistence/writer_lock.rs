@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub enum WriterMode {
     Repl,
     Irc,
+    Slack,
 }
 
 impl WriterMode {
@@ -24,6 +25,7 @@ impl WriterMode {
         match self {
             Self::Repl => "repl",
             Self::Irc => "irc",
+            Self::Slack => "slack",
         }
     }
 }
@@ -46,7 +48,7 @@ impl WriterLockOptions {
     /// Load from environment for production binaries.
     ///
     /// `MUDL_SINGLE_WRITER_ENABLED` — default `true` for file databases.
-    /// `MUDL_WRITER_MODE` — `repl` or `irc` (metadata only; lock is exclusive either way).
+    /// `MUDL_WRITER_MODE` — `repl`, `irc`, or `slack` (metadata only; lock is exclusive either way).
     pub fn from_env(default_mode: WriterMode) -> Self {
         let enabled = std::env::var("MUDL_SINGLE_WRITER_ENABLED")
             .map(|raw| parse_bool_env(&raw, true))
@@ -58,6 +60,7 @@ impl WriterLockOptions {
             .map(str::to_ascii_lowercase)
         {
             Some(mode) if mode == "irc" => WriterMode::Irc,
+            Some(mode) if mode == "slack" => WriterMode::Slack,
             Some(mode) if mode == "repl" => WriterMode::Repl,
             _ => default_mode,
         };
@@ -105,7 +108,7 @@ impl std::fmt::Display for WriterLockError {
         }
         write!(
             f,
-            ". Only one of REPL or IRC may use the same DATABASE_URL at a time (SEC-23). \
+            ". Only one live writer (REPL, IRC, or Slack) may use the same DATABASE_URL at a time (SEC-23). \
              Stop the other process, or set MUDL_SINGLE_WRITER_ENABLED=0 for local debugging."
         )
     }
