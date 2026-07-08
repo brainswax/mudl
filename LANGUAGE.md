@@ -219,7 +219,7 @@ room "Cozy Kitchen" {
 ## Safety & Sandboxing
 * All user/LLM code runs in a restricted environment.
 * No direct file/system access.
-* Permission checks enforced by the Gateway.
+* Permission checks enforced by `gateway/rbac` (via `SessionManager` on IRC, `Session` on REPL).
 * Resource limits (CPU, loops, memory).
 
 ## Universes, Worlds, and Entrypoints

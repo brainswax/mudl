@@ -22,7 +22,7 @@ pub mod world_state;
 
 pub use bootstrap::bootstrap_world;
 pub use dirty::{persist_dirty, DirtyTracker};
-pub use dispatch_guard::{DispatchError, DispatchStack, MAX_DISPATCH_DEPTH};
+pub use dispatch_guard::{DispatchError, DispatchGuard, DispatchStack, MAX_DISPATCH_DEPTH};
 pub use discovery::{
     entity_visible_to_player, is_object_hidden_from_player, object_visible_to_player,
     run_discovery_on_look, run_object_discovery_on_look,

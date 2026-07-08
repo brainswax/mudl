@@ -2,7 +2,7 @@
 
 **A self-modifying MUD/MOO engine with a custom DSL — IRC-first, programmable worlds.**
 
-MUDL is a Rust-powered text world engine for builders who want MOO-style live modification without giving up version control, persistence, or sane architecture. Define rooms, creatures, and player templates in flat `.mudl` files; explore and extend them through a REPL today and IRC tomorrow. New players spawn as a **naked human** — full anatomy slots, empty hands — ready for you to dress the world around them.
+MUDL is a Rust-powered text world engine for builders who want MOO-style live modification without giving up version control, persistence, or sane architecture. Define rooms, creatures, and player templates in flat `.mudl` files; explore and extend them through a REPL or IRC bot. New players spawn as a **naked human** — full anatomy slots, empty hands — ready for you to dress the world around them.
 
 [![Rust](https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![Tokio](https://img.shields.io/badge/Tokio-000000?style=flat&logo=rust&logoColor=white)](https://tokio.rs/)
@@ -21,7 +21,7 @@ If you have ever wanted a MUD where the **world is data you can edit live**, whe
 - **Builders** who want a readable language for rooms, creatures, `@trigger` scripts, and expansion packs — without recompiling the server for every change.
 - **Engine contributors** interested in async Rust, DSL design, object graphs, and SQLite-backed persistence.
 
-The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitHub), and safe runtime self-modification. The REPL, MUDL loader, combat, events, and five official expansion packs are working now; IRC and the gateway layer are next.
+The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitHub), and safe runtime self-modification. **Milestone 5 (multi-user IRC)** is complete: shared world, per-nick sessions, room visibility, tells, and TLS/IRCv3 transport. Post-M5 work includes full builder commands over IRC, combat parity on IRC, and rate limiting.
 
 ---
 
@@ -38,8 +38,9 @@ The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitH
 | **Expansion packs** | Five drop-in adventures (haunted forest, swamp, spider den, beach resort, fey glade) |
 | **Persistence** | SQLite with stable `type:base-name-###` IDs and full object JSON roundtrip |
 | **Builder tools** | `@set` / `@unset`, `@dig` / `@link`, `@trigger`, `@examine`, place building |
-| **Clean architecture** | Pure core engine; gateway RBAC (Player / Builder / Wizard) planned as a thin layer |
-| **Tests** | 437 unit/integration tests across loader, inventory, combat, events, and persistence |
+| **IRC bot (M5)** | IRCv3 + TLS, `SessionManager`, room channels, tells, OOC world channel, mock + live modes |
+| **Clean architecture** | Pure core engine; gateway RBAC (Player / Builder / Wizard) on `PermissionFlags` |
+| **Tests** | **532** unit/integration tests — loader, combat, events, IRC, multi-user, load, and edge cases |
 
 ---
 
@@ -61,8 +62,13 @@ cp .env.example .env   # optional
 cargo build --bin repl
 cargo run --bin repl
 
+# IRC bot (mock mode reads stdin as "nick command"):
+IRC_MOCK=1 cargo run --bin irc
+
 # Or:
 make run-repl
+make run-irc
+make test-m5           # IRC + multi-user tests only
 make dev               # fmt + check + clippy + test
 ```
 
@@ -87,6 +93,7 @@ The REPL loads `modules/default/universe.mudl`, bootstraps `default_world` if th
 | `MUDL_MODULE` | `modules/default` | Module directory containing `universe.mudl` |
 | `MUDL_WORLD` | *(universe default)* | Override active world within the module |
 | `RUST_LOG` | `info` | Tracing verbosity |
+| `IRC_*` | see [docs/IRC.md](docs/IRC.md) | IRC bot (TLS, nick, channels); `IRC_MOCK=1` for stdin testing |
 
 See [`.env.example`](.env.example) for a ready-to-copy template.
 
@@ -130,9 +137,11 @@ Exits: south, north
 
 | Doc | Audience | Contents |
 |-----|----------|----------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Contributors | Milestones M1–M4, module layout, event dispatch, roadmap |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Contributors | Milestones M1–M5, module layout, concurrency, roadmap |
+| [SECURITY.md](SECURITY.md) | Operators & contributors | M5 security review, threat model, findings (SEC-*) |
+| [docs/IRC.md](docs/IRC.md) | Players & operators | IRC bot setup, commands, channels, nick handling, testing |
 | [LANGUAGE.md](LANGUAGE.md) | Builders | MUDL syntax: creatures, `@trigger`, combat, spawners, expansions |
-| [COMMANDS.md](COMMANDS.md) | Players & builders | Command reference and output style |
+| [COMMANDS.md](COMMANDS.md) | Players & builders | REPL + IRC command reference and output style |
 | [BUILDER.md](BUILDER.md) | Builders | `@set` / `@unset`, properties vs state vs status |
 | [OBJECT_MODEL.md](OBJECT_MODEL.md) | Contributors | `Object`, roles, IDs, display modes |
 | [MODULES.md](MODULES.md) | Expansion authors | Pack README template and authoring rules |
@@ -151,8 +160,8 @@ Exits: south, north
                                │
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              API Gateway + RBAC (planned)                    │
-│         Player / Builder / Wizard permission tiers           │
+│    SessionManager (sole registry) + RBAC + rate limits         │
+│         IRC bot • REPL (single session) • future: Slack        │
 └──────────────────────────────┬──────────────────────────────┘
                                │
                                ▼
@@ -211,7 +220,7 @@ Module layout: [modules/default/README.md](modules/default/README.md) · Expansi
 
 ## Current Status
 
-### Implemented (Milestones 1–4 partial)
+### Implemented (Milestones 1–5)
 
 - Object graph, `MoveManager`, inventory, SQLite persistence, REPL `Session`
 - MUDL loader: universes, worlds, `@include` / `@import`, expansion packs
@@ -219,15 +228,15 @@ Module layout: [modules/default/README.md](modules/default/README.md) · Expansi
 - Events: `@trigger`, `execute_event`, scheduler, resource/loot spawners, `on_harvest`
 - Conditions: `@effect` with DoT/HoT, `condition_ticks`, script `grant-effect` / `cure-tag`
 - Five official expansion packs with self-contained READMEs
-- **437** unit and integration tests
+- **M5 multi-user IRC** — `SessionManager`, `IrcBot`, TLS/IRCv3, room visibility, tells, OOC, disconnect persist
+- **532** unit and integration tests (incl. `gateway::multi_user`, `load`, `edge_cases`, `m5_scenarios`)
 
-### Planned
+### Planned (post-M5)
 
-- **IRC bot** — play and build from any IRC client
-- **API gateway / RBAC** — enforce Player / Builder / Wizard on all mutations
+- **IRC combat & builder parity** — `attack`, `@dig`, full meta-command surface over IRC
+- **Rate limiting** — flood protection on IRC command dispatch
 - **Sandboxed verb runtime** — replace hardcoded `event_script` actions with safe DSL execution
 - **File + GitHub hot-reload** — webhooks and live module updates
-- **Multi-user sessions** — per-connection `Session` registry for IRC
 
 Track active work on [GitHub Issues](https://github.com/brainswax/mudl/issues).
 

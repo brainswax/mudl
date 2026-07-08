@@ -1,7 +1,5 @@
 //! REPL / command-line parsing with `@` meta-command detection.
 
-use crate::object::ObjectId;
-
 /// Parsed user input line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandLine {
@@ -40,18 +38,6 @@ pub fn parse_command_line(input: &str) -> CommandLine {
 /// Whether this parsed line is a wizard/builder meta-command.
 pub fn is_meta_command(line: &CommandLine) -> bool {
     line.is_meta
-}
-
-/// Stub wizard permission check until RBAC is wired to player roles.
-///
-/// REPL sessions treat the default player as wizard-capable.
-pub fn has_wizard_permission(_actor: &ObjectId) -> bool {
-    true
-}
-
-/// Player-facing message when a meta-command is denied.
-pub fn wizard_access_denied() -> &'static str {
-    "You lack the wizard privilege to use @-commands."
 }
 
 #[cfg(test)]

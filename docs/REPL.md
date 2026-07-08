@@ -1,6 +1,6 @@
 # MUDL REPL Documentation
 
-The MUDL REPL is the primary way to play and build today. It wraps `repl::Session` — object graph, movement, combat, events, and SQLite persistence — in a thin command-line adapter. IRC will use the same session model later.
+The MUDL REPL is the primary way to play and build today. It wraps `repl::Session` — object graph, movement, combat, events, and SQLite persistence — in a thin command-line adapter. The IRC bot ([IRC.md](IRC.md)) uses the same `SessionManager` + `PlayerSession` model for multi-user play over **IRCv3 + TLS** (port 6697 by default).
 
 All data persists in SQLite (`repl.db` by default) between runs.
 
@@ -164,4 +164,6 @@ Source: `src/bin/repl.rs`, `src/repl/session.rs`.
 - Delete `repl.db` (or your `DATABASE_URL` file) to start fresh.
 - Use `@dump` or `RUST_LOG=info` when you need internal IDs.
 - `@delete` hides objects from play; `@undelete <id>` restores them.
-- Run `cargo test --lib` — **437** tests cover bootstrap, combat, events, and persistence.
+- Run `cargo test` or `make dev` — **532** tests cover bootstrap, combat, events, persistence, IRC, and multi-user scenarios.
+- Run `make test-m5` for IRC and gateway multi-user tests only.
+- Multi-user play over IRC: [IRC.md](IRC.md).

@@ -1,6 +1,6 @@
 # Makefile for MUDL project
 
-.PHONY: fmt clippy check test build run-repl clean help
+.PHONY: fmt clippy check test test-m5 build run-repl run-irc clean help
 
 # Default target
 all: check test build
@@ -22,11 +22,17 @@ check: ## Run cargo check
 test: ## Run tests
 	cargo test --all-targets --all-features
 
+test-m5: ## Run M5 multi-user and IRC tests
+	cargo test gateway:: && cargo test irc::
+
 build: ## Build the project
 	cargo build --all-targets --all-features
 
 run-repl: ## Run the REPL
 	cargo run --bin repl
+
+run-irc: ## Run the IRC bot (set IRC_MOCK=1 for stdin mock mode)
+	cargo run --bin irc
 
 clean: ## Clean build artifacts
 	cargo clean

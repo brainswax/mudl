@@ -1,5 +1,6 @@
 pub mod anatomy;
 pub mod behavior_def;
+pub mod behavior_line;
 pub mod item_def;
 pub mod loader;
 pub mod loot_spawner_def;

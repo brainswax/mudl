@@ -24,6 +24,9 @@ use crate::world::place_builder::{
 use crate::world::portal::{
     passable_portal_for_direction, portal_passage_block, portal_permits_exit,
 };
+use crate::gateway::{
+    authorize_meta_command, authorize_plain_command, AuthError, RateLimitContext, RateLimitKind,
+};
 use crate::world::{EventContext, SharedWorld, WorldState};
 
 /// Errors from session-level navigation and state operations.
@@ -67,6 +70,7 @@ impl std::error::Error for SessionError {}
 pub struct Session {
     world: SharedWorld,
     pub player: PlayerSession,
+    rate_limit: Option<RateLimitContext>,
 }
 
 impl std::fmt::Debug for Session {
@@ -90,7 +94,30 @@ impl Session {
         Ok(Self {
             world: world.into_shared(),
             player,
+            rate_limit: None,
         })
+    }
+
+    /// Attach a new connection to an existing shared world (M5 IRC session registry).
+    pub fn attach(world: SharedWorld, player: PlayerSession) -> Self {
+        Self {
+            world,
+            player,
+            rate_limit: None,
+        }
+    }
+
+    /// Attach with shared transport rate limits (IRC nick / Slack user id).
+    pub fn attach_with_rate_limit(
+        world: SharedWorld,
+        player: PlayerSession,
+        rate_limit: RateLimitContext,
+    ) -> Self {
+        Self {
+            world,
+            player,
+            rate_limit: Some(rate_limit),
+        }
     }
 
     /// Build from an in-memory graph (tests and tooling).
@@ -105,6 +132,7 @@ impl Session {
         Self {
             world: world.into_shared(),
             player: PlayerSession::test(player_id, current_location),
+            rate_limit: None,
         }
     }
 
@@ -112,18 +140,56 @@ impl Session {
         &self.world
     }
 
-    /// Read-only access under the world mutex.
+    /// Enforce RBAC for an `@`-prefixed meta verb (verb without `@`).
+    pub fn authorize_meta(&self, verb: &str) -> Result<(), AuthError> {
+        self.with_world(|world, player| {
+            let actor = world
+                .object(player.actor_id())
+                .ok_or(AuthError::ActorNotFound)?;
+            authorize_meta_command(actor, verb)
+        })
+    }
+
+    /// Enforce RBAC for privileged plain verbs (`load`, `save`, `module …`).
+    pub fn authorize_plain(&self, cmd: &str, subcommand: Option<&str>) -> Result<(), AuthError> {
+        self.with_world(|world, player| {
+            let actor = world
+                .object(player.actor_id())
+                .ok_or(AuthError::ActorNotFound)?;
+            authorize_plain_command(actor, cmd, subcommand)
+        })
+    }
+
+    /// Read-only access under the world mutex (sync REPL).
     pub fn with_world<R>(&self, f: impl FnOnce(&WorldState, &PlayerSession) -> R) -> R {
         let guard = self.world.lock_blocking();
         f(&guard, &self.player)
     }
 
-    /// Mutable access for one command — holds the lock for the whole closure.
+    /// Read-only access under the world mutex (async IRC / gateway).
+    pub async fn with_world_async<R>(
+        &self,
+        f: impl FnOnce(&WorldState, &PlayerSession) -> R,
+    ) -> R {
+        let guard = self.world.lock().await;
+        f(&guard, &self.player)
+    }
+
+    /// Mutable access for one command — holds the lock for the whole closure (sync REPL).
     pub fn with_locked<R>(
         &mut self,
         f: impl FnOnce(&mut WorldState, &mut PlayerSession) -> R,
     ) -> R {
         let mut guard = self.world.lock_blocking();
+        f(&mut guard, &mut self.player)
+    }
+
+    /// Mutable access for one command — async lock; yields under contention (IRC).
+    pub async fn with_locked_async<R>(
+        &mut self,
+        f: impl FnOnce(&mut WorldState, &mut PlayerSession) -> R,
+    ) -> R {
+        let mut guard = self.world.lock().await;
         f(&mut guard, &mut self.player)
     }
 
@@ -194,8 +260,7 @@ impl Session {
         persistence: &P,
         id: &ObjectId,
     ) -> anyhow::Result<bool> {
-        let mut world = self.world.lock_blocking();
-        world.ensure_object(persistence, id).await
+        self.world.ensure_object(persistence, id).await
     }
 
     pub fn sync_location_from_player(&mut self) {
@@ -206,8 +271,22 @@ impl Session {
         self.with_world(|world, player| player.resolve_target(world, name, scope))
     }
 
+    pub async fn resolve_target_async(&self, name: &str, scope: ResolveScope) -> TargetResolution {
+        self.with_world_async(|world, player| player.resolve_target(world, name, scope))
+            .await
+    }
+
     pub fn display_context(&self, mode: DisplayMode) -> DisplayContext {
         self.with_world(|world, player| player.display_context(world, mode))
+    }
+
+    pub async fn display_context_async(&self, mode: DisplayMode) -> DisplayContext {
+        self.with_world_async(|world, player| player.display_context(world, mode))
+            .await
+    }
+
+    pub async fn objects_async(&self) -> HashMap<ObjectId, Object> {
+        self.with_world_async(|world, _| world.objects().clone()).await
     }
 
     pub fn perceive_hidden_on_look(&mut self) -> crate::world::EventOutcome {
@@ -235,6 +314,32 @@ impl Session {
         })
     }
 
+    pub async fn perceive_hidden_on_look_async(&mut self) -> crate::world::EventOutcome {
+        self.with_locked_async(|world, player| {
+            let Some(room_id) = player.current_location().cloned() else {
+                return crate::world::EventOutcome::default();
+            };
+            let crate::world::WorldMutation {
+                objects,
+                anatomy,
+                dispatch,
+                dirty,
+            } = world.borrow_mutation();
+            let outcome = crate::world::run_discovery_on_look(
+                dispatch,
+                &room_id,
+                player.player_id(),
+                objects,
+                anatomy,
+            );
+            for id in &outcome.dirty {
+                dirty.mark(id);
+            }
+            outcome
+        })
+        .await
+    }
+
     pub fn inventory_context<'a>(&'a mut self) -> InventoryContextHolder<'a> {
         InventoryContextHolder { session: self }
     }
@@ -249,9 +354,44 @@ impl Session {
 
     /// Move the player along an exit from the current location.
     pub fn go(&mut self, direction: &str) -> Result<String, SessionError> {
+        self.check_movement_rate_limit()?;
         self.mutate_player(|world, player| go_impl(direction, world, player))
     }
 
+    /// Async movement for IRC handlers (`world.lock().await` under contention).
+    pub async fn go_async(&mut self, direction: &str) -> Result<String, SessionError> {
+        self.check_movement_rate_limit()?;
+        self.with_locked_async(|world, player| go_impl(direction, world, player))
+            .await
+    }
+
+    fn check_movement_rate_limit(&self) -> Result<(), SessionError> {
+        let Some(ctx) = &self.rate_limit else {
+            return Ok(());
+        };
+        ctx.check(RateLimitKind::Movement).map_err(|denied| {
+            let message = ctx
+                .limiter
+                .lock()
+                .map(|limiter| limiter.denial_message(denied.kind))
+                .unwrap_or_else(|_| "You're moving too quickly. Slow down.".to_string());
+            SessionError::Blocked(message)
+        })
+    }
+
+    /// Run inventory helpers under the async world lock (IRC).
+    pub async fn with_inventory_async<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::inventory::InventoryContext<'_>) -> R,
+    ) -> R {
+        self.with_locked_async(|world, player| {
+            let mut ctx = player.inventory_context(world);
+            f(&mut ctx)
+        })
+        .await
+    }
+
+    /// Builder `@dig` — holds the world lock for the whole factory + graph mutation (rare).
     pub async fn dig_place<P: Persistence>(
         &mut self,
         factory: &ObjectFactory<P>,
@@ -286,18 +426,35 @@ impl Session {
         &mut self,
         persistence: &P,
     ) -> anyhow::Result<usize> {
-        let mut world = self.world.lock_blocking();
-        world.persist_changes(persistence).await
+        self.world.persist_changes(persistence).await
     }
 
+    /// Persist dirty objects only. No-op when nothing is marked dirty.
     pub async fn persist<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
-        let mut world = self.world.lock_blocking();
-        world.persist(persistence).await
+        self.persist_changes(persistence).await?;
+        Ok(())
     }
 
     pub async fn persist_all<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
-        let mut world = self.world.lock_blocking();
-        world.persist_all(persistence).await
+        self.world.persist_all(persistence).await
+    }
+
+    /// Optimistic single-object save with conflict retry; updates the in-memory graph revision.
+    ///
+    /// Uses [`WorldState::cache_object`] so the row is not re-marked dirty after a successful write.
+    pub async fn persist_object<P: Persistence>(
+        &mut self,
+        persistence: &P,
+        mut obj: Object,
+    ) -> anyhow::Result<Object> {
+        crate::persistence::save_object_with_retry(
+            persistence,
+            &mut obj,
+            crate::persistence::DEFAULT_SAVE_RETRIES,
+        )
+        .await?;
+        self.mutate_player(|world, _| world.cache_object(obj.clone()));
+        Ok(obj)
     }
 
     pub fn len(&self) -> usize {
@@ -710,6 +867,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn two_connections_share_one_world() {
+        let (_persistence, mut first) = sample_session().await;
+        let hero2 = ObjectId::new("player:hero-002");
+        let void_id = ObjectId::new("room:void-001");
+
+        first.mutate_player(|world, _| {
+            let mut hero2_obj = bare("player:hero-002", "Hero Two");
+            hero2_obj.set_property_string("body_plan", "human");
+            hero2_obj.location = Some(void_id.clone());
+            world.upsert_object(hero2_obj);
+        });
+
+        let shared = first.shared_world().clone();
+        let player2 = first.with_world(|world, _| {
+            PlayerSession::connect(hero2.clone(), Some(void_id.clone()), world)
+        });
+        let session2 = Session::attach(shared, player2);
+        let mut session1 = first;
+
+        session1.go("north").unwrap();
+        assert_eq!(
+            session1.current_location().map(|id| id.as_str()),
+            Some("room:north-001")
+        );
+        assert_eq!(
+            session2.with_world(|world, _| {
+                world
+                    .object(session1.player_id())
+                    .and_then(|p| p.location.as_ref().map(|id| id.as_str().to_string()))
+            }),
+            Some("room:north-001".to_string())
+        );
+        assert_eq!(
+            session2.current_location().map(|id| id.as_str()),
+            Some("room:void-001")
+        );
+    }
+
+    #[tokio::test]
+    async fn authorize_meta_denies_player_tier_for_wizard_verbs() {
+        let (_persistence, mut session) = sample_session().await;
+        let hero_id = session.player_id().clone();
+
+        session.object_mut(&hero_id, |player| {
+            player.permissions = PermissionFlags::player_default();
+        });
+        assert!(session.authorize_meta("examine").is_err());
+        assert!(session.authorize_meta("set").is_err());
+
+        session.object_mut(&hero_id, |player| {
+            player.permissions = PermissionFlags::builder_role();
+        });
+        assert!(session.authorize_meta("examine").is_ok());
+        assert!(session.authorize_meta("set").is_err());
+
+        session.object_mut(&hero_id, |player| {
+            player.permissions = PermissionFlags::wizard_role();
+        });
+        assert!(session.authorize_meta("set").is_ok());
+    }
+
+    #[tokio::test]
+    async fn set_current_location_syncs_actor_object() {
+        let (_persistence, mut session) = sample_session().await;
+        let north = ObjectId::new("room:north-001");
+        session.set_current_location(north.clone());
+        assert_eq!(session.current_location(), Some(&north));
+        assert_eq!(
+            session
+                .object(session.player_id())
+                .and_then(|p| p.location.clone()),
+            Some(north)
+        );
+    }
+
+    #[tokio::test]
     async fn go_updates_player_and_location() {
         let (_persistence, mut session) = sample_session().await;
         let msg = session.go("north").unwrap();
@@ -825,6 +1058,35 @@ mod tests {
             session.current_location().map(|id| id.as_str()),
             Some("room:north-001")
         );
+    }
+
+    #[tokio::test]
+    async fn persist_object_syncs_revision_after_conflict() {
+        let (persistence, mut session) = sample_session().await;
+        let hero_id = session.player_id().clone();
+        let mut local = session.object(&hero_id).unwrap();
+        local.name = "Renamed".to_string();
+
+        let mut stale = session.object(&hero_id).unwrap();
+        stale.name = "Stale".to_string();
+        persistence.save_object(&stale).await.unwrap();
+
+        let saved = session.persist_object(&persistence, local).await.unwrap();
+        assert_eq!(saved.name, "Renamed");
+        assert!(saved.revision >= 2);
+        assert!(saved.updated_at.is_some());
+
+        let cached = session.object(&hero_id).unwrap();
+        assert_eq!(cached.revision, saved.revision);
+        assert_eq!(cached.name, "Renamed");
+        assert!(!session.is_dirty(&hero_id));
+    }
+
+    #[tokio::test]
+    async fn persist_noop_when_nothing_dirty() {
+        let (persistence, mut session) = sample_session().await;
+        session.persist(&persistence).await.unwrap();
+        assert_eq!(session.dirty_len(), 0);
     }
 
     #[tokio::test]

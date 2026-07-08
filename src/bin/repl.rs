@@ -6,16 +6,17 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 use mudl::command::{
     apply_set, apply_trigger_add, apply_trigger_clear, apply_trigger_remove, apply_trigger_set,
     apply_unset, bootstrap_active_universe, create_at_location_with_options,
-    create_key_for_container, format_trigger_list, has_wizard_permission, narrate_trigger_added,
+    create_key_for_container, format_trigger_list, narrate_trigger_added,
     narrate_trigger_cleared, narrate_trigger_removed, narrate_trigger_set,
     narrate_trigger_test_empty, package_module, parse_command_line, parse_create_command,
     parse_dig_command, parse_link_command, parse_set_command, parse_trigger_command,
     parse_unlink_command, parse_unset_command, preview_trigger_test, reload_universe,
     resolve_container_target, resolve_trigger_target_name, soft_delete_object, trigger_command_help,
-    undelete_object, validate_trigger_host, wizard_access_denied, TriggerCommand, TriggerError,
+    undelete_object, validate_trigger_host, CommandDispatcher, CommandResult, LookOptions,
+    TriggerCommand, TriggerError,
 };
 use mudl::creature::{
-    add_behavior_template, attack_creature, damage_creature, format_creature_behavior_list,
+    add_behavior_template, damage_creature, format_creature_behavior_list,
     heal_creature, parse_vital_amount_args, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
 };
 use mudl::display::{
@@ -24,16 +25,18 @@ use mudl::display::{
     narrate_module_reloaded, narrate_no_location, narrate_no_location_builder,
     narrate_not_in_cache, narrate_saved, narrate_target_not_found, narrate_wizard_not_found,
     parse_examine_request, resolve_examine_request, resolve_target, Describable, DisplayContext,
-    DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope, TargetResolution,
+    DisplayMode, ExamineError, ExamineResolution, ResolveScope, TargetResolution,
 };
 use mudl::inventory::{
-    break_item, close_container, describe_inventory, drop_item, harvest_item, lock_container,
+    break_item, close_container, harvest_item, lock_container,
     open_container, parse_put_args, parse_unlock_args, put_item, read_item, remove_item,
-    take_item, unlock_container, use_item, wear_item, wield_item,
+    unlock_container, use_item, wear_item, wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
-use mudl::persistence::{Persistence, SqlitePersistence};
+use mudl::persistence::{
+    Persistence, SqlitePersistence, WriterGuard, WriterLockOptions, WriterMode,
+};
 use mudl::repl::Session;
 use mudl::world::{exit_index, movement_from_line};
 use mudl::world::place_builder::DigRequest;
@@ -62,6 +65,12 @@ async fn resolve_in_session(
 async fn persist_session(session: &mut Session, persistence: &SqlitePersistence) -> Result<()> {
     let _ = session.persist_changes(persistence).await?;
     Ok(())
+}
+
+fn print_command_result(result: &CommandResult) {
+    for line in &result.lines_to_actor {
+        println!("{line}");
+    }
 }
 
 fn init_tracing() {
@@ -97,67 +106,13 @@ async fn run_look_command(
     target: Option<&str>,
     builder: bool,
 ) -> Result<(), anyhow::Error> {
-    match resolve_in_session(session, persistence, target).await {
-        Ok(TargetResolution::Found(id)) => {
-            let mode = if builder {
-                DisplayMode::Builder
-            } else {
-                DisplayMode::Player
-            };
-            let is_room_look =
-                !builder && session.objects().get(&id).is_some_and(|obj| obj.is_location());
-            if is_room_look {
-                let discovery = session.perceive_hidden_on_look();
-                for line in discovery.lines {
-                    println!("{line}");
-                }
-            }
-            let mut ctx = session.display_context(mode.clone());
-            if !builder {
-                ctx = ctx.with_flags(DisplayFlags::BRIEF);
-            }
-            if let Some(obj) = ctx.objects.get(&id) {
-                render_object(obj, &ctx, builder, false);
-            } else if let Some(target) = target {
-                println!("{}", narrate_target_not_found(target));
-            } else {
-                println!(
-                    "{}",
-                    if builder {
-                        narrate_no_location_builder("Try '@look <target>' or '@look here'.")
-                    } else {
-                        narrate_no_location()
-                    }
-                );
-            }
-        }
-        Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
-        Ok(TargetResolution::NotFound) => {
-            if let Some(name) = target {
-                println!("{}", narrate_target_not_found(name));
-            } else {
-                println!(
-                    "{}",
-                    if builder {
-                        narrate_no_location_builder("Try '@look <target>' or '@look here'.")
-                    } else {
-                        narrate_no_location()
-                    }
-                );
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "look failed");
-            println!(
-                "{}",
-                if builder {
-                    "The builder view remains obscured."
-                } else {
-                    "Something stirs in the void, but you cannot make sense of it."
-                }
-            );
-        }
-    }
+    let options = if builder {
+        LookOptions::builder()
+    } else {
+        LookOptions::player(ResolveScope::General)
+    };
+    let result = CommandDispatcher::look_async(session, persistence, target, options).await;
+    print_command_result(&result);
     Ok(())
 }
 
@@ -233,6 +188,15 @@ async fn main() -> Result<()> {
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "repl.db".to_string());
 
     info!("MUDL REPL starting");
+    let writer_options = WriterLockOptions::from_env(WriterMode::Repl);
+    let _writer_guard = WriterGuard::acquire(&db_url, &writer_options).map_err(anyhow::Error::from)?;
+    if let Some(record) = _writer_guard.record() {
+        info!(
+            mode = record.mode.as_str(),
+            pid = record.pid,
+            "acquired single-writer database lock (SEC-23)"
+        );
+    }
     let persistence = SqlitePersistence::new(&db_url).await?;
     let factory = ObjectFactory::new(persistence.clone());
     let player_id = ObjectId::new(
@@ -331,13 +295,21 @@ async fn main() -> Result<()> {
                 let _ = rl.add_history_entry(line.as_str());
 
                 let parsed = parse_command_line(input);
-                if parsed.is_meta && !has_wizard_permission(session.player_id()) {
-                    println!("{}", wizard_access_denied());
-                    continue;
-                }
 
                 let parts: Vec<&str> = input.split_whitespace().collect();
                 let cmd = parts[0];
+
+                if parsed.is_meta {
+                    if let Err(err) = session.authorize_meta(&parsed.verb) {
+                        println!("{err}");
+                        continue;
+                    }
+                } else if let Err(err) =
+                    session.authorize_plain(cmd, parts.get(1).copied())
+                {
+                    println!("{err}");
+                    continue;
+                }
 
                 if cmd == "go" && parts.len() < 2 {
                     println!("Usage: go <direction>  (or just: north, around, in, …)");
@@ -347,15 +319,19 @@ async fn main() -> Result<()> {
                     .current_location()
                     .and_then(|loc| session.object(loc))
                     .map(|place| exit_index::ExitIndex::from_place(&place));
-                if let Some(dir) = movement_from_line(cmd, &parts[1..], exit_index.as_ref()) {
-                    match session.go(&dir) {
-                        Ok(msg) => {
-                            println!("{msg}");
-                            if let Err(e) = persist_session(&mut session, &persistence).await {
-                                error!(error = %e, "persist after go failed");
-                            }
+                if movement_from_line(cmd, &parts[1..], exit_index.as_ref()).is_some() {
+                    let movement_line = mudl::command::CommandLine {
+                        is_meta: false,
+                        verb: parsed.verb.clone(),
+                        args: parsed.args.clone(),
+                    };
+                    let result =
+                        CommandDispatcher::movement_async(&mut session, &movement_line).await;
+                    print_command_result(&result);
+                    if result.persist_world {
+                        if let Err(e) = persist_session(&mut session, &persistence).await {
+                            error!(error = %e, "persist after go failed");
                         }
-                        Err(e) => println!("{e}"),
                     }
                     continue;
                 }
@@ -596,29 +572,13 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let target = parts[1..].join(" ");
-                        match session.with_inventory(|ctx| {
-                            attack_creature(
-                                ctx.dispatch,
-                                ctx.player_id,
-                                ctx.room_id,
-                                ctx.objects,
-                                ctx.anatomy,
-                                ctx.dirty.as_deref_mut(),
-                                &target,
-                            )
-                        }) {
-                            Ok(outcome) => {
-                                for line in outcome.lines {
-                                    println!("{line}");
-                                }
-                                if let Some(loc) = outcome.respawn_location {
-                                    session.set_current_location(loc);
-                                }
-                                if let Err(e) = persist_session(&mut session, &persistence).await {
-                                    error!(error = %e, "persist after attack failed");
-                                }
+                        let result =
+                            CommandDispatcher::attack_async(&mut session, Some(&target)).await;
+                        print_command_result(&result);
+                        if result.persist_world {
+                            if let Err(e) = persist_session(&mut session, &persistence).await {
+                                error!(error = %e, "persist after attack failed");
                             }
-                            Err(e) => println!("{e}"),
                         }
                     }
                     "@damage" => {
@@ -872,11 +832,12 @@ async fn main() -> Result<()> {
                                 match outcome {
                                     Ok(()) => {
                                         if !read_only {
-                                            if let Err(e) = persistence.save_object(&obj).await {
+                                            if let Err(e) =
+                                                session.persist_object(&persistence, obj).await
+                                            {
                                                 error!(error = %e, "@trigger save failed");
                                                 println!("The change fades before it can take hold.");
                                             }
-                                            session.upsert_object(obj);
                                         }
                                     }
                                     Err(TriggerError::NotFound(msg) | TriggerError::Validation(msg)) => {
@@ -947,15 +908,8 @@ async fn main() -> Result<()> {
                         }
                     }
                     "inventory" | "i" => {
-                        if let Some(player) = session.object(session.player_id()) {
-                            let graph = session.objects();
-                            println!(
-                                "{}",
-                                describe_inventory(&player, &graph, &session.anatomy())
-                            );
-                        } else {
-                            println!("You seem to have lost yourself.");
-                        }
+                        let result = CommandDispatcher::inventory_async(&session).await;
+                        print_command_result(&result);
                     }
                     "get" | "take" => {
                         if parts.len() < 2 {
@@ -963,14 +917,13 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        match session.with_inventory(|ctx| take_item(ctx, &item_name)) {
-                            Ok(msg) => {
-                                println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await {
-                                    error!(error = %e, "persist after take failed");
-                                }
+                        let result =
+                            CommandDispatcher::take_async(&mut session, Some(&item_name)).await;
+                        print_command_result(&result);
+                        if result.persist_world {
+                            if let Err(e) = persist_session(&mut session, &persistence).await {
+                                error!(error = %e, "persist after take failed");
                             }
-                            Err(e) => println!("{e}"),
                         }
                     }
                     "drop" => {
@@ -979,14 +932,13 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        match session.with_inventory(|ctx| drop_item(ctx, &item_name)) {
-                            Ok(msg) => {
-                                println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await {
-                                    error!(error = %e, "persist after drop failed");
-                                }
+                        let result =
+                            CommandDispatcher::drop_async(&mut session, Some(&item_name)).await;
+                        print_command_result(&result);
+                        if result.persist_world {
+                            if let Err(e) = persist_session(&mut session, &persistence).await {
+                                error!(error = %e, "persist after drop failed");
                             }
-                            Err(e) => println!("{e}"),
                         }
                     }
                     "put" => {
@@ -1473,13 +1425,20 @@ async fn main() -> Result<()> {
                                             key = %set_cmd.key,
                                             "wizard @set applied"
                                         );
-                                        if let Err(e) = persistence.save_object(&obj).await {
-                                            error!(error = %e, "@set save failed");
-                                            println!("The change fades before it can take hold.");
-                                        } else {
-                                            println!("{}", narrate_field_set(&obj, &set_cmd.key));
+                                        match session.persist_object(&persistence, obj).await {
+                                            Ok(saved) => {
+                                                println!(
+                                                    "{}",
+                                                    narrate_field_set(&saved, &set_cmd.key)
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(error = %e, "@set save failed");
+                                                println!(
+                                                    "The change fades before it can take hold."
+                                                );
+                                            }
                                         }
-                                        session.upsert_object(obj);
                                     }
                                     Err(e) => println!("{e}"),
                                 }
@@ -1532,16 +1491,20 @@ async fn main() -> Result<()> {
                                             key = %unset_cmd.key,
                                             "wizard @unset applied"
                                         );
-                                        if let Err(e) = persistence.save_object(&obj).await {
-                                            error!(error = %e, "@unset save failed");
-                                            println!("The change fades before it can take hold.");
-                                        } else {
-                                            println!(
-                                                "{}",
-                                                narrate_field_unset(&obj, &unset_cmd.key)
-                                            );
+                                        match session.persist_object(&persistence, obj).await {
+                                            Ok(saved) => {
+                                                println!(
+                                                    "{}",
+                                                    narrate_field_unset(&saved, &unset_cmd.key)
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(error = %e, "@unset save failed");
+                                                println!(
+                                                    "The change fades before it can take hold."
+                                                );
+                                            }
                                         }
-                                        session.upsert_object(obj);
                                     }
                                     Err(e) => println!("{e}"),
                                 }
@@ -1585,7 +1548,7 @@ async fn main() -> Result<()> {
                         let id = ObjectId::new(parts[1]);
                         if let Some(obj) = session.object(&id) {
                             let name = obj.name.clone();
-                            match persistence.save_object(&obj).await {
+                            match session.persist_object(&persistence, obj).await {
                                 Ok(_) => {
                                     info!(id = %id, name = %name, "object saved");
                                     println!("{}", narrate_saved(&name));

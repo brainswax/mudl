@@ -10,7 +10,7 @@ This document defines the core data structures and rules that power the MUDL wor
 - **Prototype-based inheritance** — objects inherit from a parent (like classic MOO or JavaScript prototypes) for shared defaults and stackable item templates. Inspect with `examine <object>.parent` or `@examine <object> parent`.
 - **Creature body plans** — anatomy slots (grasp, wear, limb) are defined in MUDL (`@creature human`) and referenced by the player's `creature` property. Inspect with `examine human` or `examine #parent` (for self).
 - **Runtime modifiable** — the world can add, change, or remove properties, verbs, and behaviors while running.
-- **Secure by default** — all mutations go through the API Gateway + RBAC checks.
+- **Secure by default** — live multi-user mutations go through `SessionManager` + RBAC; REPL uses the same RBAC helpers on a single `Session`.
 
 ## Core Types
 
@@ -303,5 +303,5 @@ This design balances readability with the requirement that every object must hav
 ## Implementation Notes
 * Objects are stored in a central WorldState (HashMap<ObjectId, Object> + spatial index for locations).
 * Inheritance resolution is recursive with caching.
-* All mutations are validated by the Gateway before reaching the engine.
+* Transport-facing commands are authorized via `gateway/rbac` before graph mutation.
 * Serialization is straightforward via serde for persistence and GitHub export.

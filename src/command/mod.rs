@@ -1,5 +1,6 @@
 //! Command-layer helpers shared by REPL and future frontends.
 
+pub mod dispatcher;
 pub mod editor;
 pub mod parse;
 pub mod place;
@@ -9,8 +10,13 @@ pub use editor::{
     apply_set, apply_unset, parse_set_command, parse_unset_command, ParsedSetCommand,
     ParsedUnsetCommand,
 };
-pub use parse::{
-    has_wizard_permission, is_meta_command, parse_command_line, wizard_access_denied, CommandLine,
+pub use dispatcher::{
+    CommandDispatcher, CommandResult, LookOptions, MovementChange, PlayerDispatchOptions,
+    SocialIntent,
+};
+pub use parse::{is_meta_command, parse_command_line, CommandLine};
+pub use crate::gateway::{
+    authorize_meta_command, authorize_plain_command, ActorTier, AuthError,
 };
 pub use place::{
     parse_dig_command, parse_link_command, parse_unlink_command, ParsedDigCommand,
@@ -32,9 +38,7 @@ use crate::world::DispatchStack;
 use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse, MudlRoleProps};
 use crate::object::{ContainerSpec, Object, ObjectFactory, ObjectId, WearableSpec};
 use crate::persistence::Persistence;
-use crate::world::{
-    bootstrap_world, bundle_module, persist_all, persist_dirty, DirtyTracker, ModuleManifest,
-};
+use crate::world::{bootstrap_world, bundle_module, ModuleManifest};
 
 /// Load the active MUDL universe from `MUDL_MODULE` / `MUDL_UNIVERSE` env or default.
 pub fn load_active_universe() -> anyhow::Result<LoadedUniverse> {
@@ -465,28 +469,6 @@ pub fn take_from_location(
     take_item(&mut ctx, item_name)
 }
 
-/// Persist inventory-related changes (player + all touched objects).
-pub async fn persist_inventory_changes<P: Persistence>(
-    persistence: &P,
-    objects: &mut HashMap<ObjectId, Object>,
-) -> anyhow::Result<()> {
-    persist_all(persistence, objects).await
-}
-
-/// Persist only dirty objects; falls back to full persist when tracker is empty.
-pub async fn persist_inventory_dirty<P: Persistence>(
-    persistence: &P,
-    objects: &mut HashMap<ObjectId, Object>,
-    dirty: &mut DirtyTracker,
-) -> anyhow::Result<()> {
-    if dirty.is_empty() {
-        persist_all(persistence, objects).await?;
-    } else {
-        persist_dirty(persistence, objects, dirty).await?;
-    }
-    Ok(())
-}
-
 /// Soft-delete an object by ID (wizard). Object remains in the database.
 pub async fn soft_delete_object<P: Persistence>(
     persistence: &P,
@@ -499,8 +481,12 @@ pub async fn soft_delete_object<P: Persistence>(
         .ok_or_else(|| anyhow::anyhow!("Object not found: {id}"))?;
     let name = obj.name.clone();
     obj.soft_delete();
-    let meta = persistence.save_object(&obj).await?;
-    meta.apply_to(&mut obj);
+    crate::persistence::save_object_with_retry(
+        persistence,
+        &mut obj,
+        crate::persistence::DEFAULT_SAVE_RETRIES,
+    )
+    .await?;
     objects.insert(id.clone(), obj);
     Ok(crate::display::narrate_soft_delete(&name))
 }
@@ -520,8 +506,12 @@ pub async fn undelete_object<P: Persistence>(
     }
     let name = obj.name.clone();
     obj.undelete();
-    let meta = persistence.save_object(&obj).await?;
-    meta.apply_to(&mut obj);
+    crate::persistence::save_object_with_retry(
+        persistence,
+        &mut obj,
+        crate::persistence::DEFAULT_SAVE_RETRIES,
+    )
+    .await?;
     objects.insert(id.clone(), obj);
     Ok(crate::display::narrate_restore(&name))
 }
@@ -790,7 +780,9 @@ mod tests {
 
         let mut objects = hydrate_world(&persistence).await.unwrap();
         take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy).unwrap();
-        persist_all(&persistence, &mut objects).await.unwrap();
+        crate::world::persist_all(&persistence, &mut objects)
+            .await
+            .unwrap();
 
         let restored = hydrate_world(&persistence).await.unwrap();
         let player = restored.get(&owner).unwrap();
