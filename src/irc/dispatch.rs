@@ -13,9 +13,13 @@ use crate::command::{
 };
 use crate::display::{format_room_look_player, DisplayMode};
 use crate::gateway::{
-    normalize_nick, parse_login_args, rate_limit_kind_for_line, resolve_player_for_login,
-    verify_login, LoginRequest, RateLimitKind, SessionManager,
+    normalize_nick, normalize_player_display_name, normalize_player_login_name,
+    parse_login_args, rate_limit_kind_for_line, resolve_player_for_login, verify_login,
+    display_name_from_login_name, LoginRequest, RateLimitKind, SessionManager,
 };
+use crate::irc::nick::sanitize_nick_display;
+use crate::mudl::AnatomyRegistry;
+use crate::object::ObjectFactory;
 use crate::persistence::Persistence;
 
 use super::channels::{room_channel_name, room_join_notice};
@@ -257,6 +261,9 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
     let sender = normalize_nick(nick);
     match line.verb.as_str() {
         "login" => dispatch_login(manager, persistence, nick, &line.args, sender, config).await,
+        "register" => {
+            dispatch_register(manager, persistence, nick, &line.args, sender, config).await
+        }
         "nickserv" | "ns" => {
             dispatch_nickserv_logged_out(nick, sender, &line.args, config)
         }
@@ -333,6 +340,100 @@ fn split_help_lines(text: &str) -> Vec<String> {
     text.lines().map(str::to_string).collect()
 }
 
+async fn dispatch_register<P: Persistence + Clone>(
+    manager: &mut SessionManager<P>,
+    persistence: &P,
+    nick: &str,
+    args: &[String],
+    sender: String,
+    config: &IrcConfig,
+) -> DispatchOutcome {
+    let (login_name, display_name) = if args.is_empty() {
+        let login = match normalize_player_login_name(nick) {
+            Ok(name) => name,
+            Err(message) => {
+                return DispatchOutcome {
+                    sender,
+                    to_sender: vec![message.to_string()],
+                    ..Default::default()
+                };
+            }
+        };
+        let display = sanitize_nick_display(nick);
+        (login, display)
+    } else {
+        let raw = args.join(" ");
+        let login = match normalize_player_login_name(&raw) {
+            Ok(name) => name,
+            Err(message) => {
+                return DispatchOutcome {
+                    sender,
+                    to_sender: vec![message.to_string()],
+                    ..Default::default()
+                };
+            }
+        };
+        let display = match normalize_player_display_name(&raw) {
+            Ok(name) => name,
+            Err(_) => display_name_from_login_name(&login),
+        };
+        (login, display)
+    };
+
+    let factory = ObjectFactory::new(persistence.clone());
+    let anatomy = active_anatomy();
+    match manager
+        .register_and_login(nick, &login_name, &display_name, &factory, &anatomy)
+        .await
+    {
+        Ok(player_id) => {
+            let outcome = DispatchOutcome {
+                sender: sender.clone(),
+                to_sender: vec![
+                    format!("Welcome to MUDL, {display_name}! Type 'help' for commands."),
+                    format!("Login name: {login_name} ({player_id})."),
+                ],
+                channel_sync: Some(ChannelSync {
+                    nick: sender.clone(),
+                    join: vec![
+                        config.world_channel.clone(),
+                        {
+                            let room_id = if let Some(handle) = manager.session_handle(nick) {
+                                let session = handle.lock().await;
+                                session.current_location().cloned()
+                            } else {
+                                None
+                            };
+                            room_id
+                                .map(|room| room_channel_name(&config.room_channel_prefix, &room))
+                                .unwrap_or_default()
+                        },
+                    ]
+                    .into_iter()
+                    .filter(|c| !c.is_empty())
+                    .collect(),
+                    part: Vec::new(),
+                }),
+                persist: true,
+                ..Default::default()
+            };
+            outcome
+        }
+        Err(err) => DispatchOutcome {
+            sender,
+            to_sender: vec![err.to_string()],
+            ..Default::default()
+        },
+    }
+}
+
+fn active_anatomy() -> AnatomyRegistry {
+    crate::command::load_active_universe()
+        .ok()
+        .and_then(|u| u.active_world().ok().map(|w| w.anatomy.clone()))
+        .unwrap_or_default()
+}
+
 async fn dispatch_login<P: Persistence + Clone>(
     manager: &mut SessionManager<P>,
     _persistence: &P,
@@ -351,9 +452,16 @@ async fn dispatch_login<P: Persistence + Clone>(
             guard.objects(),
         );
         let Some(player_id) = player_id else {
+            let message = if config.login_auth.require_auth {
+                "Invalid login credentials.".to_string()
+            } else {
+                format!(
+                    "No player login name matches nick '{nick}'. Try 'register', 'login <player-id>' (e.g. 'login player:brains'), or 'register <login-name>'."
+                )
+            };
             return DispatchOutcome {
                 sender,
-                to_sender: vec!["Invalid login credentials.".to_string()],
+                to_sender: vec![message],
                 ..Default::default()
             };
         };
@@ -487,7 +595,11 @@ async fn dispatch_quit<P: Persistence + Clone + Send + Sync>(
 }
 
 fn logged_out_help_text(config: &IrcConfig) -> String {
-    let mut lines = vec![config.login_auth.logged_out_help()];
+    let mut lines = vec![
+        "Send 'register [login-name]' to create a character (requires a wizard on this world)."
+            .to_string(),
+        config.login_auth.logged_out_help(),
+    ];
     if config.identity_policy.is_strict() || config.nickserv.is_configured() {
         lines.push("NickServ: 'nickserv identify <password>' or 'nickserv help'.".to_string());
     }
@@ -606,8 +718,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_binds_nick_to_player_name() {
+    async fn login_binds_nick_to_player_login_name() {
         let (manager, config) = manager_arc().await;
+        {
+            let mgr = manager.lock().await;
+            let mut guard = mgr.world().lock().await;
+            let mut hero = guard
+                .object(&ObjectId::new("player:hero-001"))
+                .cloned()
+                .expect("hero");
+            hero.id = ObjectId::new("player:alice");
+            hero.set_property_string(crate::object::LOGIN_NAME_PROPERTY, "alice");
+            guard.cache_object(hero);
+        }
         let outcome = dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
         assert!(outcome.to_sender.iter().any(|l| l.contains("Welcome")));
         assert!(manager.lock().await.is_connected("alice"));
@@ -656,6 +779,59 @@ mod tests {
         let sync = outcome.channel_sync.expect("channel sync");
         assert!(sync.join.iter().any(|c| c.contains("north-001")));
         assert!(sync.part.iter().any(|c| c.contains("void-001")));
+    }
+
+    #[tokio::test]
+    async fn register_creates_player_when_wizard_exists() {
+        let (manager, config) = manager_arc().await;
+        let mut wizard = bare("player:wizard-001", "Wizard");
+        wizard.permissions = PermissionFlags::wizard_role();
+        wizard.owner = ObjectId::new("player:wizard-001");
+        {
+            let mgr = manager.lock().await;
+            mgr.world()
+                .lock()
+                .await
+                .cache_object(wizard);
+        }
+
+        let outcome = dispatch_command(
+            Arc::clone(&manager),
+            "brains",
+            "register",
+            &config,
+        )
+        .await;
+        assert!(outcome.to_sender.iter().any(|l| l.contains("Welcome")));
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("Login name: brains (player:brains)")));
+        assert!(manager.lock().await.is_connected("brains"));
+    }
+
+    #[tokio::test]
+    async fn register_denied_without_wizard_in_world() {
+        let (manager, config) = manager_arc().await;
+        let outcome = dispatch_command(manager, "alice", "register", &config).await;
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("Registration is closed")));
+    }
+
+    #[tokio::test]
+    async fn open_login_hints_when_nick_does_not_match_player_name() {
+        let (manager, config) = manager_arc().await;
+        let outcome = dispatch_command(manager, "brains", "login", &config).await;
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("No player login name matches nick")));
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("login <player-id>")));
     }
 
     #[tokio::test]

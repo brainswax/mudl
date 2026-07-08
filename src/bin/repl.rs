@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
+use mudl::gateway::ensure_bootstrap_wizard;
 use mudl::command::{
     apply_set, apply_trigger_add, apply_trigger_clear, apply_trigger_remove, apply_trigger_set,
     apply_unset, bootstrap_active_universe, create_at_location_with_options,
@@ -237,6 +238,22 @@ async fn main() -> Result<()> {
         Err(e) => {
             warn!(error = %e, "bootstrap failed");
         }
+    }
+
+    match ensure_bootstrap_wizard(
+        &factory,
+        &player_id,
+        &active_anatomy,
+        bootstrap_location.clone(),
+    )
+    .await
+    {
+        Ok(true) => info!(
+            player = %player_id,
+            "created or upgraded bootstrap wizard player from DEFAULT_PLAYER"
+        ),
+        Ok(false) => {}
+        Err(err) => warn!(error = %err, "bootstrap wizard setup failed"),
     }
 
     let mut session = match Session::restore(

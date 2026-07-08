@@ -17,6 +17,7 @@ mod persistence;
 mod rate_limit;
 mod rbac;
 mod registry;
+mod registration;
 mod session_manager;
 
 #[cfg(test)]
@@ -47,4 +48,13 @@ pub use rate_limit::{
     RateLimitKind, RateLimiter,
 };
 pub use registry::{normalize_nick, ConnectionRegistry, RegistryError};
+pub use crate::object::{
+    display_name_from_login_name, display_name_from_player_id, find_player_by_login_name,
+    normalize_player_login_name, player_id_for_login_name, player_id_login_slug, player_login_name,
+    player_login_name_matches, LOGIN_NAME_PROPERTY,
+};
+pub use registration::{
+    default_spawn_location, ensure_bootstrap_wizard, has_wizard, normalize_player_display_name,
+    registrations_allowed, RegisterError, MAX_PLAYER_DISPLAY_NAME_LEN,
+};
 pub use session_manager::{LoginError, LogoutError, SessionManager};

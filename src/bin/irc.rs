@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use mudl::command::bootstrap_active_universe;
-use mudl::gateway::SessionManager;
+use mudl::gateway::{ensure_bootstrap_wizard, SessionManager};
 use mudl::irc::{
     cap_end_command, cap_ls_complete, cap_request_command, connect, is_nick_in_use, is_ping,
     is_registration_incomplete, is_welcome, log_outbound_command, parse_nickserv_reply,
@@ -55,10 +55,23 @@ async fn open_session_manager(
     )?;
     let anatomy = universe.active_world()?.anatomy.clone();
 
-    if let Ok((_universe, loc_id)) = bootstrap_active_universe(&factory, player_id.clone()).await {
-        info!(location = %loc_id, "world bootstrapped for IRC");
-    } else {
-        warn!("bootstrap skipped or failed — using persisted world");
+    let bootstrap_location =
+        if let Ok((_universe, loc_id)) = bootstrap_active_universe(&factory, player_id.clone()).await
+        {
+            info!(location = %loc_id, "world bootstrapped for IRC");
+            Some(loc_id)
+        } else {
+            warn!("bootstrap skipped or failed — using persisted world");
+            None
+        };
+
+    match ensure_bootstrap_wizard(&factory, &player_id, &anatomy, bootstrap_location).await {
+        Ok(true) => info!(
+            player = %player_id,
+            "created bootstrap wizard player from DEFAULT_PLAYER"
+        ),
+        Ok(false) => {}
+        Err(err) => warn!(error = %err, "bootstrap wizard setup failed"),
     }
 
     SessionManager::open_with_rate_limits(persistence, anatomy, config.rate_limits.clone())

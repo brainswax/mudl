@@ -56,7 +56,7 @@ impl LoginAuthPolicy {
             "Send 'login <token>' or 'login <player-id> <token>'. Ask your operator for credentials."
                 .to_string()
         } else {
-            "Send 'login' to bind your nick to a matching player name, or 'login <player-id>'."
+            "Send 'register [login-name]' to create a character, 'login' to bind your nick to a matching login name, or 'login <player-id>'."
                 .to_string()
         }
     }
@@ -156,7 +156,7 @@ pub fn resolve_player_for_login(
     objects
         .values()
         .filter(|obj| obj.id.as_str().starts_with("player:"))
-        .find(|obj| obj.name.eq_ignore_ascii_case(identity))
+        .find(|obj| crate::object::player_login_name_matches(obj, identity))
         .map(|obj| obj.id.clone())
 }
 
@@ -364,15 +364,18 @@ mod tests {
     }
 
     #[test]
-    fn permissive_allows_name_match_without_token() {
+    fn permissive_allows_login_name_match_without_token() {
         let policy = LoginAuthPolicy::permissive();
-        let objs = objects(&[("player:hero-001", "Alice", None)]);
+        let mut objs = objects(&[("player:alice", "Alice Wonder", None)]);
+        objs.get_mut(&ObjectId::new("player:alice"))
+            .unwrap()
+            .set_property_string(crate::object::LOGIN_NAME_PROPERTY, "alice");
         let parsed = ParsedLoginArgs {
             explicit_player_id: None,
             token: None,
         };
         let id = resolve_player_for_login("alice", &parsed, &policy, &objs);
-        assert_eq!(id.as_ref().map(|i| i.as_str()), Some("player:hero-001"));
+        assert_eq!(id.as_ref().map(|i| i.as_str()), Some("player:alice"));
     }
 
     #[test]

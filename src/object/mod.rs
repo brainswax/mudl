@@ -2,6 +2,7 @@ mod editor;
 mod factory;
 mod fields;
 mod location;
+mod player_identity;
 mod roles;
 mod weight;
 
@@ -13,6 +14,11 @@ use bitflags::bitflags;
 use crate::display::{Describable, DisplayContext, DisplayFlags, DisplayMode};
 pub use editor::{parse_value_literal, resolve_object_ref, set_field, unset_field, EditError};
 pub use factory::ObjectFactory;
+pub use player_identity::{
+    display_name_from_login_name, display_name_from_player_id, find_player_by_login_name,
+    normalize_player_login_name, player_id_for_login_name, player_id_login_slug,
+    player_login_name, player_login_name_matches, LOGIN_NAME_PROPERTY,
+};
 pub use fields::{classify_key, is_state_property, FieldKind, STATE_PROPERTY_KEYS};
 pub use location::LocationRef;
 pub use roles::{

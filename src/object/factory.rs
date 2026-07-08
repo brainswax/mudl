@@ -39,9 +39,48 @@ impl<P: Persistence> ObjectFactory<P> {
     pub async fn create_player(
         &self,
         display_name: &str,
-        owner: ObjectId,
+        _owner: ObjectId,
         anatomy: &AnatomyRegistry,
     ) -> anyhow::Result<Object> {
+        let login_name = id_base_from_display_name(display_name);
+        self.create_player_with_login_name(&login_name, display_name, anatomy)
+            .await
+    }
+
+    /// Create a player with a unique login name (`player:<login>` — no counter suffix).
+    pub async fn create_player_with_login_name(
+        &self,
+        login_name: &str,
+        display_name: &str,
+        anatomy: &AnatomyRegistry,
+    ) -> anyhow::Result<Object> {
+        let id = super::player_id_for_login_name(login_name);
+        if self.persistence.load_object(&id).await?.is_some() {
+            anyhow::bail!("player login name '{login_name}' is already taken");
+        }
+        self.create_player_at_id(
+            id,
+            display_name,
+            anatomy,
+            PermissionFlags::OWNER,
+            None,
+        )
+        .await
+    }
+
+    /// Create a player at a fixed id (bootstrap wizard). Idempotent if the row already exists.
+    pub async fn create_player_at_id(
+        &self,
+        id: ObjectId,
+        display_name: &str,
+        anatomy: &AnatomyRegistry,
+        permissions: PermissionFlags,
+        location: Option<ObjectId>,
+    ) -> anyhow::Result<Object> {
+        if let Some(existing) = self.persistence.load_object(&id).await? {
+            return Ok(existing);
+        }
+
         let template = anatomy
             .default_template()
             .cloned()
@@ -50,13 +89,33 @@ impl<P: Persistence> ObjectFactory<P> {
                 creature: "human".to_string(),
                 gender: "neutral".to_string(),
             });
-        let slug = id_base_from_display_name(display_name);
-        let mut player = self
-            .allocate_named("player", &slug, display_name, owner)
-            .await?;
+
+        let mut player = Object {
+            id: id.clone(),
+            name: display_name.to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: id.clone(),
+            permissions,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            is_deleted: false,
+            deleted_at: None,
+            revision: 0,
+            updated_at: None,
+        };
         player.init_creature_role(&template);
         if let Some(def) = anatomy.creature(&template.creature) {
             init_creature_vitality(&mut player, def);
+        }
+        if let Some(slug) = super::player_id_login_slug(&id) {
+            player.set_property_string(super::LOGIN_NAME_PROPERTY, slug);
+        }
+        if let Some(loc) = location {
+            player.location = Some(loc.clone());
+            player.set_property_object_ref("home_location", loc);
         }
         self.commit(&mut player).await?;
         Ok(player)

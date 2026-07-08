@@ -286,11 +286,14 @@ Plaintext (`IRC_TLS=false`, port `6667`) is supported for local development but 
 
 ## Login
 
-Live IRC requires authenticated login (SEC-01). Mock mode (`IRC_MOCK=1`) and unit tests use open login unless `MUDL_LOGIN_REQUIRE_AUTH=true`.
+On startup the bot ensures `DEFAULT_PLAYER` exists as a **wizard** (created or upgraded if needed). New players use `register`; registration is blocked when no wizard exists in the database.
+
+Live IRC requires authenticated login (SEC-01) for returning players. Mock mode (`IRC_MOCK=1`) and unit tests use open login unless `MUDL_LOGIN_REQUIRE_AUTH=true`.
 
 | Command | When auth **off** (dev) | When auth **on** (production) |
 |---------|------------------------|-------------------------------|
-| `login` | Bind nick to player whose **name** matches | Denied — token required |
+| `register [login-name]` | Create a new player (`player:<login-name>`, no suffix) and log in; login name defaults to IRC nick | Same — creates player, then auto-login |
+| `login` | Bind nick to player whose **login name** matches | Denied — token required |
 | `login player:hero-001` | Bind to explicit player id | Denied without token |
 | `login <token>` | — | Resolve player by token and bind nick |
 | `login player:hero-001 <token>` | — | Bind explicit id after token check |
@@ -321,6 +324,7 @@ Players must log in before other commands work. `quit` saves state and disconnec
 
 | Command | Description |
 |---------|-------------|
+| `register [name]` | Create a new player and log in (requires a wizard in the world) |
 | `nickserv identify <password>` | Identify your IRC nick via NickServ (before login; password not echoed) |
 | `nickserv help` | NickServ registration and identification help |
 | `identify <password>` | Shorthand for `nickserv identify` (logged out) |
