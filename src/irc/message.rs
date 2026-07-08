@@ -13,12 +13,22 @@ pub enum IrcMessage {
     Raw(String),
 }
 
+/// Strip IRCv3 message tags (`@key=val;key2 ...`) from a wire line.
+pub fn strip_ircv3_tags(line: &str) -> &str {
+    if line.starts_with('@') {
+        line.split_once(' ').map(|(_, rest)| rest).unwrap_or(line)
+    } else {
+        line
+    }
+}
+
 /// Parse a single IRC protocol line into a structured message.
 pub fn parse_irc_line(line: &str) -> IrcMessage {
     let line = line.trim_end_matches(['\r', '\n']);
+    let line = strip_ircv3_tags(line);
     if let Some(rest) = line.strip_prefix("PING ") {
         return IrcMessage::Ping {
-            token: rest.to_string(),
+            token: rest.trim_start_matches(':').to_string(),
         };
     }
 
@@ -149,7 +159,35 @@ mod tests {
         assert_eq!(
             msg,
             IrcMessage::Ping {
-                token: ":abc".to_string()
+                token: "abc".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_tagged_privmsg() {
+        let msg = parse_irc_line(
+            "@time=2026-07-07T12:00:00Z :alice!u@h PRIVMSG mudl :go north",
+        );
+        assert_eq!(
+            msg,
+            IrcMessage::Privmsg {
+                from: "alice".to_string(),
+                target: "mudl".to_string(),
+                text: "go north".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_privmsg_to_bot_nick() {
+        let msg = parse_irc_line(":Bob!u@host PRIVMSG Mudl :login");
+        assert_eq!(
+            msg,
+            IrcMessage::Privmsg {
+                from: "Bob".to_string(),
+                target: "Mudl".to_string(),
+                text: "login".to_string(),
             }
         );
     }

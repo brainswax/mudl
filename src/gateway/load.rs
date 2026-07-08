@@ -216,7 +216,16 @@ mod tests {
             "parallel bot input too slow: {:?}",
             started.elapsed()
         );
-        assert_eq!(transport.recorded().len(), 6);
+        for i in 0..6 {
+            let nick = format!("player{i}");
+            assert!(
+                transport
+                    .privmsgs_to(&nick)
+                    .iter()
+                    .any(|line| line.contains("featureless void")),
+                "player{i} should receive look output"
+            );
+        }
     }
 
     #[tokio::test]

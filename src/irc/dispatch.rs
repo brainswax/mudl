@@ -89,6 +89,19 @@ pub async fn dispatch_command<P: Persistence + Clone + Send + Sync>(
         mgr.session_handle(nick).is_some()
     };
 
+    if line.verb.is_empty() {
+        let hint = if logged_in {
+            "Send 'help' for a list of commands."
+        } else {
+            "Send 'login' to connect."
+        };
+        return DispatchOutcome {
+            sender,
+            to_sender: vec![hint.to_string()],
+            ..Default::default()
+        };
+    }
+
     if !logged_in {
         let mut mgr = manager.lock().await;
         let persistence = mgr.persistence().clone();
@@ -102,7 +115,7 @@ pub async fn dispatch_command<P: Persistence + Clone + Send + Sync>(
     match line.verb.as_str() {
         "help" | "?" => DispatchOutcome {
             sender,
-            to_sender: vec![help_text()],
+            to_sender: help_lines(),
             ..Default::default()
         },
         "login" => DispatchOutcome {
@@ -584,7 +597,7 @@ async fn dispatch_tell<P: Persistence + Clone + Send + Sync>(
 
     DispatchOutcome {
         sender,
-        to_sender: vec![format_tell_sent(target_nick, &text)],
+        to_sender: vec![format_tell_sent(&resolved, &text)],
         private: vec![(resolved, format_tell(&from_name, &text))],
         ..Default::default()
     }
@@ -688,7 +701,7 @@ async fn dispatch_movement<P: Persistence + Clone + Send + Sync>(
             if let (Some(old_id), Some(new_id)) = (old_room, session.current_location()) {
                 if old_id != *new_id {
                     outcome.channel_sync = Some(ChannelSync {
-                        nick: nick.to_string(),
+                        nick: outcome.sender.clone(),
                         join: vec![room_channel_name(&config.room_channel_prefix, new_id)],
                         part: vec![room_channel_name(&config.room_channel_prefix, &old_id)],
                     });
@@ -709,20 +722,19 @@ async fn dispatch_movement<P: Persistence + Clone + Send + Sync>(
     }
 }
 
-fn help_text() -> String {
-    [
-        "MUDL IRC commands:",
-        "  look (l) [target]   - view room or object",
-        "  go <dir>            - move (or use exit name: north, n, ...)",
-        "  inventory (i)       - list carried items",
-        "  take <item>         - pick up an item",
-        "  say <text>          - speak to players in your room",
-        "  emote <text>        - perform an action in your room",
-        "  tell <nick> <text>  - private message to a connected player",
-        "  quit                - save and disconnect",
-        "World channel (#mudl): prefix with 'say' is not used — speak freely for OOC.",
+fn help_lines() -> Vec<String> {
+    vec![
+        "MUDL IRC commands:".to_string(),
+        "  look (l) [target]   - view room or object".to_string(),
+        "  go <dir>            - move (or use exit name: north, n, ...)".to_string(),
+        "  inventory (i)       - list carried items".to_string(),
+        "  take <item>         - pick up an item".to_string(),
+        "  say <text>          - speak to players in your room".to_string(),
+        "  emote <text>        - perform an action in your room".to_string(),
+        "  tell <nick> <text>  - private message to a connected player".to_string(),
+        "  quit                - save and disconnect".to_string(),
+        "World channel (#mudl): speak freely for OOC (no 'say' prefix).".to_string(),
     ]
-    .join("\n")
 }
 
 fn logged_out_help_text() -> String {
@@ -827,6 +839,13 @@ mod tests {
         assert_eq!(outcome.private.len(), 1);
         assert_eq!(outcome.private[0].0, "bob");
         assert!(outcome.private[0].1.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn empty_command_prompts_for_login_when_logged_out() {
+        let (manager, config) = manager_arc().await;
+        let outcome = dispatch_command(manager, "alice", "   ", &config).await;
+        assert!(outcome.to_sender.iter().any(|l| l.contains("login")));
     }
 
     #[tokio::test]

@@ -70,12 +70,30 @@ On connect the bot:
 
 Players should also connect over TLS in their IRC client (port 6697 on Libera Chat, for example).
 
+Send commands as private messages to the bot nick (`/msg mudl …` in most clients):
+
 ```text
 /msg mudl login
 /msg mudl look
 /msg mudl say Hello, void!
 /msg mudl tell alice psst
 ```
+
+The bot also accepts `/msg mudl …` and `/query mudl …` pasted directly into mock mode input.
+
+### Nick handling
+
+- Session keys are **case-insensitive** (`Alice` and `alice` are the same player).
+- Outgoing PRIVMSG and NOTICE targets use the canonical lowercase nick stored at login.
+- In-character text uses the player's **object name** (e.g. `Alice says, "hi"`), not the IRC nick.
+- OOC lines keep the sender's IRC nick as received (`[OOC] Alice: brb`).
+- `tell` resolves targets case-insensitively; confirmation uses the resolved nick (`You tell bob, "…"`).
+
+### Output formatting
+
+- Multi-line responses (room descriptions, movement) are sent as **one IRC line per PRIVMSG** — no embedded newlines.
+- `help` is delivered as separate lines for readability in IRC clients.
+- In-character speech: `Alice says, "…"`; emotes: `Alice waves.`; tells: `Bob tells you, "…"`.
 
 Join `#mudl` for out-of-character chat. Room channels (`#mudl-void-001`, etc.) receive in-character speech and emotes; the bot sends a NOTICE with the channel name when you enter a place.
 
@@ -122,8 +140,13 @@ Players must log in before other commands work. `quit` saves state and disconnec
 | `say <text>` | Speak to players in your room |
 | `emote <text>` | Emote to players in your room |
 | `tell <nick> <text>` | Private message to a connected player |
-| `help` | Command summary |
-| `quit` | Persist and disconnect |
+| `help` (`?`) | Command summary (one line per reply) |
+| `quit` (`logout`, `exit`) | Persist and disconnect |
+| `'` | Shorthand for `say` |
+| `:` | Shorthand for `emote` |
+| `whisper` | Alias for `tell` |
+
+Shorthand movement: `north`, `n`, and other exit names work without `go` when unambiguous.
 
 Builder/meta commands (`@dig`, `@set`, …) are RBAC-checked but deferred to the REPL for now.
 
@@ -161,6 +184,8 @@ Persistence releases the world mutex before SQLite I/O so other connections can 
 
 ```bash
 cargo test irc::
+cargo test irc::input
+cargo test irc::message
 cargo test gateway::multi_user
 cargo test gateway::load
 cargo test gateway::edge_cases

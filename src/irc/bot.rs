@@ -10,6 +10,7 @@ use crate::persistence::Persistence;
 use super::channels::{classify_target, ChannelTarget};
 use super::config::IrcConfig;
 use super::dispatch::{dispatch_command, DispatchOutcome};
+use super::input::normalize_irc_command_input;
 use super::message::IrcMessage;
 use super::social::format_ooc;
 use super::transport::IrcTransport;
@@ -58,8 +59,14 @@ where
 
     /// Handle a raw command line from an IRC nick (used by tests and direct adapters).
     pub async fn handle_input(&self, nick: &str, text: &str) -> anyhow::Result<DispatchOutcome> {
-        let outcome =
-            dispatch_command(Arc::clone(&self.manager), nick, text, &self.config).await;
+        let command = normalize_irc_command_input(text, &self.config.bot_nick);
+        let outcome = dispatch_command(
+            Arc::clone(&self.manager),
+            nick,
+            &command,
+            &self.config,
+        )
+        .await;
         self.deliver(&outcome).await;
         Ok(outcome)
     }
@@ -123,23 +130,23 @@ where
 
     async fn deliver(&self, outcome: &DispatchOutcome) {
         for line in &outcome.to_sender {
-            self.transport.send_privmsg(&outcome.sender, line).await;
+            self.send_privmsg_lines(&outcome.sender, line).await;
         }
 
         for (nick, line) in &outcome.private {
-            self.transport.send_privmsg(nick, line).await;
+            self.send_privmsg_lines(nick, line).await;
         }
 
         for delivery in &outcome.room_audience {
             for nick in &delivery.audience {
                 for line in &delivery.lines {
-                    self.transport.send_privmsg(nick, line).await;
+                    self.send_privmsg_lines(nick, line).await;
                 }
             }
         }
 
         for (channel, line) in &outcome.channel {
-            self.transport.send_privmsg(channel, line).await;
+            self.send_privmsg_lines(channel, line).await;
         }
 
         if let Some(sync) = &outcome.channel_sync {
@@ -160,6 +167,20 @@ where
                 (manager.world().clone(), manager.persistence().clone())
             };
             let _ = world.persist_changes(&persistence).await;
+        }
+    }
+
+    /// IRC clients expect one protocol line per PRIVMSG — split embedded newlines.
+    async fn send_privmsg_lines(&self, target: &str, text: &str) {
+        let parts: Vec<&str> = if text.contains('\n') {
+            text.lines().collect()
+        } else {
+            vec![text]
+        };
+        for part in parts {
+            if !part.is_empty() {
+                self.transport.send_privmsg(target, part).await;
+            }
         }
     }
 }
@@ -321,6 +342,47 @@ mod tests {
         let alice_priv = transport.privmsgs_to("alice");
         assert!(alice_priv.is_empty());
         assert!(transport.privmsgs_to("bob").iter().any(|l| l.contains("brb")));
+    }
+
+    #[tokio::test]
+    async fn help_sends_one_privmsg_per_line() {
+        let (bot, transport) = bot_fixture().await;
+        bot.handle_input("alice", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_input("alice", "help").await.unwrap();
+
+        let lines = transport.privmsgs_to("alice");
+        assert!(lines.len() >= 8);
+        assert!(lines.iter().any(|l| l.contains("MUDL IRC commands")));
+        assert!(!lines.iter().any(|l| l.contains('\n')));
+    }
+
+    #[tokio::test]
+    async fn accepts_msg_prefix_in_command_text() {
+        let (bot, transport) = bot_fixture().await;
+        bot.handle_input("alice", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_input("alice", "/msg mudl look")
+            .await
+            .unwrap();
+
+        let lines = transport.privmsgs_to("alice");
+        assert!(lines.iter().any(|l| l.contains("featureless void")));
+    }
+
+    #[tokio::test]
+    async fn tell_confirmation_uses_resolved_nick() {
+        let (bot, transport) = bot_fixture().await;
+        bot.handle_input("alice", "login").await.unwrap();
+        bot.handle_input("BOB", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_input("alice", "tell BOB hi").await.unwrap();
+
+        let alice_lines = transport.privmsgs_to("alice");
+        assert!(alice_lines.iter().any(|l| l.contains("You tell bob")));
     }
 
     #[tokio::test]
