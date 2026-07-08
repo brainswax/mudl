@@ -64,7 +64,7 @@ async fn open_session_manager(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv::dotenv().ok();
+    mudl::env::load_project_env();
     init_tracing();
 
     let config = SlackConfig::from_env();

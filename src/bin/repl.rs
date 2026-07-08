@@ -182,7 +182,7 @@ async fn run_examine_command(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv::dotenv().ok();
+    mudl::env::load_project_env();
     init_tracing();
 
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "repl.db".to_string());

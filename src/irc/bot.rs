@@ -65,19 +65,13 @@ where
         Ok(())
     }
 
-    /// Send bot startup NickServ commands (REGISTER / IDENTIFY) after server welcome.
-    pub async fn send_nickserv_startup(&self) {
-        if !self.config.nickserv.is_configured() {
-            return;
-        }
-        for command in self
-            .config
-            .nickserv
-            .bot_startup_commands(&self.config.bot_nick)
-        {
-            let service = &self.config.nickserv.service;
-            self.transport.send_direct(service, &command).await;
-        }
+    /// Send bot NickServ auto-IDENTIFY during IRC registration.
+    pub async fn send_nickserv_bootstrap(&self) {
+        super::nickserv::send_bot_nickserv_bootstrap(
+            self.transport.as_ref(),
+            &self.config.nickserv,
+        )
+        .await;
     }
 
     /// Handle one parsed IRC message and route game commands through the session manager.
@@ -128,6 +122,10 @@ where
         target: &str,
         text: &str,
     ) -> anyhow::Result<()> {
+        // IRCv3 echo-message: server mirrors our outbound PRIVMSG back to us.
+        if from.eq_ignore_ascii_case(&self.config.bot_nick) {
+            return Ok(());
+        }
         let Some(nick) = sanitize_irc_nick(from) else {
             return Ok(());
         };
@@ -577,6 +575,23 @@ mod tests {
                     if recipient == "alice" && text.contains("registered/SASL")
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn ignores_echo_message_privmsg_from_bot_nick() {
+        let (bot, transport) = bot_fixture().await;
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "mudl".to_string(),
+            account: None,
+            target: "alice".to_string(),
+            text: "You are not logged in.".to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert!(transport.recorded().is_empty());
     }
 
     #[tokio::test]

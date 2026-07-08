@@ -12,6 +12,7 @@ use tokio_rustls::TlsConnector;
 use tracing::{debug, info};
 
 use super::config::IrcConfig;
+use super::message::is_bot_echo_privmsg;
 use super::transport::StreamTransport;
 
 static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
@@ -30,6 +31,7 @@ pub struct IrcConnection {
     lines: tokio::io::Lines<BufReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>>,
     pub transport: StreamTransport,
     read_timeout: Duration,
+    bot_nick: String,
 }
 
 impl IrcConnection {
@@ -37,7 +39,9 @@ impl IrcConnection {
         match tokio::time::timeout(self.read_timeout, self.lines.next_line()).await {
             Ok(Ok(line)) => {
                 if let Some(ref text) = line {
-                    debug!(line = %sanitize_wire_line(text), "IRC <<");
+                    if !is_bot_echo_privmsg(text, &self.bot_nick) {
+                        debug!(line = %sanitize_wire_line(text), "IRC <<");
+                    }
                 }
                 Ok(line)
             }
@@ -77,6 +81,7 @@ pub async fn connect(config: &IrcConfig) -> anyhow::Result<IrcConnection> {
         lines: connection.lines,
         transport: connection.transport,
         read_timeout: Duration::from_secs(config.read_timeout_secs),
+        bot_nick: config.bot_nick.clone(),
     })
 }
 

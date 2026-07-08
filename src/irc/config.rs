@@ -36,7 +36,7 @@ pub struct IrcConfig {
     pub rate_limits: RateLimitConfig,
     /// Optional IRC account-tag verification (SEC-03).
     pub identity_policy: IrcIdentityPolicy,
-    /// NickServ REGISTER / IDENTIFY for bot startup and player relay.
+    /// NickServ auto-IDENTIFY for bot startup and player relay.
     pub nickserv: IrcNickServConfig,
     /// TCP/TLS connect timeout in seconds.
     pub connect_timeout_secs: u64,

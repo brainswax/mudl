@@ -10,15 +10,18 @@ use mudl::command::bootstrap_active_universe;
 use mudl::gateway::SessionManager;
 use mudl::irc::{
     cap_end_command, cap_ls_complete, cap_request_command, connect, is_nick_in_use, is_ping,
-    is_welcome, log_outbound_command, registration_commands, registration_error_message,
-    GameTransport, IrcBot, IrcConfig, IrcMessage, IrcTransport, MockTransport,
+    is_registration_incomplete, is_welcome, log_outbound_command, parse_nickserv_reply,
+    registration_commands, registration_error_message, send_bot_nickserv_bootstrap, IrcBot,
+    IrcConfig,
+    IrcMessage, IrcTransport, MockTransport, NickServNotice,
 };
 use mudl::mudl::default_module_dir;
 use mudl::object::{ObjectFactory, ObjectId};
 use mudl::persistence::{
     SqlitePersistence, WriterGuard, WriterLockOptions, WriterMode,
 };
-use tracing::{error, info, warn};
+use mudl::transport::GameTransport;
+use tracing::{debug, error, info, warn};
 
 fn init_tracing() {
     tracing_subscriber::fmt()
@@ -65,7 +68,7 @@ async fn open_session_manager(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    dotenv::dotenv().ok();
+    mudl::env::load_project_env();
     init_tracing();
 
     let config = IrcConfig::from_env();
@@ -116,6 +119,39 @@ async fn run_mock_bot(
     Ok(())
 }
 
+fn handle_nickserv_during_registration(
+    message: &IrcMessage,
+    service: &str,
+    welcomed: bool,
+) -> Result<()> {
+    if welcomed {
+        return Ok(());
+    }
+    let (from, text) = match message {
+        IrcMessage::Notice { from, text, .. } | IrcMessage::Privmsg { from, text, .. } => {
+            (from.as_str(), text.as_str())
+        }
+        _ => return Ok(()),
+    };
+    if !from.eq_ignore_ascii_case(service) {
+        return Ok(());
+    }
+    match parse_nickserv_reply(text) {
+        NickServNotice::Identified { .. } => {
+            info!("NickServ accepted bot credentials — awaiting server welcome (001)");
+        }
+        NickServNotice::InvalidPassword => {
+            anyhow::bail!(
+                "NickServ rejected IRC_NICKSERV_PASSWORD — fix credentials and restart"
+            );
+        }
+        NickServNotice::Other(body) => {
+            info!(response = %body, "NickServ response during registration");
+        }
+    }
+    Ok(())
+}
+
 async fn run_live_bot(
     manager: SessionManager<SqlitePersistence>,
     config: IrcConfig,
@@ -130,6 +166,7 @@ async fn run_live_bot(
         nick = %config.bot_nick,
         ircv3 = config.ircv3,
         timeout_secs = config.registration_timeout_secs,
+        nickserv = config.nickserv.is_configured(),
         "sending IRC registration"
     );
 
@@ -138,15 +175,35 @@ async fn run_live_bot(
         transport.send_raw(&command).await;
     }
 
+    if !config.nickserv.is_configured() {
+        warn!(
+            "IRC_NICKSERV_PASSWORD is not set — registered-nick networks may withhold messages until identified. \
+             If it is in .env, quote values containing $ (e.g. IRC_NICKSERV_PASSWORD='your$pass')"
+        );
+    }
+
     let bot = IrcBot::new(manager, Arc::clone(&transport), config.clone());
     let mut caps_requested = !config.ircv3;
+    let mut nickserv_sent = !config.ircv3 && config.nickserv.is_configured();
     let mut welcomed = false;
+
+    if nickserv_sent {
+        info!(
+            service = %config.nickserv.service,
+            "NickServ auto-identify — sent after NICK/USER (legacy registration)"
+        );
+        send_bot_nickserv_bootstrap(transport.as_ref(), &config.nickserv).await;
+    }
 
     loop {
         if !welcomed && Instant::now() >= registration_deadline {
+            let hint = if config.nickserv.is_configured() {
+                "Check IRC_NICKSERV_PASSWORD, IRC_NICKSERV_ACCOUNT (if IRC_BOT_NICK differs), and IRC_BOT_NICK."
+            } else {
+                "Set IRC_NICKSERV_PASSWORD for registered-nick networks, or try IRC_IRCV3=false."
+            };
             anyhow::bail!(
-                "IRC registration timed out after {}s waiting for server welcome (001). \
-                 Try IRC_IRCV3=false, a different IRC_BOT_NICK, or increase IRC_REGISTRATION_TIMEOUT.",
+                "IRC registration timed out after {}s waiting for server welcome (001). {hint}",
                 config.registration_timeout_secs
             );
         }
@@ -174,13 +231,28 @@ async fn run_live_bot(
         }
 
         if let Some(message) = registration_error_message(&line) {
-            error!(message = %message, line = %line, "IRC registration rejected");
             if is_nick_in_use(&line) {
+                error!(message = %message, line = %line, "IRC registration rejected");
                 anyhow::bail!("{message}");
+            } else if is_registration_incomplete(&line) {
+                debug!(
+                    message = %message,
+                    line = %line,
+                    "IRC server deferred a command until registration completes"
+                );
+            } else {
+                error!(message = %message, line = %line, "IRC registration rejected");
             }
         } else if !welcomed && line.contains(" 00") {
             info!(line = %line, "IRC server message during registration");
         }
+
+        let message = mudl::irc::parse_irc_line(&line);
+        handle_nickserv_during_registration(
+            &message,
+            &config.nickserv.service,
+            welcomed,
+        )?;
 
         if config.ircv3 && cap_ls_complete(&line) && !caps_requested {
             info!("IRC CAP LS complete — requesting IRCv3 capabilities");
@@ -191,12 +263,19 @@ async fn run_live_bot(
             transport.send_raw(&req).await;
             transport.send_raw(&end).await;
             caps_requested = true;
+            if config.nickserv.is_configured() && !nickserv_sent {
+                info!(
+                    service = %config.nickserv.service,
+                    "NickServ auto-identify — sent after CAP END"
+                );
+                send_bot_nickserv_bootstrap(transport.as_ref(), &config.nickserv).await;
+                nickserv_sent = true;
+            }
         }
 
         if !welcomed && is_welcome(&line) {
             welcomed = true;
             info!(nick = %config.bot_nick, "IRC registration complete (001 welcome)");
-            bot.send_nickserv_startup().await;
             transport.join(&config.world_channel).await;
             info!(channel = %config.world_channel, "joined world channel");
         }
@@ -205,7 +284,6 @@ async fn run_live_bot(
             continue;
         }
 
-        let message = mudl::irc::parse_irc_line(&line);
         if let IrcMessage::Ping { token } = &message {
             info!("IRC PING received — sending PONG");
             transport

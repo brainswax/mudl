@@ -1,6 +1,6 @@
 //! IRCv3 capability negotiation during server registration.
 
-use super::message::format_outgoing;
+use super::message::{format_outgoing, strip_ircv3_tags};
 
 /// IRCv3 capabilities requested from the server (see https://ircv3.net).
 pub const IRCV3_CAPABILITIES: &[&str] = &[
@@ -54,11 +54,16 @@ pub fn is_nick_in_use(line: &str) -> bool {
     registration_numeric(line) == Some(433)
 }
 
+/// Whether the server deferred a command until IRC registration completes (RPL 451).
+pub fn is_registration_incomplete(line: &str) -> bool {
+    registration_numeric(line) == Some(451)
+}
+
 /// Human-readable registration failure from common numerics.
 pub fn registration_error_message(line: &str) -> Option<String> {
     match registration_numeric(line)? {
         433 => Some(
-            "IRC nick is already in use — choose another IRC_BOT_NICK or wait for the old session to expire."
+            "IRC nick is already in use — choose another IRC_BOT_NICK (set IRC_NICKSERV_ACCOUNT to your registered account) or wait for the old session to expire."
                 .to_string(),
         ),
         432 => Some("IRC nick contains invalid characters.".to_string()),
@@ -69,7 +74,7 @@ pub fn registration_error_message(line: &str) -> Option<String> {
 }
 
 fn registration_numeric(line: &str) -> Option<u16> {
-    let trimmed = line.trim();
+    let trimmed = strip_ircv3_tags(line.trim());
     let code = trimmed
         .strip_prefix(':')
         .and_then(|rest| rest.split_whitespace().nth(1))
@@ -110,6 +115,32 @@ mod tests {
     fn detects_nick_in_use() {
         assert!(is_nick_in_use(":irc.woozle.org 433 * muddlebot :Nickname is already in use"));
         assert!(!is_nick_in_use(":irc.woozle.org 001 muddlebot :Welcome"));
+    }
+
+    #[test]
+    fn detects_nick_in_use_with_ircv3_tags() {
+        let line = "@time=2026-07-08T17:01:18.266Z :irc.woozle.org 433 * muddlebot :Nickname is already in use";
+        assert!(is_nick_in_use(line));
+        assert_eq!(
+            registration_error_message(line).as_deref(),
+            Some("IRC nick is already in use — choose another IRC_BOT_NICK (set IRC_NICKSERV_ACCOUNT to your registered account) or wait for the old session to expire.")
+        );
+    }
+
+    #[test]
+    fn detects_welcome_with_ircv3_tags() {
+        let line = "@time=2026-07-08T17:01:18.266Z :irc.woozle.org 001 muddlebot :Welcome";
+        assert!(is_welcome(line));
+    }
+
+    #[test]
+    fn detects_registration_error_with_ircv3_tags() {
+        let line = "@time=2026-07-08T17:01:18.179Z :irc.woozle.org 451 * :You need to register";
+        assert!(is_registration_incomplete(line));
+        assert_eq!(
+            registration_error_message(line).as_deref(),
+            Some("Registration incomplete — you must be registered to perform that action.")
+        );
     }
 
     #[test]

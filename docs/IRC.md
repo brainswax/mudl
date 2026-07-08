@@ -65,9 +65,10 @@ On connect the bot:
 1. Opens a **TLS** socket to `IRC_SERVER:IRC_PORT`
 2. Sends `CAP LS 302`, `NICK`, `USER`
 3. Requests IRCv3 capabilities (`server-time`, `message-tags`, `cap-notify`, …)
-4. Sends `CAP END` and waits for `001` welcome
-5. If `IRC_NICKSERV_PASSWORD` is set, sends NickServ `REGISTER` (when `IRC_NICKSERV_EMAIL` is set) and/or `IDENTIFY` for the **bot nick**
-6. Joins the world channel
+4. Sends `CAP END`
+5. If `IRC_NICKSERV_PASSWORD` is set, auto-sends NickServ `IDENTIFY` **after CAP END** (Ergo rejects earlier PRIVMSG with 451; legacy servers identify right after NICK/USER)
+6. Receives `001` welcome
+7. Joins the world channel
 
 Players should also connect over TLS in their IRC client (port 6697 on Libera Chat, for example).
 
@@ -114,7 +115,7 @@ IRC_REQUIRE_ACCOUNT_TAG=true
 
 On networks with `account-tag`, identified users receive `@account=YourAccount` on each message. Unidentified clients send `account=*`; MUDL rejects those when `IRC_REQUIRE_ACCOUNT_TAG=true`.
 
-## NickServ (register & identify)
+## NickServ (manual register, auto-identify)
 
 Most public IRC networks (Libera Chat, etc.) require a **registered, identified nick** before others can trust who you are. MUDL does not run SASL in the client; it relies on the network’s NickServ and IRCv3 `account-tag` for identity verification.
 
@@ -131,25 +132,37 @@ When `IRC_REQUIRE_ACCOUNT_TAG=true`, players must **identify to NickServ before 
 
 ### Bot operator setup
 
-Configure the **bot’s own** NickServ credentials in `.env` so the bot nick is registered and identified after connect:
+The bot **auto-IDENTIFYs** on connect. It does **not** auto-register — register the bot nick once manually, then set the password in `.env`.
+
+**One-time: register the bot nick** (from any IRC client using `IRC_BOT_NICK`):
+
+```text
+/msg NickServ REGISTER YourPassword your.email@example.com
+```
+
+Libera Chat guide: [https://libera.chat/guides/registration](https://libera.chat/guides/registration). Save the verification email NickServ sends.
+
+**Every start: auto-IDENTIFY** — add to `.env`:
 
 ```bash
 IRC_NICKSERV_SERVICE=NickServ          # default; change if your network uses a different service nick
-IRC_NICKSERV_PASSWORD=bot-secret       # bot account password — IDENTIFY after welcome
-# IRC_NICKSERV_EMAIL=bot@example.com  # optional: one-time REGISTER for the bot nick, then remove
+IRC_NICKSERV_ACCOUNT=muddlebot         # registered account; required when IRC_BOT_NICK differs
+IRC_NICKSERV_PASSWORD='bot-secret'     # quote if password contains $ or # — same password used at REGISTER
+```
+
+When `IRC_BOT_NICK` is already taken (e.g. you use that nick in your own IRC client), pick a different connect nick and point NickServ at the registered account:
+
+```bash
+IRC_BOT_NICK=muddlebot-bot
+IRC_NICKSERV_ACCOUNT=muddlebot
+IRC_NICKSERV_PASSWORD='bot-secret'
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `IRC_NICKSERV_SERVICE` | `NickServ` | NickServ service nick to PRIVMSG |
-| `IRC_NICKSERV_PASSWORD` | *(unset)* | Bot password; triggers auto-`IDENTIFY` after `001` welcome |
-| `IRC_NICKSERV_EMAIL` | *(unset)* | With password, sends `REGISTER` once before `IDENTIFY` (first-time bot setup) |
-
-**First-time bot registration on Libera Chat:**
-
-1. Start the bot with `IRC_NICKSERV_EMAIL` and `IRC_NICKSERV_PASSWORD` set (pick a strong password and a valid email).
-2. Confirm NickServ accepts registration (check bot logs or `/msg NickServ INFO` from an operator client).
-3. Remove `IRC_NICKSERV_EMAIL` from `.env` — only `IRC_NICKSERV_PASSWORD` is needed on subsequent starts.
+| `IRC_NICKSERV_ACCOUNT` | *(unset)* | Registered NickServ account; sends `IDENTIFY account password` when set, otherwise `IDENTIFY password` for the connection nick |
+| `IRC_NICKSERV_PASSWORD` | *(unset)* | Bot NickServ password; auto-`IDENTIFY` after CAP END on IRCv3 (before `001`) |
 
 ### Player registration (IRC client)
 
@@ -163,7 +176,7 @@ In your IRC client (replace placeholders):
 
 Libera Chat also documents this at [https://libera.chat/guides/registration](https://libera.chat/guides/registration). Save the email NickServ sends — it contains a verification command.
 
-If you message the bot `nickserv register …`, MUDL replies with the same client-side instruction (it does not relay `REGISTER`).
+If you message the bot `nickserv register …`, MUDL replies with the one-time IRC-client registration instruction only — it never sends `REGISTER` to NickServ.
 
 ### Player identification
 
@@ -259,8 +272,8 @@ Join `#mudl` for out-of-character chat. Room channels (`#mudl-void-001`, etc.) r
 | `IRC_REQUIRE_ACCOUNT_TAG` | `false` | Reject PRIVMSG without IRCv3 `account-tag` (identified/SASL account) |
 | `MUDL_IRC_ACCOUNT_BINDINGS` | *(unset)* | `nick=AccountName` — optional per-nick SASL account lock |
 | `IRC_NICKSERV_SERVICE` | `NickServ` | NickServ service nick for bot startup and player relay |
-| `IRC_NICKSERV_PASSWORD` | *(unset)* | Bot NickServ password — auto-`IDENTIFY` after welcome |
-| `IRC_NICKSERV_EMAIL` | *(unset)* | Optional email for one-time bot `REGISTER` |
+| `IRC_NICKSERV_ACCOUNT` | *(unset)* | Registered NickServ account when `IRC_BOT_NICK` differs from the registered name |
+| `IRC_NICKSERV_PASSWORD` | *(unset)* | Bot NickServ password — auto-`IDENTIFY` after CAP END on IRCv3 (account must be registered manually first) |
 
 ### IRCv3 capabilities requested
 
@@ -300,7 +313,7 @@ MUDL_LOGIN_IDENTITY_BINDINGS=alice=player:hero-001
 
 Failed logins return `Invalid login credentials.` without revealing whether the player id or token was wrong.
 
-On networks with `IRC_REQUIRE_ACCOUNT_TAG=true`, identify to NickServ **before** `login` (see [NickServ](#nickserv-register--identify)).
+On networks with `IRC_REQUIRE_ACCOUNT_TAG=true`, identify to NickServ **before** `login` (see [NickServ](#nickserv-manual-register-auto-identify)).
 
 Players must log in before other commands work. `quit` saves state and disconnects.
 

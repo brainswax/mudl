@@ -50,6 +50,19 @@ pub fn strip_ircv3_tags(line: &str) -> &str {
     split_ircv3_tags(line).1
 }
 
+/// Whether a wire line is an IRCv3 `echo-message` copy of the bot's own outbound PRIVMSG.
+pub fn is_bot_echo_privmsg(line: &str, bot_nick: &str) -> bool {
+    let (_, rest) = split_ircv3_tags(line.trim());
+    let Some(rest) = rest.strip_prefix(':') else {
+        return false;
+    };
+    let Some((prefix, payload)) = rest.split_once(' ') else {
+        return false;
+    };
+    let nick = prefix.split('!').next().unwrap_or(prefix);
+    nick.eq_ignore_ascii_case(bot_nick) && payload.starts_with("PRIVMSG ")
+}
+
 /// Split IRCv3 tags from the remainder of a protocol line.
 pub fn split_ircv3_tags(line: &str) -> (Ircv3Tags, &str) {
     if !line.starts_with('@') {
@@ -302,5 +315,18 @@ mod tests {
     fn formats_trailing_privmsg() {
         let line = format_outgoing("PRIVMSG", &["alice"], Some("hello"));
         assert_eq!(line, "PRIVMSG alice :hello\r\n");
+    }
+
+    #[test]
+    fn detects_bot_echo_privmsg_with_tags() {
+        let line = "@msgid=abc;time=2026-07-08T18:18:16.450Z :mudlbot!~u@h PRIVMSG alice :You are not logged in";
+        assert!(is_bot_echo_privmsg(line, "mudlbot"));
+        assert!(!is_bot_echo_privmsg(line, "alice"));
+    }
+
+    #[test]
+    fn ignores_real_privmsg_to_bot() {
+        let line = ":alice!~u@h PRIVMSG mudlbot :look";
+        assert!(!is_bot_echo_privmsg(line, "mudlbot"));
     }
 }

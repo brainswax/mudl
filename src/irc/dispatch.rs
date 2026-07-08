@@ -21,7 +21,7 @@ use crate::persistence::Persistence;
 use super::channels::{room_channel_name, room_join_notice};
 use super::config::IrcConfig;
 use super::nickserv::{
-    identify_nick_command, identify_relay_ack, player_help_text, register_client_instruction,
+    identify_nick_command, identify_relay_ack, player_help_text, MANUAL_REGISTRATION_HINT,
 };
 use super::social::{format_emote, format_say, format_tell, format_tell_sent};
 use super::visibility::{
@@ -261,11 +261,6 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
             dispatch_nickserv_logged_out(nick, sender, &line.args, config)
         }
         "identify" => dispatch_nickserv_identify(nick, sender, &line.args, config),
-        "register" if line.args.len() >= 2 => DispatchOutcome {
-            sender,
-            to_sender: vec![register_client_instruction().to_string()],
-            ..Default::default()
-        },
         "help" | "?" => DispatchOutcome {
             sender,
             to_sender: vec![logged_out_help_text(config)],
@@ -299,7 +294,7 @@ fn dispatch_nickserv_logged_out(
         "identify" => dispatch_nickserv_identify(nick, sender, &args[1..], config),
         "register" => DispatchOutcome {
             sender,
-            to_sender: vec![register_client_instruction().to_string()],
+            to_sender: vec![MANUAL_REGISTRATION_HINT.to_string()],
             ..Default::default()
         },
         _ => DispatchOutcome {
@@ -969,7 +964,11 @@ mod tests {
         assert!(outcome
             .to_sender
             .iter()
-            .any(|l| l.contains("your own IRC connection")));
+            .any(|l| l.contains("IRC client")));
+        assert!(!outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("sekrit-pass")));
     }
 
     #[tokio::test]

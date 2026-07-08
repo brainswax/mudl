@@ -1,4 +1,5 @@
 pub mod command;
+pub mod env;
 pub mod gateway;
 pub mod transport;
 pub mod irc;
