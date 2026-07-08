@@ -24,7 +24,9 @@ use crate::world::place_builder::{
 use crate::world::portal::{
     passable_portal_for_direction, portal_passage_block, portal_permits_exit,
 };
-use crate::gateway::{authorize_meta_command, authorize_plain_command, AuthError};
+use crate::gateway::{
+    authorize_meta_command, authorize_plain_command, AuthError, RateLimitContext, RateLimitKind,
+};
 use crate::world::{EventContext, SharedWorld, WorldState};
 
 /// Errors from session-level navigation and state operations.
@@ -68,6 +70,7 @@ impl std::error::Error for SessionError {}
 pub struct Session {
     world: SharedWorld,
     pub player: PlayerSession,
+    rate_limit: Option<RateLimitContext>,
 }
 
 impl std::fmt::Debug for Session {
@@ -91,12 +94,30 @@ impl Session {
         Ok(Self {
             world: world.into_shared(),
             player,
+            rate_limit: None,
         })
     }
 
     /// Attach a new connection to an existing shared world (M5 IRC session registry).
     pub fn attach(world: SharedWorld, player: PlayerSession) -> Self {
-        Self { world, player }
+        Self {
+            world,
+            player,
+            rate_limit: None,
+        }
+    }
+
+    /// Attach with shared transport rate limits (IRC nick / Slack user id).
+    pub fn attach_with_rate_limit(
+        world: SharedWorld,
+        player: PlayerSession,
+        rate_limit: RateLimitContext,
+    ) -> Self {
+        Self {
+            world,
+            player,
+            rate_limit: Some(rate_limit),
+        }
     }
 
     /// Build from an in-memory graph (tests and tooling).
@@ -111,6 +132,7 @@ impl Session {
         Self {
             world: world.into_shared(),
             player: PlayerSession::test(player_id, current_location),
+            rate_limit: None,
         }
     }
 
@@ -332,13 +354,29 @@ impl Session {
 
     /// Move the player along an exit from the current location.
     pub fn go(&mut self, direction: &str) -> Result<String, SessionError> {
+        self.check_movement_rate_limit()?;
         self.mutate_player(|world, player| go_impl(direction, world, player))
     }
 
     /// Async movement for IRC handlers (`world.lock().await` under contention).
     pub async fn go_async(&mut self, direction: &str) -> Result<String, SessionError> {
+        self.check_movement_rate_limit()?;
         self.with_locked_async(|world, player| go_impl(direction, world, player))
             .await
+    }
+
+    fn check_movement_rate_limit(&self) -> Result<(), SessionError> {
+        let Some(ctx) = &self.rate_limit else {
+            return Ok(());
+        };
+        ctx.check(RateLimitKind::Movement).map_err(|denied| {
+            let message = ctx
+                .limiter
+                .lock()
+                .map(|limiter| limiter.denial_message(denied.kind))
+                .unwrap_or_else(|_| "You're moving too quickly. Slow down.".to_string());
+            SessionError::Blocked(message)
+        })
     }
 
     /// Run inventory helpers under the async world lock (IRC).

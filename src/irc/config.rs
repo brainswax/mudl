@@ -1,6 +1,6 @@
 //! IRC bot configuration from environment variables.
 
-use crate::gateway::LoginAuthPolicy;
+use crate::gateway::{LoginAuthPolicy, RateLimitConfig};
 
 /// Runtime settings for the MUDL IRC gateway.
 ///
@@ -29,6 +29,8 @@ pub struct IrcConfig {
     pub default_player: String,
     /// Login authentication policy (tokens, identity bindings — SEC-01).
     pub login_auth: LoginAuthPolicy,
+    /// Anti-flood rate limits on command, movement, and OOC entry (SEC-50).
+    pub rate_limits: RateLimitConfig,
 }
 
 impl Default for IrcConfig {
@@ -45,6 +47,7 @@ impl Default for IrcConfig {
             database_url: "sqlite://mudl.db".to_string(),
             default_player: "player:admin-001".to_string(),
             login_auth: LoginAuthPolicy::permissive(),
+            rate_limits: RateLimitConfig::disabled(),
         }
     }
 }
@@ -86,6 +89,7 @@ impl IrcConfig {
             config.default_player = player;
         }
         config.login_auth = LoginAuthPolicy::from_env();
+        config.rate_limits = RateLimitConfig::from_env();
         config
     }
 

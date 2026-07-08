@@ -11,8 +11,8 @@ use crate::display::{
     DisplayMode, ResolveScope, TargetResolution,
 };
 use crate::gateway::{
-    normalize_nick, parse_login_args, resolve_player_for_login, verify_login, LoginRequest,
-    SessionManager,
+    normalize_nick, parse_login_args, rate_limit_kind_for_line, resolve_player_for_login,
+    verify_login, LoginRequest, RateLimitKind, SessionManager,
 };
 use crate::inventory::{describe_inventory, take_item, InventoryError};
 use crate::persistence::Persistence;
@@ -81,6 +81,18 @@ pub async fn dispatch_command<P: Persistence + Clone + Send + Sync>(
             to_sender: vec![hint.to_string()],
             ..Default::default()
         };
+    }
+
+    let rate_kind = rate_limit_kind_for_line(&line);
+    if rate_kind != RateLimitKind::Movement {
+        let mgr = manager.lock().await;
+        if let Err(denied) = mgr.check_rate_limit(nick, rate_kind) {
+            return DispatchOutcome {
+                sender,
+                to_sender: vec![mgr.rate_limit_denial_message(denied.kind)],
+                ..Default::default()
+            };
+        }
     }
 
     if !logged_in {
@@ -816,6 +828,19 @@ mod tests {
         (Arc::new(Mutex::new(manager)), config)
     }
 
+    async fn manager_arc_with_rate_limits(
+        rate_config: crate::gateway::RateLimitConfig,
+    ) -> (Arc<Mutex<SessionManager<SqlitePersistence>>>, IrcConfig) {
+        let (persistence, _manager, mut config) = sample_manager().await;
+        let manager = SessionManager::from_world_with_rate_limits(
+            persistence,
+            _manager.world().clone(),
+            rate_config.clone(),
+        );
+        config.rate_limits = rate_config;
+        (Arc::new(Mutex::new(manager)), config)
+    }
+
     #[tokio::test]
     async fn login_binds_nick_to_player_name() {
         let (manager, config) = manager_arc().await;
@@ -927,5 +952,44 @@ mod tests {
             dispatch_command(manager.clone(), "any-nick", "login tok-only", &config).await;
         assert!(outcome.to_sender.iter().any(|l| l.contains("Welcome")));
         assert!(manager.lock().await.is_connected("any-nick"));
+    }
+
+    #[tokio::test]
+    async fn command_flood_is_rate_limited() {
+        let rate_config = crate::gateway::RateLimitConfig {
+            enabled: true,
+            commands: crate::gateway::BucketSpec::new(2, 60.0),
+            movement: crate::gateway::BucketSpec::new(10, 10.0),
+            ooc: crate::gateway::BucketSpec::new(10, 30.0),
+        };
+        let (manager, config) = manager_arc_with_rate_limits(rate_config).await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+
+        dispatch_command(Arc::clone(&manager), "alice", "look", &config).await;
+        dispatch_command(Arc::clone(&manager), "alice", "look", &config).await;
+        let denied = dispatch_command(manager, "alice", "look", &config).await;
+        assert!(denied
+            .to_sender
+            .iter()
+            .any(|l| l.contains("too quickly")));
+    }
+
+    #[tokio::test]
+    async fn movement_flood_is_rate_limited() {
+        let rate_config = crate::gateway::RateLimitConfig {
+            enabled: true,
+            commands: crate::gateway::BucketSpec::new(30, 60.0),
+            movement: crate::gateway::BucketSpec::new(1, 10.0),
+            ooc: crate::gateway::BucketSpec::new(10, 30.0),
+        };
+        let (manager, config) = manager_arc_with_rate_limits(rate_config).await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+
+        dispatch_command(Arc::clone(&manager), "alice", "go north", &config).await;
+        let denied = dispatch_command(manager, "alice", "go south", &config).await;
+        assert!(denied
+            .to_sender
+            .iter()
+            .any(|l| l.contains("moving too quickly")));
     }
 }

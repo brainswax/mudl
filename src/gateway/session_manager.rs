@@ -1,7 +1,7 @@
 //! Multi-user session lifecycle: login, active connections, disconnect persistence.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -12,6 +12,7 @@ use crate::repl::{PlayerSession, Session};
 use crate::world::{SharedWorld, WorldState};
 
 use super::persistence::{hydrate_actor, persist_connection_state};
+use super::rate_limit::{RateLimitConfig, RateLimitContext, RateLimitDenied, RateLimitKind, RateLimiter};
 use super::registry::{normalize_nick, ConnectionRegistry, RegistryError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,27 +82,77 @@ pub struct SessionManager<P> {
     registry: ConnectionRegistry,
     persistence: P,
     sessions: HashMap<String, Arc<AsyncMutex<Session>>>,
+    rate_limiter: Arc<Mutex<RateLimiter>>,
+    rate_config: RateLimitConfig,
 }
 
 impl<P: Persistence + Clone> SessionManager<P> {
     /// Hydrate the world graph once; connections attach via [`Self::login`].
     pub async fn open(persistence: P, anatomy: AnatomyRegistry) -> anyhow::Result<Self> {
+        Self::open_with_rate_limits(persistence, anatomy, RateLimitConfig::default()).await
+    }
+
+    /// Hydrate the world with explicit anti-flood policy (IRC / Slack gateways).
+    pub async fn open_with_rate_limits(
+        persistence: P,
+        anatomy: AnatomyRegistry,
+        rate_config: RateLimitConfig,
+    ) -> anyhow::Result<Self> {
         let world = WorldState::restore(&persistence, anatomy).await?.into_shared();
-        Ok(Self {
-            world,
-            registry: ConnectionRegistry::default(),
+        Ok(Self::from_world_with_rate_limits(
             persistence,
-            sessions: HashMap::new(),
-        })
+            world,
+            rate_config,
+        ))
     }
 
     pub fn from_world(persistence: P, world: SharedWorld) -> Self {
+        Self::from_world_with_rate_limits(persistence, world, RateLimitConfig::default())
+    }
+
+    pub fn from_world_with_rate_limits(
+        persistence: P,
+        world: SharedWorld,
+        rate_config: RateLimitConfig,
+    ) -> Self {
         Self {
             world,
             registry: ConnectionRegistry::default(),
             persistence,
             sessions: HashMap::new(),
+            rate_limiter: Arc::new(Mutex::new(RateLimiter::new(rate_config.clone()))),
+            rate_config,
         }
+    }
+
+    pub fn rate_config(&self) -> &RateLimitConfig {
+        &self.rate_config
+    }
+
+    pub fn rate_limit_context(&self, identity: &str) -> RateLimitContext {
+        RateLimitContext {
+            limiter: Arc::clone(&self.rate_limiter),
+            identity: normalize_nick(identity),
+        }
+    }
+
+    pub fn check_rate_limit(
+        &self,
+        identity: &str,
+        kind: RateLimitKind,
+    ) -> Result<(), RateLimitDenied> {
+        let mut guard = self
+            .rate_limiter
+            .lock()
+            .map_err(|_| RateLimitDenied { kind })?;
+        guard.check(identity, kind)
+    }
+
+    pub fn rate_limit_denial_message(&self, kind: RateLimitKind) -> String {
+        self.rate_limiter
+            .lock()
+            .map(|limiter| limiter.denial_message(kind))
+            .unwrap_or_else(|_| "Rate limit exceeded.".to_string())
     }
 
     pub fn world(&self) -> &SharedWorld {
@@ -212,6 +263,9 @@ impl<P: Persistence + Clone> SessionManager<P> {
         match persist_connection_state(&self.world, &self.persistence, &player).await {
             Ok(()) => {
                 self.registry.unbind(nick)?;
+                if let Ok(mut limiter) = self.rate_limiter.lock() {
+                    limiter.forget_identity(nick);
+                }
                 Ok(())
             }
             Err(err) => {
@@ -278,7 +332,11 @@ impl<P: Persistence + Clone> SessionManager<P> {
             let guard = self.world.lock().await;
             PlayerSession::connect(actor_id, bootstrap_location, &guard)
         };
-        Ok(Session::attach(self.world.clone(), player))
+        Ok(Session::attach_with_rate_limit(
+            self.world.clone(),
+            player,
+            self.rate_limit_context(nick),
+        ))
     }
 }
 

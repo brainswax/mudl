@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::gateway::{normalize_nick, SessionManager};
+use crate::gateway::{normalize_nick, RateLimitKind, SessionManager};
 use crate::persistence::Persistence;
 
 use super::channels::{classify_target, ChannelTarget};
@@ -100,6 +100,13 @@ where
         if !manager.is_connected(from) {
             self.transport
                 .send_notice(from, "You are not logged in. Message the bot with 'login'.")
+                .await;
+            return Ok(());
+        }
+
+        if let Err(denied) = manager.check_rate_limit(from, RateLimitKind::Ooc) {
+            self.transport
+                .send_notice(from, &manager.rate_limit_denial_message(denied.kind))
                 .await;
             return Ok(());
         }
@@ -322,6 +329,59 @@ mod tests {
             .iter()
             .any(|l| l.contains("featureless void")));
         let _ = transport_a;
+    }
+
+    #[tokio::test]
+    async fn ooc_flood_is_rate_limited() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let room = ObjectId::new("room:void-001");
+        let mut hero = bare("player:hero-001", "Alice");
+        hero.location = Some(room.clone());
+        let place = bare("room:void-001", "The Void");
+        persistence.save_object(&hero).await.unwrap();
+        persistence.save_object(&place).await.unwrap();
+
+        let rate_config = crate::gateway::RateLimitConfig {
+            enabled: true,
+            commands: crate::gateway::BucketSpec::new(30, 60.0),
+            movement: crate::gateway::BucketSpec::new(8, 10.0),
+            ooc: crate::gateway::BucketSpec::new(1, 30.0),
+        };
+        let manager = SessionManager::open_with_rate_limits(
+            persistence,
+            crate::mudl::AnatomyRegistry::default(),
+            rate_config,
+        )
+        .await
+        .unwrap();
+        let transport = Arc::new(MockTransport::new());
+        let bot = IrcBot::new(manager, Arc::clone(&transport), IrcConfig::default());
+        bot.handle_input("alice", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "alice".to_string(),
+            target: "#mudl".to_string(),
+            text: "first".to_string(),
+        })
+        .await
+        .unwrap();
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "alice".to_string(),
+            target: "#mudl".to_string(),
+            text: "second".to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(transport.channel_messages("#mudl").len(), 1);
+        assert!(transport.recorded().iter().any(|entry| {
+            matches!(
+                entry,
+                OutgoingIrc::Notice { target, text }
+                    if target == "alice" && text.contains("out-of-character")
+            )
+        }));
     }
 
     #[tokio::test]

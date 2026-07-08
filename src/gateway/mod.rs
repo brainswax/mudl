@@ -2,6 +2,7 @@
 
 mod login_auth;
 mod persistence;
+mod rate_limit;
 mod rbac;
 mod registry;
 mod session_manager;
@@ -24,6 +25,10 @@ pub use rbac::{
     actor_has_tier, actor_tier, authorize_meta_command, authorize_plain_command,
     required_tier_for_meta_verb, required_tier_for_plain_command, tier_denied_message, ActorTier,
     AuthError,
+};
+pub use rate_limit::{
+    rate_limit_kind_for_line, BucketSpec, RateLimitConfig, RateLimitContext, RateLimitDenied,
+    RateLimitKind, RateLimiter,
 };
 pub use registry::{normalize_nick, ConnectionRegistry, RegistryError};
 pub use session_manager::{LoginError, LogoutError, SessionManager};

@@ -44,7 +44,7 @@ async fn open_session_manager(config: &IrcConfig) -> Result<SessionManager<Sqlit
         warn!("bootstrap skipped or failed — using persisted world");
     }
 
-    SessionManager::open(persistence, anatomy)
+    SessionManager::open_with_rate_limits(persistence, anatomy, config.rate_limits.clone())
         .await
         .map_err(Into::into)
 }
