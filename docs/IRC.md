@@ -66,7 +66,8 @@ On connect the bot:
 2. Sends `CAP LS 302`, `NICK`, `USER`
 3. Requests IRCv3 capabilities (`server-time`, `message-tags`, `cap-notify`, …)
 4. Sends `CAP END` and waits for `001` welcome
-5. Joins the world channel
+5. If `IRC_NICKSERV_PASSWORD` is set, sends NickServ `REGISTER` (when `IRC_NICKSERV_EMAIL` is set) and/or `IDENTIFY` for the **bot nick**
+6. Joins the world channel
 
 Players should also connect over TLS in their IRC client (port 6697 on Libera Chat, for example).
 
@@ -113,6 +114,127 @@ IRC_REQUIRE_ACCOUNT_TAG=true
 
 On networks with `account-tag`, identified users receive `@account=YourAccount` on each message. Unidentified clients send `account=*`; MUDL rejects those when `IRC_REQUIRE_ACCOUNT_TAG=true`.
 
+## NickServ (register & identify)
+
+Most public IRC networks (Libera Chat, etc.) require a **registered, identified nick** before others can trust who you are. MUDL does not run SASL in the client; it relies on the network’s NickServ and IRCv3 `account-tag` for identity verification.
+
+### Why it matters for MUDL
+
+| Step | What happens |
+|------|----------------|
+| **Register** | Claims your IRC nick on the network (one-time, from your IRC client). |
+| **Identify** | Proves you own that nick (`+r` / `account-tag` on your messages). |
+| **MUDL login** | Binds your IRC nick to a game player (`login` + token when auth is on). |
+| **Account binding** | Optional `MUDL_IRC_ACCOUNT_BINDINGS` locks nick → NickServ account name. |
+
+When `IRC_REQUIRE_ACCOUNT_TAG=true`, players must **identify to NickServ before any MUDL command** (including `login`). The bot rejects unidentified PRIVMSG with a notice to identify first.
+
+### Bot operator setup
+
+Configure the **bot’s own** NickServ credentials in `.env` so the bot nick is registered and identified after connect:
+
+```bash
+IRC_NICKSERV_SERVICE=NickServ          # default; change if your network uses a different service nick
+IRC_NICKSERV_PASSWORD=bot-secret       # bot account password — IDENTIFY after welcome
+# IRC_NICKSERV_EMAIL=bot@example.com  # optional: one-time REGISTER for the bot nick, then remove
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `IRC_NICKSERV_SERVICE` | `NickServ` | NickServ service nick to PRIVMSG |
+| `IRC_NICKSERV_PASSWORD` | *(unset)* | Bot password; triggers auto-`IDENTIFY` after `001` welcome |
+| `IRC_NICKSERV_EMAIL` | *(unset)* | With password, sends `REGISTER` once before `IDENTIFY` (first-time bot setup) |
+
+**First-time bot registration on Libera Chat:**
+
+1. Start the bot with `IRC_NICKSERV_EMAIL` and `IRC_NICKSERV_PASSWORD` set (pick a strong password and a valid email).
+2. Confirm NickServ accepts registration (check bot logs or `/msg NickServ INFO` from an operator client).
+3. Remove `IRC_NICKSERV_EMAIL` from `.env` — only `IRC_NICKSERV_PASSWORD` is needed on subsequent starts.
+
+### Player registration (IRC client)
+
+Nick **registration** must be done from the player’s **own IRC connection** (NickServ ties registration to the nick you are currently using). The bot cannot register a player nick on your behalf.
+
+In your IRC client (replace placeholders):
+
+```text
+/msg NickServ REGISTER YourPassword your.email@example.com
+```
+
+Libera Chat also documents this at [https://libera.chat/guides/registration](https://libera.chat/guides/registration). Save the email NickServ sends — it contains a verification command.
+
+If you message the bot `nickserv register …`, MUDL replies with the same client-side instruction (it does not relay `REGISTER`).
+
+### Player identification
+
+**Option A — via the MUDL bot** (password is relayed to NickServ but **never echoed** back to you):
+
+```text
+/msg mudl nickserv identify YourPassword
+```
+
+Shorthand (logged out only):
+
+```text
+/msg mudl identify YourPassword
+```
+
+The bot sends `IDENTIFY <your-nick> <password>` to NickServ. When NickServ confirms, you receive a NOTICE and can proceed with `login`.
+
+**Option B — directly in your IRC client** (recommended if you prefer not to send the password through the bot):
+
+```text
+/msg NickServ IDENTIFY YourPassword
+```
+
+On some networks, if you are using a different nick temporarily:
+
+```text
+/msg NickServ IDENTIFY YourNick YourPassword
+```
+
+### Recommended player flow (strict networks)
+
+```text
+# 1. Register once (IRC client only)
+/msg NickServ REGISTER my-secret my.email@example.com
+
+# 2. Identify (client or bot)
+/msg NickServ IDENTIFY my-secret
+# or: /msg mudl nickserv identify my-secret
+
+# 3. Log in to MUDL
+/msg mudl login player:hero-001 my-mudl-token
+```
+
+### Linking NickServ account to MUDL auth
+
+For public playtests, combine network identity with MUDL tokens:
+
+```bash
+IRC_REQUIRE_ACCOUNT_TAG=true
+MUDL_IRC_ACCOUNT_BINDINGS=alice=AliceAccountName
+MUDL_LOGIN_IDENTITY_BINDINGS=alice=player:hero-001
+MUDL_LOGIN_TOKENS=player:hero-001=rotate-this-secret
+```
+
+- `MUDL_IRC_ACCOUNT_BINDINGS` — IRC nick → **NickServ account name** (from `account-tag`).
+- `MUDL_LOGIN_IDENTITY_BINDINGS` — IRC nick → **player object id** at MUDL login.
+
+After `nickserv identify`, your next PRIVMSG should carry `@account=AliceAccountName` (when the server supports `account-tag`). MUDL then allows commands and enforces the binding map.
+
+### NickServ commands via the bot
+
+Available **before** MUDL login (private message to the bot):
+
+| Command | Description |
+|---------|-------------|
+| `nickserv help` | NickServ setup summary (alias: `ns help`) |
+| `nickserv identify <password>` | Relay `IDENTIFY` to NickServ for your nick |
+| `identify <password>` | Shorthand for `nickserv identify` |
+
+Passwords are never repeated in bot replies. Use `nickserv help` for full syntax.
+
 ### Output formatting
 
 - Multi-line responses (room descriptions, movement) are sent as **one IRC line per PRIVMSG** — no embedded newlines.
@@ -136,6 +258,9 @@ Join `#mudl` for out-of-character chat. Room channels (`#mudl-void-001`, etc.) r
 | `IRC_MOCK` | *(unset)* | Set to any value to enable stdin mock mode |
 | `IRC_REQUIRE_ACCOUNT_TAG` | `false` | Reject PRIVMSG without IRCv3 `account-tag` (identified/SASL account) |
 | `MUDL_IRC_ACCOUNT_BINDINGS` | *(unset)* | `nick=AccountName` — optional per-nick SASL account lock |
+| `IRC_NICKSERV_SERVICE` | `NickServ` | NickServ service nick for bot startup and player relay |
+| `IRC_NICKSERV_PASSWORD` | *(unset)* | Bot NickServ password — auto-`IDENTIFY` after welcome |
+| `IRC_NICKSERV_EMAIL` | *(unset)* | Optional email for one-time bot `REGISTER` |
 
 ### IRCv3 capabilities requested
 
@@ -175,12 +300,17 @@ MUDL_LOGIN_IDENTITY_BINDINGS=alice=player:hero-001
 
 Failed logins return `Invalid login credentials.` without revealing whether the player id or token was wrong.
 
+On networks with `IRC_REQUIRE_ACCOUNT_TAG=true`, identify to NickServ **before** `login` (see [NickServ](#nickserv-register--identify)).
+
 Players must log in before other commands work. `quit` saves state and disconnects.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
+| `nickserv identify <password>` | Identify your IRC nick via NickServ (before login; password not echoed) |
+| `nickserv help` | NickServ registration and identification help |
+| `identify <password>` | Shorthand for `nickserv identify` (logged out) |
 | `look` (`l`) | Room or object description (private to you) |
 | `go <dir>` | Move — also accepts standalone exit names (`north`, `n`, …) |
 | `inventory` (`i`) | List carried items |
@@ -251,7 +381,7 @@ cargo test gateway::m5_scenarios
 
 Coverage includes:
 
-- **IRC layer** (`irc::`) — message parsing, IRCv3 caps, channel naming, visibility, dispatch, bot relay, input shorthands
+- **IRC layer** (`irc::`) — message parsing, IRCv3 caps, channel naming, visibility, dispatch, bot relay, NickServ identify relay, input shorthands
 - **Session manager** (`gateway::session_manager`) — login/logout lifecycle, nick registry, disconnect persist
 - **Multi-user** (`gateway::multi_user`) — shared world movement, room-boundary `say`/`emote`, private `tell`, concurrent `go`/`take`, logout isolation, mixed-case nicks
 - **Load** (`gateway::load`) — parallel command stress, deadlock avoidance, latency under contention

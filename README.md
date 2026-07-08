@@ -162,7 +162,7 @@ Exits: south, north
 |-----|----------|----------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Contributors | Milestones M1–M5, module layout, concurrency, roadmap |
 | [SECURITY.md](SECURITY.md) | Operators & contributors | M5 security review, threat model, findings (SEC-*) |
-| [docs/IRC.md](docs/IRC.md) | Players & operators | IRC bot setup, commands, channels, nick handling, testing |
+| [docs/IRC.md](docs/IRC.md) | Players & operators | IRC bot setup, commands, channels, NickServ register/identify, testing |
 | [docs/SLACK.md](docs/SLACK.md) | Players & operators | Slack app setup, Event Subscriptions, group deployment, testing |
 | [LANGUAGE.md](LANGUAGE.md) | Builders | MUDL syntax: creatures, `@trigger`, combat, spawners, expansions |
 | [COMMANDS.md](COMMANDS.md) | Players & builders | REPL + IRC command reference and output style |
