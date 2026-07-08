@@ -31,7 +31,7 @@ M5 is **safe for trusted playtest cohorts** on a single IRC bot instance with no
 
 | ID | Location | Issue | Impact | Recommendation | Priority |
 |----|----------|-------|--------|----------------|----------|
-| **SEC-01** | `irc/dispatch.rs` `resolve_player_for_login`, `dispatch_login` | **Passwordless login** — any IRC nick can `login` if player **name** matches (case-insensitive), or `login player:<id>` for any existing `player:*` object. | **Session hijacking / account takeover** on public IRC: first connector wins the nick; knowledgeable attacker binds admin/wizard player IDs. | Require shared secret, IRC account-tag → player mapping, invite tokens, or operator-approved allowlist before M6 public playtests. | **P0** |
+| **SEC-01** | `gateway/login_auth.rs`, `irc/dispatch.rs` | ~~**Passwordless login**~~ — **Mitigated (July 2026):** `LoginAuthPolicy` requires tokens on live IRC (`MUDL_LOGIN_TOKENS`, `login_token` property, optional `MUDL_LOGIN_IDENTITY_BINDINGS`). Open login remains for `IRC_MOCK` / `MUDL_LOGIN_REQUIRE_AUTH=false`. | Residual: operators must deploy tokens; binding map optional; no NickServ/SASL integration yet. | Rotate tokens; use identity bindings for public playtests; add IRC `account-tag` verification (M6). | **P1** (residual) |
 | **SEC-02** | `gateway/session_manager.rs` `build_connection` | **One actor, one session** enforced (`is_actor_bound`); nick reuse blocked (`RegistryError::NickInUse`). | Mitigates duplicate-world presence for same player; does **not** stop SEC-01 initial bind. | Keep; extend with auth before bind. | — |
 | **SEC-03** | `irc/message.rs`, `IrcBot::handle_message` | **IRC nick taken from wire** (`PRIVMSG` prefix); no SASL/NickServ integration in bot. | Security depends entirely on IRC network nick enforcement; OOC displays raw IRC nick (`format_ooc`). | Document operator requirement (SASL, `+r` registered nicks); optional `account-tag` verification (M6/M9). | **P1** |
 | **SEC-04** | `bin/irc.rs` `run_mock_bot` (`IRC_MOCK=1`) | Stdin lines choose arbitrary nick + command with **no auth**. | Local dev only; if `IRC_MOCK` enabled on a shared host, full impersonation. | Refuse `IRC_MOCK` unless `RUST_ENV=development` or explicit opt-in; document in operator guide. | **P2** |
@@ -119,7 +119,8 @@ M5 is **safe for trusted playtest cohorts** on a single IRC bot instance with no
 
 | Priority | Finding IDs | Target milestone |
 |----------|-------------|------------------|
-| **P0** | SEC-01, SEC-23, SEC-50, SEC-60 | **Pre-M6 / M6** — auth binding, single-writer ops, rate limits, IRC look scope |
+| **P0** | SEC-23, SEC-50, SEC-60 | **Pre-M6 / M6** — single-writer ops, rate limits, IRC look scope |
+| **P1** | SEC-01 (residual), SEC-03 | **M6** — NickServ/account-tag; token rotation tooling |
 | **P1** | SEC-03, SEC-10–SEC-12, SEC-21, SEC-32, SEC-51–SEC-52, SEC-55 | **M6–M7** — transport hardening, wizard audit, validation |
 | **P2** | SEC-04, SEC-24, SEC-33, SEC-43, SEC-56 | **M7–M9** — ops hygiene, script caps, connection limits |
 | **P3** | SEC-05, SEC-41–SEC-43, SEC-53–SEC-54, SEC-63–SEC-64 | **M9** polish |

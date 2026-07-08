@@ -148,7 +148,7 @@ Over IRC, send commands as private messages to the bot nick (`/msg mudl …`). P
 
 | Command | Aliases / notes |
 |---------|-----------------|
-| `login` | `login player:hero-001` binds an explicit player id |
+| `login` | Auth required on live IRC — `login <token>` or `login player:hero-001 <token>` (see [docs/IRC.md](docs/IRC.md#login)) |
 | `look` | `l` |
 | `go <dir>` | Standalone exit names (`north`, `n`, …) work without `go` |
 | `inventory` | `i` |

@@ -1,5 +1,6 @@
 //! Transport-facing gateway: IRC nick registry, session lifecycle, and RBAC (M5).
 
+mod login_auth;
 mod persistence;
 mod rbac;
 mod registry;
@@ -14,6 +15,10 @@ mod m5_scenarios;
 #[cfg(test)]
 mod multi_user;
 
+pub use login_auth::{
+    parse_login_args, resolve_player_by_token, resolve_player_for_login, verify_login,
+    LoginAuthError, LoginAuthPolicy, LoginRequest, ParsedLoginArgs, LOGIN_TOKEN_PROPERTY,
+};
 pub use persistence::{hydrate_actor, persist_connection_state};
 pub use rbac::{
     actor_has_tier, actor_tier, authorize_meta_command, authorize_plain_command,

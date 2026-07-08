@@ -1,9 +1,11 @@
 //! IRC bot configuration from environment variables.
 
+use crate::gateway::LoginAuthPolicy;
+
 /// Runtime settings for the MUDL IRC gateway.
 ///
 /// Defaults assume an **IRCv3-capable server over TLS** (port 6697).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct IrcConfig {
     /// IRC server hostname (used for TLS SNI and TCP connect).
     pub server: String,
@@ -25,6 +27,8 @@ pub struct IrcConfig {
     pub database_url: String,
     /// Default player object used when bootstrapping an empty world.
     pub default_player: String,
+    /// Login authentication policy (tokens, identity bindings — SEC-01).
+    pub login_auth: LoginAuthPolicy,
 }
 
 impl Default for IrcConfig {
@@ -40,6 +44,7 @@ impl Default for IrcConfig {
             room_channel_prefix: "#mudl-".to_string(),
             database_url: "sqlite://mudl.db".to_string(),
             default_player: "player:admin-001".to_string(),
+            login_auth: LoginAuthPolicy::permissive(),
         }
     }
 }
@@ -80,6 +85,7 @@ impl IrcConfig {
         if let Ok(player) = std::env::var("DEFAULT_PLAYER") {
             config.default_player = player;
         }
+        config.login_auth = LoginAuthPolicy::from_env();
         config
     }
 

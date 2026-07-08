@@ -380,7 +380,7 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 
 | Priority | Work | Milestone | Rationale |
 |----------|------|-----------|-----------|
-| **P0** | **SEC-01** — authenticated login binding (token, allowlist, or IRC account map) | Pre-M6 | Blocks account takeover on public IRC |
+| **P1** | **SEC-01 residual** — IRC `account-tag` / NickServ integration | M6 | Token auth shipped; network identity binding optional |
 | **P0** | **SEC-50** — rate limiting on `dispatch_command` entry | M6/M9 | Blocks command/OOC/move floods |
 | **P0** | **SEC-60** — IRC `look` → `ResolveScope::RoomOnly` | Pre-M6 | Blocks cross-room information disclosure |
 | **P0** | **SEC-23** — single-writer ops policy or unified service process | Ops/M7 | Blocks REPL+IRC split-brain on one DB |

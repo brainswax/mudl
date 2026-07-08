@@ -22,7 +22,11 @@ pub use capability::{
 pub use channels::{classify_target, room_channel_name, ChannelTarget};
 pub use config::IrcConfig;
 pub use connect::{connect, IrcConnection};
-pub use dispatch::{dispatch_command, resolve_player_for_login, DispatchOutcome};
+pub use dispatch::{dispatch_command, DispatchOutcome};
+pub use crate::gateway::{
+    parse_login_args, resolve_player_for_login, LoginAuthPolicy, LoginRequest, ParsedLoginArgs,
+    LOGIN_TOKEN_PROPERTY,
+};
 pub use input::normalize_irc_command_input;
 pub use message::{format_outgoing, parse_irc_line, strip_ircv3_tags, IrcMessage};
 pub use social::{format_emote, format_ooc, format_say, format_tell};

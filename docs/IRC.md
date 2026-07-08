@@ -122,10 +122,32 @@ Plaintext (`IRC_TLS=false`, port `6667`) is supported for local development but 
 
 ## Login
 
-| Command | Behavior |
-|---------|----------|
-| `login` | Bind IRC nick to a player whose **name** matches (case-insensitive) |
-| `login player:hero-001` | Bind to an explicit player object id |
+Live IRC requires authenticated login (SEC-01). Mock mode (`IRC_MOCK=1`) and unit tests use open login unless `MUDL_LOGIN_REQUIRE_AUTH=true`.
+
+| Command | When auth **off** (dev) | When auth **on** (production) |
+|---------|------------------------|-------------------------------|
+| `login` | Bind nick to player whose **name** matches | Denied — token required |
+| `login player:hero-001` | Bind to explicit player id | Denied without token |
+| `login <token>` | — | Resolve player by token and bind nick |
+| `login player:hero-001 <token>` | — | Bind explicit id after token check |
+
+### Configuring credentials
+
+| Source | Purpose |
+|--------|---------|
+| `MUDL_LOGIN_TOKENS` | `player:hero-001=secret,player:hero-002=other` — operator-managed secrets |
+| `login_token` property | Per-player token on the object (`@set hero login_token secret`) |
+| `MUDL_LOGIN_IDENTITY_BINDINGS` | `alice=player:hero-001` — optional IRC nick → player lock |
+
+Environment variables (see [`.env.example`](../.env.example)):
+
+```bash
+MUDL_LOGIN_REQUIRE_AUTH=true
+MUDL_LOGIN_TOKENS=player:hero-001=change-me
+MUDL_LOGIN_IDENTITY_BINDINGS=alice=player:hero-001
+```
+
+Failed logins return `Invalid login credentials.` without revealing whether the player id or token was wrong.
 
 Players must log in before other commands work. `quit` saves state and disconnects.
 

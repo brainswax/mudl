@@ -303,4 +303,39 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, LoginError::ActorInUse(_)));
     }
+
+    #[tokio::test]
+    async fn irc_login_requires_token_when_auth_policy_enabled() {
+        use std::collections::HashMap;
+
+        use crate::gateway::LoginAuthPolicy;
+        use crate::irc::{dispatch_command, IrcConfig};
+
+        let (_persistence, manager) = two_player_world().await;
+        let manager = Arc::new(Mutex::new(manager));
+        let mut config = IrcConfig::default();
+        config.login_auth = LoginAuthPolicy {
+            require_auth: true,
+            env_tokens: HashMap::from([(
+                "player:hero-001".to_string(),
+                "hero-secret".to_string(),
+            )]),
+            ..LoginAuthPolicy::permissive()
+        };
+
+        let denied = dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+        assert!(denied
+            .to_sender
+            .iter()
+            .any(|l| l.contains("Invalid login credentials")));
+
+        let ok = dispatch_command(
+            manager,
+            "alice",
+            "login player:hero-001 hero-secret",
+            &config,
+        )
+        .await;
+        assert!(ok.to_sender.iter().any(|l| l.contains("Welcome")));
+    }
 }

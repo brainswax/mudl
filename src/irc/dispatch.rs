@@ -10,9 +10,11 @@ use crate::display::{
     format_room_look_player, narrate_no_location, narrate_target_not_found, Describable,
     DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::gateway::{normalize_nick, SessionManager};
+use crate::gateway::{
+    normalize_nick, parse_login_args, resolve_player_for_login, verify_login, LoginRequest,
+    SessionManager,
+};
 use crate::inventory::{describe_inventory, take_item, InventoryError};
-use crate::object::{Object, ObjectId};
 use crate::persistence::Persistence;
 use crate::world::{exit_index, movement_from_line};
 
@@ -48,27 +50,6 @@ pub struct ChannelSync {
     pub nick: String,
     pub join: Vec<String>,
     pub part: Vec<String>,
-}
-
-/// Resolve a player object for `login` from an explicit id or nick-matched name.
-pub fn resolve_player_for_login(
-    nick: &str,
-    explicit: Option<&str>,
-    objects: &std::collections::HashMap<ObjectId, Object>,
-) -> Option<ObjectId> {
-    if let Some(raw) = explicit {
-        let id = ObjectId::new(raw);
-        if objects.get(&id).is_some() {
-            return Some(id);
-        }
-        return None;
-    }
-
-    objects
-        .values()
-        .filter(|obj| obj.id.as_str().starts_with("player:"))
-        .find(|obj| obj.name.eq_ignore_ascii_case(nick))
-        .map(|obj| obj.id.clone())
 }
 
 /// Dispatch one parsed command for a connected or connecting IRC nick.
@@ -146,12 +127,15 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
         "login" => dispatch_login(manager, persistence, nick, &line.args, sender, config).await,
         "help" | "?" => DispatchOutcome {
             sender,
-            to_sender: vec![logged_out_help_text()],
+            to_sender: vec![logged_out_help_text(config)],
             ..Default::default()
         },
         _ => DispatchOutcome {
             sender,
-            to_sender: vec!["You are not logged in. Send 'login' or 'login <player-id>'.".to_string()],
+            to_sender: vec![format!(
+                "You are not logged in. {}",
+                config.login_auth.logged_out_help()
+            )],
             ..Default::default()
         },
     }
@@ -165,26 +149,53 @@ async fn dispatch_login<P: Persistence + Clone>(
     sender: String,
     config: &IrcConfig,
 ) -> DispatchOutcome {
-    let explicit = args.first().map(String::as_str);
-    let player_id = {
+    let parsed = parse_login_args(args);
+    let (player_id, player_snapshot, bootstrap_location) = {
         let guard = manager.world().lock().await;
-        resolve_player_for_login(nick, explicit, guard.objects())
+        let player_id = resolve_player_for_login(
+            nick,
+            &parsed,
+            &config.login_auth,
+            guard.objects(),
+        );
+        let Some(player_id) = player_id else {
+            return DispatchOutcome {
+                sender,
+                to_sender: vec!["Invalid login credentials.".to_string()],
+                ..Default::default()
+            };
+        };
+        let player_snapshot = guard.object(&player_id).cloned();
+        let bootstrap_location = player_snapshot
+            .as_ref()
+            .and_then(|obj| obj.location.clone());
+        (player_id, player_snapshot, bootstrap_location)
     };
 
-    let Some(player_id) = player_id else {
+    let Some(player) = player_snapshot else {
         return DispatchOutcome {
             sender,
-            to_sender: vec![
-                "No matching player found. Try 'login player:hero-001'.".to_string(),
-            ],
+            to_sender: vec!["Invalid login credentials.".to_string()],
             ..Default::default()
         };
     };
 
-    let bootstrap_location = {
-        let guard = manager.world().lock().await;
-        guard.object(&player_id).and_then(|obj| obj.location.clone())
-    };
+    if let Err(err) = verify_login(
+        &config.login_auth,
+        LoginRequest {
+            transport: "irc",
+            identity: nick,
+            player_id: &player_id,
+            token: parsed.token.as_deref(),
+            player: &player,
+        },
+    ) {
+        return DispatchOutcome {
+            sender,
+            to_sender: vec![err.to_string()],
+            ..Default::default()
+        };
+    }
 
     match manager.login(nick, player_id, bootstrap_location).await {
         Ok(()) => {
@@ -737,9 +748,8 @@ fn help_lines() -> Vec<String> {
     ]
 }
 
-fn logged_out_help_text() -> String {
-    "Send 'login' to bind your IRC nick to a player, or 'login <player-id>'."
-        .to_string()
+fn logged_out_help_text(config: &IrcConfig) -> String {
+    config.login_auth.logged_out_help()
 }
 
 #[cfg(test)]
@@ -747,7 +757,7 @@ mod tests {
     use super::*;
     use crate::gateway::SessionManager;
     use crate::irc::config::IrcConfig;
-    use crate::object::{Object, PermissionFlags};
+    use crate::object::{Object, ObjectId, PermissionFlags};
     use crate::persistence::SqlitePersistence;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -857,5 +867,65 @@ mod tests {
         let sync = outcome.channel_sync.expect("channel sync");
         assert!(sync.join.iter().any(|c| c.contains("north-001")));
         assert!(sync.part.iter().any(|c| c.contains("void-001")));
+    }
+
+    #[tokio::test]
+    async fn login_denied_without_token_when_auth_required() {
+        let (manager, mut config) = manager_arc().await;
+        config.login_auth = crate::gateway::LoginAuthPolicy {
+            require_auth: true,
+            env_tokens: HashMap::from([(
+                "player:hero-001".to_string(),
+                "alice-secret".to_string(),
+            )]),
+            ..crate::gateway::LoginAuthPolicy::permissive()
+        };
+
+        let outcome = dispatch_command(manager, "alice", "login", &config).await;
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("Invalid login credentials")));
+    }
+
+    #[tokio::test]
+    async fn login_succeeds_with_token_when_auth_required() {
+        let (manager, mut config) = manager_arc().await;
+        config.login_auth = crate::gateway::LoginAuthPolicy {
+            require_auth: true,
+            env_tokens: HashMap::from([(
+                "player:hero-001".to_string(),
+                "alice-secret".to_string(),
+            )]),
+            ..crate::gateway::LoginAuthPolicy::permissive()
+        };
+
+        let outcome = dispatch_command(
+            manager.clone(),
+            "alice",
+            "login player:hero-001 alice-secret",
+            &config,
+        )
+        .await;
+        assert!(outcome.to_sender.iter().any(|l| l.contains("Welcome")));
+        assert!(manager.lock().await.is_connected("alice"));
+    }
+
+    #[tokio::test]
+    async fn login_token_only_resolves_player() {
+        let (manager, mut config) = manager_arc().await;
+        config.login_auth = crate::gateway::LoginAuthPolicy {
+            require_auth: true,
+            env_tokens: HashMap::from([(
+                "player:hero-001".to_string(),
+                "tok-only".to_string(),
+            )]),
+            ..crate::gateway::LoginAuthPolicy::permissive()
+        };
+
+        let outcome =
+            dispatch_command(manager.clone(), "any-nick", "login tok-only", &config).await;
+        assert!(outcome.to_sender.iter().any(|l| l.contains("Welcome")));
+        assert!(manager.lock().await.is_connected("any-nick"));
     }
 }
