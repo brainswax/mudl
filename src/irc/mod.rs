@@ -19,9 +19,10 @@ mod visibility;
 
 pub use bot::IrcBot;
 pub use capability::{
-    cap_end_command, cap_ls_complete, cap_request_command, is_welcome, registration_commands,
-    IRCV3_CAPABILITIES,
+    cap_end_command, cap_ls_complete, cap_request_command, is_nick_in_use, is_ping, is_welcome,
+    registration_commands, registration_error_message, IRCV3_CAPABILITIES,
 };
+pub use connect::log_outbound_command;
 pub use channels::{classify_target, room_channel_name, ChannelTarget};
 pub use config::IrcConfig;
 pub use connect::{connect, IrcConnection};

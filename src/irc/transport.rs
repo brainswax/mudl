@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::io::AsyncWriteExt;
+use tracing::warn;
 
 use crate::transport::GameTransport;
 
@@ -118,32 +119,39 @@ impl StreamTransport {
             writer: Arc::new(tokio::sync::Mutex::new(writer)),
         }
     }
+
+    async fn write_and_flush(&self, payload: &[u8]) {
+        let mut writer = self.writer.lock().await;
+        if let Err(err) = writer.write_all(payload).await {
+            warn!(error = %err, "IRC outbound write failed");
+            return;
+        }
+        if let Err(err) = writer.flush().await {
+            warn!(error = %err, "IRC outbound flush failed");
+        }
+    }
 }
 
 #[async_trait]
 impl GameTransport for StreamTransport {
     async fn send_direct(&self, recipient: &str, text: &str) {
         let line = format_outgoing("PRIVMSG", &[recipient], Some(text));
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(line.as_bytes()).await;
+        self.write_and_flush(line.as_bytes()).await;
     }
 
     async fn send_notice(&self, recipient: &str, text: &str) {
         let line = format_outgoing("NOTICE", &[recipient], Some(text));
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(line.as_bytes()).await;
+        self.write_and_flush(line.as_bytes()).await;
     }
 
     async fn join(&self, presence: &str) {
         let line = format_outgoing("JOIN", &[presence], None);
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(line.as_bytes()).await;
+        self.write_and_flush(line.as_bytes()).await;
     }
 
     async fn leave(&self, presence: &str, message: Option<&str>) {
         let line = format_outgoing("PART", &[presence], message);
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(line.as_bytes()).await;
+        self.write_and_flush(line.as_bytes()).await;
     }
 }
 
@@ -155,8 +163,7 @@ impl IrcTransport for StreamTransport {
         } else {
             format!("{line}\r\n")
         };
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(payload.as_bytes()).await;
+        self.write_and_flush(payload.as_bytes()).await;
     }
 }
 

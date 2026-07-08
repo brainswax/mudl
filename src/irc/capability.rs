@@ -46,7 +46,40 @@ pub fn cap_end_command() -> String {
 
 /// Whether the server welcomed us (RPL 001).
 pub fn is_welcome(line: &str) -> bool {
-    line.starts_with(':') && line.split_whitespace().nth(1) == Some("001")
+    registration_numeric(line) == Some(1)
+}
+
+/// Whether the server rejected our nickname (RPL 433).
+pub fn is_nick_in_use(line: &str) -> bool {
+    registration_numeric(line) == Some(433)
+}
+
+/// Human-readable registration failure from common numerics.
+pub fn registration_error_message(line: &str) -> Option<String> {
+    match registration_numeric(line)? {
+        433 => Some(
+            "IRC nick is already in use — choose another IRC_BOT_NICK or wait for the old session to expire."
+                .to_string(),
+        ),
+        432 => Some("IRC nick contains invalid characters.".to_string()),
+        436 => Some("IRC nick is colliding with another user.".to_string()),
+        451 => Some("Registration incomplete — you must be registered to perform that action.".to_string()),
+        _ => None,
+    }
+}
+
+fn registration_numeric(line: &str) -> Option<u16> {
+    let trimmed = line.trim();
+    let code = trimmed
+        .strip_prefix(':')
+        .and_then(|rest| rest.split_whitespace().nth(1))
+        .or_else(|| trimmed.split_whitespace().next())?;
+    code.parse().ok()
+}
+
+/// Whether we should answer an incoming `PING` during registration.
+pub fn is_ping(line: &str) -> bool {
+    line.trim_start().starts_with("PING ")
 }
 
 #[cfg(test)]
@@ -71,5 +104,17 @@ mod tests {
         let cmd = cap_request_command();
         assert!(cmd.contains("server-time"));
         assert!(cmd.contains("message-tags"));
+    }
+
+    #[test]
+    fn detects_nick_in_use() {
+        assert!(is_nick_in_use(":irc.woozle.org 433 * muddlebot :Nickname is already in use"));
+        assert!(!is_nick_in_use(":irc.woozle.org 001 muddlebot :Welcome"));
+    }
+
+    #[test]
+    fn detects_ping_line() {
+        assert!(is_ping("PING :12345"));
+        assert!(!is_ping(":server 001 nick :Welcome"));
     }
 }

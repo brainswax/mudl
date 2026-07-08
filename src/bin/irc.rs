@@ -3,21 +3,22 @@
 //! Connects to IRCv3 servers over TLS by default (see `IRC_TLS`, `IRC_PORT`).
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mudl::command::bootstrap_active_universe;
 use mudl::gateway::SessionManager;
 use mudl::irc::{
-    cap_end_command, cap_ls_complete, cap_request_command, connect, is_welcome,
-    registration_commands, GameTransport, IrcBot, IrcConfig, IrcMessage, IrcTransport,
-    MockTransport,
+    cap_end_command, cap_ls_complete, cap_request_command, connect, is_nick_in_use, is_ping,
+    is_welcome, log_outbound_command, registration_commands, registration_error_message,
+    GameTransport, IrcBot, IrcConfig, IrcMessage, IrcTransport, MockTransport,
 };
 use mudl::mudl::default_module_dir;
 use mudl::object::{ObjectFactory, ObjectId};
 use mudl::persistence::{
     SqlitePersistence, WriterGuard, WriterLockOptions, WriterMode,
 };
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 fn init_tracing() {
     tracing_subscriber::fmt()
@@ -123,30 +124,90 @@ async fn run_live_bot(
     let mut connection = connect(&config).await?;
     let transport = Arc::new(connection.transport.clone());
 
+    let registration_deadline =
+        Instant::now() + Duration::from_secs(config.registration_timeout_secs);
+    info!(
+        nick = %config.bot_nick,
+        ircv3 = config.ircv3,
+        timeout_secs = config.registration_timeout_secs,
+        "sending IRC registration"
+    );
+
     for command in registration_commands(&config.bot_nick, &config.realname, config.ircv3) {
+        log_outbound_command(&command);
         transport.send_raw(&command).await;
     }
 
     let bot = IrcBot::new(manager, Arc::clone(&transport), config.clone());
-    let mut joined_world = !config.ircv3;
     let mut caps_requested = !config.ircv3;
+    let mut welcomed = false;
 
-    while let Some(line) = connection.next_line().await? {
+    loop {
+        if !welcomed && Instant::now() >= registration_deadline {
+            anyhow::bail!(
+                "IRC registration timed out after {}s waiting for server welcome (001). \
+                 Try IRC_IRCV3=false, a different IRC_BOT_NICK, or increase IRC_REGISTRATION_TIMEOUT.",
+                config.registration_timeout_secs
+            );
+        }
+
+        let line = connection
+            .next_line()
+            .await
+            .context("IRC connection lost while waiting for server")?;
+        let Some(line) = line else {
+            warn!("IRC server closed the connection");
+            break;
+        };
+
+        if is_ping(&line) {
+            let token = line
+                .trim_start()
+                .strip_prefix("PING ")
+                .map(|t| t.trim_start_matches(':').trim())
+                .unwrap_or("");
+            info!("IRC PING received — sending PONG");
+            let pong = mudl::irc::format_outgoing("PONG", &[token], None);
+            log_outbound_command(&pong);
+            transport.send_raw(&pong).await;
+            continue;
+        }
+
+        if let Some(message) = registration_error_message(&line) {
+            error!(message = %message, line = %line, "IRC registration rejected");
+            if is_nick_in_use(&line) {
+                anyhow::bail!("{message}");
+            }
+        } else if !welcomed && line.contains(" 00") {
+            info!(line = %line, "IRC server message during registration");
+        }
+
         if config.ircv3 && cap_ls_complete(&line) && !caps_requested {
-            transport.send_raw(&cap_request_command()).await;
-            transport.send_raw(&cap_end_command()).await;
+            info!("IRC CAP LS complete — requesting IRCv3 capabilities");
+            let req = cap_request_command();
+            let end = cap_end_command();
+            log_outbound_command(&req);
+            log_outbound_command(&end);
+            transport.send_raw(&req).await;
+            transport.send_raw(&end).await;
             caps_requested = true;
         }
 
-        if !joined_world && is_welcome(&line) {
+        if !welcomed && is_welcome(&line) {
+            welcomed = true;
+            info!(nick = %config.bot_nick, "IRC registration complete (001 welcome)");
             bot.send_nickserv_startup().await;
             transport.join(&config.world_channel).await;
-            joined_world = true;
             info!(channel = %config.world_channel, "joined world channel");
+        }
+
+        if !welcomed {
+            continue;
         }
 
         let message = mudl::irc::parse_irc_line(&line);
         if let IrcMessage::Ping { token } = &message {
+            info!("IRC PING received — sending PONG");
             transport
                 .send_raw(&mudl::irc::format_outgoing("PONG", &[token], None))
                 .await;
