@@ -1,11 +1,17 @@
 # MUDL Slack App manifest — import at https://api.slack.com/apps?new_app=1
 # Select "From an app manifest", choose a workspace, and paste this file.
 #
+# Operator guide: docs/SLACK.md
+#
 # After install, copy credentials into .env:
-#   SLACK_BOT_TOKEN=xoxb-…
-#   SLACK_SIGNING_SECRET=…
+#   SLACK_BOT_TOKEN=xoxb-…     (OAuth & Permissions → Install App)
+#   SLACK_SIGNING_SECRET=…     (Basic Information → App Credentials)
 #   SLACK_APP_ID=A…
-#   SLACK_WORLD_CHANNEL=C…  (channel ID for #mudl-ooc or similar)
+#
+# Then:
+#   1. Start MUDL behind HTTPS (ngrok/cloudflared → localhost:3000)
+#   2. Event Subscriptions → Request URL: https://YOUR_HOST/slack/events
+#   3. Create #mudl-ooc, invite @MUDL, set SLACK_WORLD_CHANNEL=C…
 
 display_information:
   name: MUDL

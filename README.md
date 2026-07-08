@@ -21,7 +21,7 @@ If you have ever wanted a MUD where the **world is data you can edit live**, whe
 - **Builders** who want a readable language for rooms, creatures, `@trigger` scripts, and expansion packs — without recompiling the server for every change.
 - **Engine contributors** interested in async Rust, DSL design, object graphs, and SQLite-backed persistence.
 
-The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitHub), and safe runtime self-modification. **Milestone 5 (multi-user IRC)** is complete: shared world, per-nick sessions, room visibility, tells, and TLS/IRCv3 transport. Post-M5 work includes full builder commands over IRC, combat parity on IRC, and rate limiting.
+The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitHub), and safe runtime self-modification. **Milestone 5 (multi-user IRC)** is complete: shared world, per-nick sessions, room visibility, tells, and TLS/IRCv3 transport. **Milestone 6 (Slack bot)** adds group playtesting via the Events API — same `SessionManager`, DMs for commands, world channel OOC, and per-room channels or threads.
 
 ---
 
@@ -39,8 +39,9 @@ The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitH
 | **Persistence** | SQLite with stable `type:base-name-###` IDs and full object JSON roundtrip |
 | **Builder tools** | `@set` / `@unset`, `@dig` / `@link`, `@trigger`, `@examine`, place building |
 | **IRC bot (M5)** | IRCv3 + TLS, `SessionManager`, room channels, tells, OOC world channel, mock + live modes |
+| **Slack bot (M6)** | Events API + Web API, shared world, DM commands, OOC channel, room channels/threads, mock + live |
 | **Clean architecture** | Pure core engine; gateway RBAC (Player / Builder / Wizard) on `PermissionFlags` |
-| **Tests** | **532** unit/integration tests — loader, combat, events, IRC, multi-user, load, and edge cases |
+| **Tests** | **650+** unit/integration tests — loader, combat, events, IRC, Slack, multi-user, load, and edge cases |
 
 ---
 
@@ -65,10 +66,16 @@ cargo run --bin repl
 # IRC bot (mock mode reads stdin as "nick command"):
 IRC_MOCK=1 cargo run --bin irc
 
+# Slack bot (mock mode reads stdin as "user_id channel_id command"):
+SLACK_MOCK=1 cargo run --bin slack
+
 # Or:
 make run-repl
 make run-irc
-make test-m5           # IRC + multi-user tests only
+make run-slack
+make test-m5           # IRC + multi-user tests
+make test-m6           # Slack transport tests
+make test-slack-flow   # mock group-play smoke (no Slack account)
 make dev               # fmt + check + clippy + test
 ```
 
@@ -94,8 +101,24 @@ The REPL loads `modules/default/universe.mudl`, bootstraps `default_world` if th
 | `MUDL_WORLD` | *(universe default)* | Override active world within the module |
 | `RUST_LOG` | `info` | Tracing verbosity |
 | `IRC_*` | see [docs/IRC.md](docs/IRC.md) | IRC bot (TLS, nick, channels); `IRC_MOCK=1` for stdin testing |
+| `SLACK_*` | see [docs/SLACK.md](docs/SLACK.md) | Slack bot (Events API, channels); `SLACK_MOCK=1` for stdin testing |
 
 See [`.env.example`](.env.example) for a ready-to-copy template.
+
+### Slack group play (M6)
+
+Full setup (app manifest, bot token, Event Subscriptions, HTTPS tunnel): **[docs/SLACK.md](docs/SLACK.md)**.
+
+```bash
+# 1. Import slack-app-manifest.yaml at api.slack.com/apps
+# 2. Copy SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, SLACK_APP_ID to .env
+# 3. Tunnel HTTPS to localhost:3000, set Event Subscriptions URL
+# 4. Create #mudl-ooc, invite bot, set SLACK_WORLD_CHANNEL=C…
+
+cargo run --bin slack
+```
+
+Players DM the bot with `login`, `look`, `go`, `say`, `tell`. OOC goes in the world channel without a prefix.
 
 ### Try It Out
 
@@ -140,6 +163,7 @@ Exits: south, north
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Contributors | Milestones M1–M5, module layout, concurrency, roadmap |
 | [SECURITY.md](SECURITY.md) | Operators & contributors | M5 security review, threat model, findings (SEC-*) |
 | [docs/IRC.md](docs/IRC.md) | Players & operators | IRC bot setup, commands, channels, nick handling, testing |
+| [docs/SLACK.md](docs/SLACK.md) | Players & operators | Slack app setup, Event Subscriptions, group deployment, testing |
 | [LANGUAGE.md](LANGUAGE.md) | Builders | MUDL syntax: creatures, `@trigger`, combat, spawners, expansions |
 | [COMMANDS.md](COMMANDS.md) | Players & builders | REPL + IRC command reference and output style |
 | [BUILDER.md](BUILDER.md) | Builders | `@set` / `@unset`, properties vs state vs status |
@@ -161,7 +185,7 @@ Exits: south, north
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │    SessionManager (sole registry) + RBAC + rate limits         │
-│         IRC bot • REPL (single session) • future: Slack        │
+│         IRC bot • Slack bot • REPL (single session)            │
 └──────────────────────────────┬──────────────────────────────┘
                                │
                                ▼
@@ -229,12 +253,12 @@ Module layout: [modules/default/README.md](modules/default/README.md) · Expansi
 - Conditions: `@effect` with DoT/HoT, `condition_ticks`, script `grant-effect` / `cure-tag`
 - Five official expansion packs with self-contained READMEs
 - **M5 multi-user IRC** — `SessionManager`, `IrcBot`, TLS/IRCv3, room visibility, tells, OOC, disconnect persist
-- **532** unit and integration tests (incl. `gateway::multi_user`, `load`, `edge_cases`, `m5_scenarios`)
+- **M6 Slack bot** — Events API, `SlackBot`, DM commands, world/room channels, tells, mock + live modes
+- **650+** unit and integration tests (incl. `gateway::multi_user`, `gateway::m6_*`, `slack::`, `m5_scenarios`)
 
-### Planned (post-M5)
+### Planned (post-M6)
 
-- **IRC combat & builder parity** — `attack`, `@dig`, full meta-command surface over IRC
-- **Rate limiting** — flood protection on IRC command dispatch
+- **IRC/Slack builder parity** — `put`, `open`, `@dig`, full meta-command surface over transports
 - **Sandboxed verb runtime** — replace hardcoded `event_script` actions with safe DSL execution
 - **File + GitHub hot-reload** — webhooks and live module updates
 

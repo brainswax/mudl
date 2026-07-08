@@ -1,6 +1,6 @@
 # Makefile for MUDL project
 
-.PHONY: fmt clippy check test test-m5 test-m6 build run-repl run-irc run-slack clean help
+.PHONY: fmt clippy check test test-m5 test-m6 test-slack-flow build run-repl run-irc run-slack clean help
 
 # Default target
 all: check test build
@@ -27,6 +27,9 @@ test-m5: ## Run M5 multi-user and IRC tests
 
 test-m6: ## Run M6 Slack transport and session tests
 	cargo test slack:: && cargo test gateway::m6_
+
+test-slack-flow: ## Mock login/say/tell/OOC flow + M6 tests (no Slack network)
+	./scripts/slack-mock-flow.sh
 
 build: ## Build the project
 	cargo build --all-targets --all-features
