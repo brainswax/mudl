@@ -1,8 +1,8 @@
 # Player and Wizard Commands
 
-Command reference for the MUDL REPL. Type `help` at the prompt for the canonical list.
+Command reference for the MUDL REPL and IRC bot. Type `help` at the prompt (or `/msg mudl help` over IRC) for the canonical list.
 
-Related docs: [BUILDER.md](BUILDER.md) (`@set` / `@unset`), [LANGUAGE.md](LANGUAGE.md) (MUDL syntax), [docs/REPL.md](docs/REPL.md) (REPL setup and examples).
+Related docs: [BUILDER.md](BUILDER.md) (`@set` / `@unset`), [LANGUAGE.md](LANGUAGE.md) (MUDL syntax), [docs/REPL.md](docs/REPL.md) (REPL setup), [docs/IRC.md](docs/IRC.md) (IRC bot setup and channels).
 
 ## In-character vs out-of-character
 
@@ -139,3 +139,35 @@ examine       → Player           (detailed stats)
 ```
 
 Implementation: `src/display/` (`DisplayContext`, `DisplayFlags::BRIEF`).
+
+## IRC bot (M5)
+
+Over IRC, send commands as private messages to the bot nick (`/msg mudl …`). Players must `login` before other verbs work. Full setup, TLS, channels, and nick rules: [docs/IRC.md](docs/IRC.md).
+
+### Available over IRC today
+
+| Command | Aliases / notes |
+|---------|-----------------|
+| `login` | `login player:hero-001` binds an explicit player id |
+| `look` | `l` |
+| `go <dir>` | Standalone exit names (`north`, `n`, …) work without `go` |
+| `inventory` | `i` |
+| `take <item>` | |
+| `say <text>` | `'` shorthand; room-local + room channel |
+| `emote <text>` | `:` shorthand |
+| `tell <nick> <text>` | `whisper` alias |
+| `help` | `?` — one line per reply |
+| `quit` | `logout`, `exit` — persist and disconnect |
+
+### IRC-only behavior
+
+| Topic | Behavior |
+|-------|----------|
+| **OOC** | Text on the world channel (`#mudl` by default) broadcasts as `[OOC] nick: message` (requires login) |
+| **Room channels** | `#mudl-<room-slug>` — bot JOIN/PART on movement; in-character speech also relays to co-located players |
+| **Visibility** | In-character lines use the player **object name**, not the IRC nick |
+| **Output** | Multi-line responses are one PRIVMSG per line (no embedded newlines) |
+
+### REPL-only (for now)
+
+Combat (`attack`), containers (`open`, `put`, `remove`), harvesting, and all `@` builder/meta commands are available in the REPL. IRC enforces RBAC on meta commands but defers them to the REPL until post-M5 parity work lands.

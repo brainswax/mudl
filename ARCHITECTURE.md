@@ -2,7 +2,7 @@
 
 **MUDL** (working name) — An IRC-first, programmable MUD/MOO with a custom domain-specific language (DSL), self-modifying world capabilities, and multi-modal authoring (IRC chat, REPL, files, GitHub).
 
-**Status**: High-level design + **Milestones 1–3 implemented**, **Milestone 4 (Events & Triggers) largely implemented** — `@trigger` bus, spawners, scheduler, conditions (DoT/HoT). **M5 foundation started**: `WorldState` / `PlayerSession` split, `SharedWorld` mutex, per-world `DispatchStack`, optimistic `revision` saves. **442** unit/integration tests. This document tracks target architecture, as-built state per milestone, and remaining M4+ debt.
+**Status**: High-level design + **Milestones 1–5 implemented** (multi-user IRC via `SessionManager`, `IrcBot`, IRCv3/TLS, per-nick sessions over one `SharedWorld`, room visibility, optimistic `revision` saves). **532** unit/integration tests. This document tracks target architecture, as-built state per milestone, and post-M5 debt.
 
 ## Milestone Summary (as-built)
 
@@ -12,6 +12,7 @@
 | **M2** | MUDL loader, bootstrap pipeline, map/items/NPCs, `@dig`/`@link`, expansion packs | `mudl/`, `world/bootstrap`, `world/place_builder` |
 | **M3** | Creature vitals/stats/effects, equipment modifiers, combat/death, behaviors, awareness, spawners, loot | `creature/`, `loot/` |
 | **M4** (largely done) | `@trigger` bus, spawners/loot/resources, scheduler, conditions (DoT/HoT), discovery/harvest | `world/events`, `world/event_script`, `creature/conditions` |
+| **M5** | Multi-user IRC: `SessionManager`, `IrcBot`, TLS/IRCv3, room channels, tells, OOC, disconnect persist, concurrency tests | `gateway/`, `irc/`, `repl/player_session.rs`, `world/world_state.rs` |
 
 ## Vision
 A living, collaborative text world where:
@@ -85,7 +86,7 @@ The diagram below shows **actual** module dependencies today (solid = implemente
 ### M1 known gaps (carried forward)
 
 - **`object` → `display` coupling** (`Describable` on `Object`) — core imports presentation
-- **No gateway or multi-user session isolation** yet (IRC needs per-connection `PlayerSession` registry over one `SharedWorld`)
+- ~~**No gateway or multi-user session isolation**~~ — **M5 done**: `SessionManager` + per-nick `Arc<Mutex<Session>>` over one `SharedWorld`
 - **Graph invariants** (`location`, `contents`, `body_slots`) enforced by ad-hoc prune/clear, not a single validator
 - **`DirtyTracker`** exists; REPL uses incremental persist but some paths still call `persist_all`
 
@@ -169,13 +170,13 @@ portal prep → on_leave (place) → move player → execute_event(on_enter)
 
 ## Architectural Review (M1–M4)
 
-*Review date: July 2026. **442** tests. Milestones 1–3 complete; Milestone 4 largely complete; M5 concurrency foundation in progress.*
+*Review date: July 2026. **532** tests. Milestones 1–3 complete; Milestone 4 largely complete; **M5 multi-user IRC complete**.*
 
 ### Executive summary
 
 MUDL has a **coherent core** for a single-player REPL: one object graph, one move authority, MUDL-first content, and a unified event bus for room scripts and spawners. The architecture matches the stated principle — **content in MUDL, physics in Rust** — and five expansion packs prove extensibility without engine forks.
 
-The main gaps are **scale and multi-user readiness**: `src/bin/repl.rs` is a 1.6k-line command router, `bootstrap.rs` is a 2.5k-line god module, and RBAC is still stubbed. World/player split, world-level locking, dispatch guard, and optimistic saves are in place; IRC (M5) still needs a `Gateway`, real permissions, and thin transport adapters.
+The main gaps are **transport DRY and IRC command parity**: `src/bin/repl.rs` is a 1.6k-line command router, `bootstrap.rs` is a 2.5k-line god module, and IRC exposes a player command subset (no `attack` / builder meta yet). World/player split, world-level locking, `SessionManager`, RBAC on actor `PermissionFlags`, and the IRC bot are in place.
 
 ### Strengths
 
@@ -193,13 +194,13 @@ The main gaps are **scale and multi-user readiness**: `src/bin/repl.rs` is a 1.6
 
 ### Issues and technical debt (prioritized)
 
-#### P0 — Blocks M5 (multi-user / IRC)
+#### P0 — M5 blockers (resolved)
 
 | Issue | Location | Impact | Recommendation |
 |-------|----------|--------|----------------|
 | ~~**World + player conflated**~~ | ~~`repl::Session` held graph + `player_id`~~ | **Done** — `world::WorldState` (graph, anatomy, dirty, dispatch) + `repl::PlayerSession` (actor, location cache). `Session` bundles `SharedWorld` + `PlayerSession`; IRC holds one `SharedWorld` and one `PlayerSession` per nick. | — |
 | ~~**No concurrency control**~~ | ~~Single-threaded REPL; `DISPATCH_STACK` was `thread_local`~~ | **Done** — `DispatchStack` on `WorldState`; `SharedWorld` (`Arc<Mutex<WorldState>>`) with `lock()` / `lock_blocking()`; IRC uses per-nick `Arc<Mutex<Session>>` + `with_locked_async`; REPL uses `with_locked`. Batch saves release the world lock during SQLite I/O. Per-room mutex deferred. | — |
-| **RBAC stubbed** | `has_wizard_permission()` always `true` | Any IRC nick could run `@set` / `@delete` | Gateway checks `PermissionFlags` on actor object; map IRC auth → player ID. Enforce builder vs wizard tiers before meta-commands. |
+| ~~**RBAC stubbed**~~ | ~~`has_wizard_permission()` always `true`~~ | **Done on IRC** — `gateway/rbac.rs` checks `PermissionFlags` on actor; meta commands RBAC-gated (deferred to REPL). REPL still uses permissive defaults for local dev. | Rate-limit IRC; expand builder surface when ready. |
 | ~~**Last-write-wins persistence**~~ | ~~`SqlitePersistence::save_object` per row, no version field~~ | **Done** — `Object.revision` + `updated_at`; CAS `UPDATE … WHERE revision = ?`; `PersistenceError::RevisionConflict`; `save_and_sync`, `save_object_with_retry`, `persist_dirty` batch retry. | — |
 
 #### P1 — Quality / maintainability (pre- or early M5)
@@ -240,14 +241,11 @@ The split is **healthy for MVP**:
 - **Correctly hard-coded:** movement validation, stack merge, combat math, awareness contests, weighted spawn rolls, `event_script` interpreter.
 - **Risk zone:** `event_script.rs` — each new builder-facing verb requires a Rust match arm. Without a sandbox, MUDL cannot be truly self-modifying; LLM-generated *scripts* are limited to the fixed action vocabulary.
 
-### M5 readiness (IRC / multi-user)
+### M5 as-built (IRC / multi-user)
 
 ```
-Today (M4)                         Target (M5)
-──────────                         ───────────
-
 repl.rs ──► Session               IRC bot ──┐
-              SharedWorld + player            ├──► Gateway (auth, RBAC, rate limit)
+              SharedWorld + player            ├──► Gateway (auth, RBAC)
               Mutex per command               │         │
               DispatchStack on WorldState     │         ▼
               optimistic revision saves       └──► SharedWorld (Arc<Mutex<WorldState>>)
@@ -257,30 +255,26 @@ repl.rs ──► Session               IRC bot ──┐
                                               (actor_id, location, prefs)
 ```
 
-| Ready today | Not ready |
-|-------------|-----------|
-| `repl::Session::go` orchestration reusable | Per-room fine-grained locking (optional) |
-| `Persistence` trait async-ready | Full builder command surface over IRC |
-| `EventContext` (actor/host/target) | Thin REPL adapter (REPL still thick) |
-| `command/` parsers shared | Rate limiting / flood protection |
-| Incremental dirty persist + optimistic `revision` | ~~IRC transport / session registry~~ |
-| `SharedWorld` + `WorldState` / `PlayerSession` split | ~~Multi-player integration tests~~ |
-| Per-world `DispatchStack` (depth/cycle guard) | ~~`Gateway::dispatch(actor, line) -> Outcome`~~ (IRC `dispatch_command`) |
-| Transactional `save_objects_batch` | Combat/inventory full parity on IRC |
-| Real RBAC (`PermissionFlags` on actor) | LLM / GitHub authoring hooks |
-| `SessionManager` login/logout + disconnect persist | |
-| `IrcBot` — TLS + IRCv3 caps, room visibility, tells, channels | |
-| Per-session IRC locking + `gateway::load` stress tests | Rate limiting / flood protection |
-| 500+ tests (multi-user IRC + load) | |
+| Delivered (M5) | Post-M5 / deferred |
+|----------------|-------------------|
+| `SessionManager` login/logout + disconnect persist | Per-room fine-grained locking (optional) |
+| `IrcBot` — TLS + IRCv3 caps, room channels, tells, OOC | Full builder command surface over IRC |
+| `dispatch_command` + per-nick `Arc<Mutex<Session>>` | Thin REPL adapter (`CommandDispatcher` DRY) |
+| `SharedWorld` + `WorldState` / `PlayerSession` split | Rate limiting / flood protection |
+| Per-world `DispatchStack` (depth/cycle guard) | Combat full parity on IRC (`attack`, etc.) |
+| Transactional `save_objects_batch` + optimistic `revision` | LLM / GitHub authoring hooks |
+| Real RBAC (`PermissionFlags` on actor) over IRC | |
+| Multi-player integration tests (`gateway::multi_user`, `load`, `edge_cases`, `m5_scenarios`) | |
+| **532** tests (IRC + multi-user + load + edge cases) | |
 
-**Minimum M5 slice:** (1) ~~`WorldState` + `PlayerSession` split~~, (2) ~~`dispatch_command` + IRC bot~~, (3) ~~real RBAC~~, (4) ~~world `Mutex` + transactional saves~~, (5) ~~IRC adapter calling gateway~~.
+**M5 slice (complete):** (1) ~~`WorldState` + `PlayerSession` split~~, (2) ~~`dispatch_command` + IRC bot~~, (3) ~~RBAC on actor permissions~~, (4) ~~world `Mutex` + transactional saves~~, (5) ~~IRC adapter + `SessionManager`~~.
 
 ### Recommended next steps
 
 1. **M4 tail (1–2 PRs):** shared `behavior_line` parser; remove `npc_behaviors` legacy; fix persist fallback; graph validator (warn-only).
-2. **M5 transport:** `Gateway` + RBAC on `PermissionFlags`; `CommandDispatcher`; IRC bot as thin client; session registry `HashMap<Nick, PlayerSession>`.
-3. **M5 hardening:** multi-player integration tests (two actors, revision conflicts, concurrent room entry).
-4. **Post-M5:** sandboxed verb runtime; prototype resolver; `object`/`display` decoupling.
+2. **Post-M5 IRC:** `attack` / inventory parity; builder meta over IRC; rate limiting; optional `CommandDispatcher` shared by REPL and IRC.
+3. **Post-M5 scale:** per-room fine-grained locking if profiling warrants it.
+4. **M6+:** sandboxed verb runtime; prototype resolver; `object`/`display` decoupling.
 
 ## Resolved M4 issues (historical)
 
@@ -385,7 +379,7 @@ Creatures now use a **single script surface** with split storage:
 
 ### 3. World State & Persistence
 - [`WorldState`](src/world/world_state.rs): in-memory object graph, anatomy, `DirtyTracker`, and `DispatchStack`.
-- [`SharedWorld`](src/world/world_state.rs): `Arc<Mutex<WorldState>>` — one handle per game world; REPL and future IRC lock per command.
+- [`SharedWorld`](src/world/world_state.rs): `Arc<Mutex<WorldState>>` — one handle per game world; REPL and IRC lock per command.
 - SQLite for durability (JSON blobs per object row).
 - Optimistic concurrency: `revision` + `updated_at` on each `Object`; CAS on save; `save_and_sync` / retry helpers keep in-memory revision aligned with the DB.
 - Git-friendly export/import.
@@ -593,12 +587,15 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 5. ~~Creature vitals, equipment, combat, behaviors, spawners, loot (M3)~~
 6. ~~Event bus foundation (M4 partial): `world::events`, `@trigger`, `execute_event`~~
 
-### M5 foundation (partial)
+### M5 — Multi-user IRC (complete)
 
-1. ~~`WorldState` + `PlayerSession` split~~ — `world/world_state.rs`, `repl/player_session.rs`, `Session::restore`
-2. ~~`SharedWorld` mutex serialization~~ — `Arc<Mutex<WorldState>>`, `with_locked` / `lock_blocking`
-3. ~~Per-world `DispatchStack`~~ — `world/dispatch_guard.rs` (replaces thread-local stack)
-4. ~~Optimistic `revision` saves~~ — CAS + `RevisionConflict` + batch transactional `save_objects_batch`
+1. ~~`WorldState` + `PlayerSession` split~~ — `world/world_state.rs`, `repl/player_session.rs`
+2. ~~`SessionManager`~~ — login/logout, per-nick `Arc<Mutex<Session>>`, disconnect persist
+3. ~~`IrcBot` + `dispatch_command`~~ — TLS/IRCv3, room channels, tells, OOC, nick normalization
+4. ~~Concurrency hardening~~ — async world locks, load tests, edge-case reconnect/RBAC/conflict tests
+5. ~~`SharedWorld` mutex + optimistic `revision`~~ — batch saves, conflict retry on logout
+
+Test suites: `gateway::multi_user`, `gateway::session_manager`, `gateway::load`, `gateway::edge_cases`, `gateway::m5_scenarios`, `irc::` (`make test-m5`).
 
 ### M4 — Events & Triggers (remaining)
 
@@ -614,17 +611,14 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 | ~~**P2**~~ | ~~Central `EventScheduler` (replace periodic/timer counters)~~ | Done — `world/scheduler.rs` |
 | ~~**P2**~~ | ~~`@resource-spawner` / harvest triggers~~ | Done — `resource/spawner.rs`, `harvest` command |
 
-### M5 — Multi-user / IRC (next milestone)
+### Post-M5 IRC & transport
 
 | Priority | Task | Rationale |
 |----------|------|-----------|
-| ~~**P0**~~ | ~~`WorldState` + `PlayerSession` split~~ | Done — `world/world_state.rs`, `repl/player_session.rs` |
-| **P0** | `Gateway` + real RBAC | `has_wizard_permission` → `PermissionFlags` on actor |
-| ~~**P0**~~ | ~~World-level lock + SQLite transactions~~ | Done — `SharedWorld` (`Arc<Mutex<WorldState>>`); `save_objects_batch` in a SQLite transaction |
-| ~~**P0**~~ | ~~Optimistic revision on `Object` save~~ | Done — `revision` / `updated_at`, CAS save, `RevisionConflict`, retry helpers |
-| **P1** | `CommandDispatcher` shared by REPL and IRC | DRY transport layer |
-| ~~**P1**~~ | ~~Per-world `DispatchGuard` (not `thread_local`)~~ | Done — `world/dispatch_guard.rs`, `DispatchStack` on `WorldState` |
-| **P2** | Multi-player integration tests | Two actors, same room, combat, take/drop races |
+| **P1** | `CommandDispatcher` shared by REPL and IRC | DRY transport layer; shrink `repl.rs` |
+| **P1** | `attack` and full inventory parity over IRC | Match REPL player surface |
+| **P1** | Builder meta over IRC (`@dig`, `@set`, …) | RBAC already checks `PermissionFlags` |
+| **P2** | Rate limiting / flood protection | Production IRC hardening |
 
 ### Defer (M6+)
 
@@ -637,6 +631,6 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 ## Future Directions
 
-- IRC gateway with per-nick `PlayerSession` registry over shared `SharedWorld`
+- IRC command parity (combat, builder meta) and rate limiting on the live `SessionManager` + `IrcBot` stack
 - Procedural generation driven by `@trigger` + spawner composition
 - Advanced self-modification via sandboxed runtime (beyond fixed `event_script` actions)

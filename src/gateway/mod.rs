@@ -10,6 +10,8 @@ mod edge_cases;
 #[cfg(test)]
 mod load;
 #[cfg(test)]
+mod m5_scenarios;
+#[cfg(test)]
 mod multi_user;
 
 pub use persistence::{hydrate_actor, persist_connection_state};

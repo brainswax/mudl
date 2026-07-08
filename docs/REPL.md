@@ -164,4 +164,6 @@ Source: `src/bin/repl.rs`, `src/repl/session.rs`.
 - Delete `repl.db` (or your `DATABASE_URL` file) to start fresh.
 - Use `@dump` or `RUST_LOG=info` when you need internal IDs.
 - `@delete` hides objects from play; `@undelete <id>` restores them.
-- Run `cargo test --lib` — **437** tests cover bootstrap, combat, events, and persistence.
+- Run `cargo test` or `make dev` — **532** tests cover bootstrap, combat, events, persistence, IRC, and multi-user scenarios.
+- Run `make test-m5` for IRC and gateway multi-user tests only.
+- Multi-user play over IRC: [IRC.md](IRC.md).

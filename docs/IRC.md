@@ -1,6 +1,6 @@
 # MUDL IRC Bot
 
-The IRC bot is the multi-user transport for MUDL (M5). It shares one [`WorldState`](../src/world/world_state.rs) across all connected players via [`SessionManager`](../src/gateway/session_manager.rs), routes commands through [`IrcBot`](../src/irc/bot.rs), and enforces room-local visibility for in-character speech.
+**Milestone 5 (complete)** — The IRC bot is the multi-user transport for MUDL. It shares one [`WorldState`](../src/world/world_state.rs) across all connected players via [`SessionManager`](../src/gateway/session_manager.rs), routes commands through [`IrcBot`](../src/irc/bot.rs), and enforces room-local visibility for in-character speech. Command reference and output style: [COMMANDS.md](../COMMANDS.md#irc-bot-m5).
 
 **Target environment:** an [IRCv3](https://ircv3.net)-capable server over **TLS** (default port **6697**). The bot negotiates IRCv3 capabilities during registration and uses `rustls` with the Mozilla root store for certificate verification.
 
@@ -182,19 +182,32 @@ Persistence releases the world mutex before SQLite I/O so other connections can 
 
 ## Tests
 
+Run the full M5 suite:
+
+```bash
+make test-m5
+# or:
+cargo test gateway:: && cargo test irc::
+```
+
+Individual modules:
+
 ```bash
 cargo test irc::
-cargo test irc::input
-cargo test irc::message
 cargo test gateway::multi_user
+cargo test gateway::session_manager
 cargo test gateway::load
 cargo test gateway::edge_cases
+cargo test gateway::m5_scenarios
 ```
 
 Coverage includes:
 
-- **IRC layer** — message parsing, IRCv3 caps, channel naming, visibility, dispatch, bot relay
+- **IRC layer** (`irc::`) — message parsing, IRCv3 caps, channel naming, visibility, dispatch, bot relay, input shorthands
+- **Session manager** (`gateway::session_manager`) — login/logout lifecycle, nick registry, disconnect persist
 - **Multi-user** (`gateway::multi_user`) — shared world movement, room-boundary `say`/`emote`, private `tell`, concurrent `go`/`take`, logout isolation, mixed-case nicks
+- **Load** (`gateway::load`) — parallel command stress, deadlock avoidance, latency under contention
 - **Edge cases** (`gateway::edge_cases`) — disconnect/reconnect, IRC `QUIT`, double logout, login while connected, RBAC denials, revision-conflict retry on logout, orphan `connect()` reclaim
+- **Acceptance** (`gateway::m5_scenarios`) — explicit player login, shorthand movement/`say`/`emote`, whisper alias, OOC login gate, room channel JOIN/PART on `go`, per-actor inventory isolation on `take`
 
-Mock transport is used — no live TLS connection in CI.
+Mock transport is used — no live TLS connection in CI. The full project suite is **532** tests (`make dev` or `cargo test`).
