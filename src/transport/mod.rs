@@ -2,7 +2,7 @@
 //!
 //! [`GameTransport`] captures deliver/join/leave semantics shared across transports.
 //! Protocol-specific setup (IRC registration, Slack socket mode) stays on per-transport
-//! extensions such as [`crate::irc::IrcTransport`].
+//! extensions such as [`crate::irc::IrcTransport`] and [`crate::slack::SlackWebTransport`].
 
 use std::sync::{Arc, Mutex};
 

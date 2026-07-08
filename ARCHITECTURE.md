@@ -187,6 +187,8 @@ M5 adds concurrent players over one shared world graph via IRC (TLS/IRCv3) with 
 | `persistence/writer_lock.rs` | `WriterGuard` advisory lock — one live writer per DB file (SEC-23) |
 | `irc/bot.rs` | `IrcBot` — identity verification at PRIVMSG, OOC rate limits, `deliver` via [`GameTransport`](src/transport/mod.rs) |
 | `transport/mod.rs` | `GameTransport`, `MockTransport`, `OutgoingAction` — shared deliver/join/leave |
+| `slack/transport.rs` | `SlackWebTransport` — Web API mapping (`postMessage`, `join`, `leave`, DM open) |
+| `slack/presence.rs` | Recipient encoding (`C…:thread:TS`, `C…:notice:U…`) for multi-frontend dispatch |
 | `irc/transport.rs` | `IrcTransport` (`GameTransport` + `send_raw`), TLS stream adapter |
 | `bin/irc.rs` | Bootstrap: `WriterGuard` → universe load → `SessionManager::open_with_rate_limits` → event loop |
 

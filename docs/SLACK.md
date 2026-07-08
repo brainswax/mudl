@@ -15,12 +15,26 @@ Slack workspace ──Events API POST──► axum server (/slack/events)
                                          │              ├── SharedWorld
                                          │              └── PlayerSession × N
                                          ▼
-                              SlackWebTransport (chat.postMessage)
+                         SlackWebTransport (GameTransport)
+                    chat.postMessage / postEphemeral / conversations.*
 ```
 
 - **Game commands** arrive as direct messages to the bot (for now acknowledged; full dispatch next).
 - **OOC chat** on the configured world channel (`SLACK_WORLD_CHANNEL`) broadcasts when the user is logged in.
-- **Room channels** reply with guidance until thread routing lands.
+- **Room presence** uses `conversations.join` for named room channels (`mudl-void-001`) or thread keys (`C…:thread:…`) for shared-channel play.
+
+## GameTransport mapping
+
+[`SlackWebTransport`](../src/slack/transport.rs) implements the shared [`GameTransport`](../src/transport/mod.rs) trait (same surface as IRC [`StreamTransport`](../src/irc/transport.rs)):
+
+| Method | Slack Web API | Recipient format |
+|--------|---------------|------------------|
+| `send_direct` | `chat.postMessage` | `C…` / `D…` channel id, `C…:thread:TS`, or `U…` (opens DM) |
+| `send_notice` | `chat.postEphemeral` | `C…:notice:U…` |
+| `join` | `conversations.join` or thread entry notice | channel id or room slug (`mudl-void-001`) |
+| `leave` | optional farewell + `conversations.leave` | channel id or room slug |
+
+Helpers in [`slack/presence.rs`](../src/slack/presence.rs) and [`slack/channels.rs`](../src/slack/channels.rs) mirror IRC channel naming for future `slack/dispatch.rs` integration.
 
 ## Slack app setup
 
@@ -107,5 +121,5 @@ Covers payload parsing, signature verification, input normalization, bot acknowl
 ## Next steps (M6)
 
 - `slack/dispatch.rs` — map `CommandResult` → Slack delivery (mirror `irc/dispatch.rs`)
-- Per-room thread routing for in-character `say` / `emote`
+- Wire movement `join`/`leave` to `room_channel_name` / `room_thread_presence`
 - `gateway::m6_scenarios` integration tests

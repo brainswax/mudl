@@ -11,6 +11,7 @@ use crate::transport::{split_delivery_lines, GameTransport};
 use super::config::SlackConfig;
 use super::events::{classify_slack_channel, SlackChannelKind, SlackEventBody, SlackMessageEvent};
 use super::input::normalize_slack_command_input;
+use super::presence::encode_notice;
 
 /// Slack gateway bot backed by a shared [`SessionManager`].
 ///
@@ -135,7 +136,7 @@ where
     }
 
     async fn send_notice(&self, channel: &str, user: &str, text: &str) {
-        let recipient = format!("{channel}:{user}");
+        let recipient = encode_notice(channel, user);
         for part in split_delivery_lines(text) {
             if !part.is_empty() {
                 self.transport.send_notice(&recipient, part).await;
@@ -196,7 +197,7 @@ mod tests {
             .into_iter()
             .filter_map(|entry| match entry {
                 OutgoingAction::Notice { recipient, text }
-                    if recipient == "C_WORLD:U1" =>
+                    if recipient == "C_WORLD:notice:U1" =>
                 {
                     Some(text)
                 }
