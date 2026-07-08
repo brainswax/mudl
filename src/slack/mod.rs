@@ -9,6 +9,7 @@ mod channels;
 mod config;
 mod dispatch;
 mod events;
+mod format;
 mod input;
 mod presence;
 mod server;
@@ -26,6 +27,11 @@ pub use dispatch::{
     dispatch_command, slack_help_text, DispatchOutcome, PresenceSync, RoomDelivery,
 };
 pub use config::SlackConfig;
+pub use format::{
+    classify_slack_output, escape_mrkdwn, format_emote, format_help_text, format_ooc,
+    format_say, format_slack_message, format_tell, format_tell_sent, SlackFormattedMessage,
+    SlackOutputKind,
+};
 pub use events::{
     classify_slack_channel, parse_events_payload, SlackChannelKind, SlackEventBody,
     SlackEventCallback, SlackEventsPayload, SlackMessageEvent,
@@ -37,7 +43,9 @@ pub use session::{
     is_slack_member_id, normalize_slack_user_id, slack_logged_out_help, SlackSessionContext,
     SlackSessionRegistry,
 };
-pub use transport::{OutgoingSlack, SlackTransport, SlackWebTransport};
+pub use transport::{
+    OutgoingSlack, SlackFormattedDelivery, SlackTransport, SlackWebTransport,
+};
 pub use verify::verify_slack_signature;
 pub use visibility::{resolve_connected_user_async, slack_look_scope, SLACK_LOOK_SCOPE};
 pub use crate::irc::CoLocatedPlayer;

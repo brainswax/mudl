@@ -5,12 +5,12 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::gateway::{RateLimitKind, SessionManager};
-use crate::irc::format_ooc;
 use crate::persistence::Persistence;
-use crate::transport::{split_delivery_lines, GameTransport};
 
 use super::config::SlackConfig;
 use super::dispatch::{dispatch_command, DispatchOutcome, PresenceSync};
+use super::format::{classify_slack_output, format_ooc, format_help_text, format_slack_message};
+use super::transport::SlackFormattedDelivery;
 use super::events::{classify_slack_channel, SlackChannelKind, SlackEventBody, SlackMessageEvent};
 use super::input::normalize_slack_command_input;
 use super::presence::encode_notice;
@@ -28,7 +28,7 @@ pub struct SlackBot<P, T> {
 impl<P, T> SlackBot<P, T>
 where
     P: Persistence + Clone + Send + Sync + 'static,
-    T: GameTransport + 'static,
+    T: SlackFormattedDelivery + 'static,
 {
     pub fn new(manager: SessionManager<P>, transport: Arc<T>, config: SlackConfig) -> Self {
         Self {
@@ -168,15 +168,32 @@ where
         for user_id in connected {
             if user_id != message.user {
                 let target = sessions.delivery_target(&user_id);
-                self.transport.send_direct(&target, &line).await;
+                let formatted = format_slack_message(
+                    &line,
+                    classify_slack_output(&target, &line),
+                );
+                self.transport
+                    .send_slack_message(&target, &formatted)
+                    .await;
             }
         }
         Ok(())
     }
 
     async fn deliver(&self, outcome: &DispatchOutcome) {
-        for line in &outcome.to_sender {
-            self.send_to_presence(&outcome.reply_channel, line).await;
+        if outcome
+            .to_sender
+            .iter()
+            .any(|l| l.starts_with("MUDL Slack commands"))
+        {
+            let formatted = format_help_text(&outcome.to_sender);
+            self.transport
+                .send_slack_message(&outcome.reply_channel, &formatted)
+                .await;
+        } else {
+            for line in &outcome.to_sender {
+                self.send_to_presence(&outcome.reply_channel, line).await;
+            }
         }
 
         for (user_id, line) in &outcome.private {
@@ -223,20 +240,25 @@ where
     }
 
     async fn send_to_presence(&self, presence: &str, text: &str) {
-        for part in split_delivery_lines(text) {
-            if !part.is_empty() {
-                self.transport.send_direct(presence, part).await;
-            }
+        if text.trim().is_empty() {
+            return;
         }
+        let kind = classify_slack_output(presence, text);
+        let formatted = format_slack_message(text, kind);
+        self.transport
+            .send_slack_message(presence, &formatted)
+            .await;
     }
 
     async fn send_notice(&self, channel: &str, user: &str, text: &str) {
-        let recipient = encode_notice(channel, user);
-        for part in split_delivery_lines(text) {
-            if !part.is_empty() {
-                self.transport.send_notice(&recipient, part).await;
-            }
+        if text.trim().is_empty() {
+            return;
         }
+        let recipient = encode_notice(channel, user);
+        let formatted = format_slack_message(text, super::format::SlackOutputKind::Notice);
+        self.transport
+            .send_slack_notice(&recipient, &formatted)
+            .await;
     }
 }
 
@@ -330,9 +352,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            notices,
-            vec!["You are not logged in. DM the bot with `login`.".to_string()]
+        assert!(
+            notices
+                .iter()
+                .any(|n| n.contains("not logged in") && n.contains("login")),
+            "expected login notice, got {notices:?}"
         );
     }
 

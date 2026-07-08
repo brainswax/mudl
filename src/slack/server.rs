@@ -14,9 +14,9 @@ use serde_json::json;
 use tracing::warn;
 
 use crate::persistence::Persistence;
-use crate::transport::GameTransport;
 
 use super::bot::SlackBot;
+use super::transport::SlackFormattedDelivery;
 use super::config::SlackConfig;
 use super::events::{parse_events_payload, SlackEventBody, SlackEventsPayload};
 use super::verify::verify_slack_signature;
@@ -31,7 +31,7 @@ pub struct EventsServerState<P, T> {
 pub fn events_router<P, T>(state: Arc<EventsServerState<P, T>>) -> Router
 where
     P: Persistence + Clone + Send + Sync + 'static,
-    T: GameTransport + 'static,
+    T: SlackFormattedDelivery + 'static,
 {
     let path = state.config.events_path.clone();
     Router::new()
@@ -45,7 +45,7 @@ pub async fn run_events_server<P, T>(
 ) -> anyhow::Result<()>
 where
     P: Persistence + Clone + Send + Sync + 'static,
-    T: GameTransport + 'static,
+    T: SlackFormattedDelivery + 'static,
 {
     let router = events_router(state.clone());
     let listener = tokio::net::TcpListener::bind(&state.config.bind_addr).await?;
@@ -65,7 +65,7 @@ async fn handle_events<P, T>(
 ) -> impl IntoResponse
 where
     P: Persistence + Clone + Send + Sync + 'static,
-    T: GameTransport + 'static,
+    T: SlackFormattedDelivery + 'static,
 {
     let timestamp = headers
         .get("X-Slack-Request-Timestamp")

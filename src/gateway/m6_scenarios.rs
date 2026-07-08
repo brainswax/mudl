@@ -277,9 +277,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            notices,
-            vec!["You are not logged in. DM the bot with `login`.".to_string()]
+        assert!(
+            notices
+                .iter()
+                .any(|n| n.contains("not logged in") && n.contains("login")),
+            "expected login notice, got {notices:?}"
         );
     }
 }

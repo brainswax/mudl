@@ -50,6 +50,21 @@ Slack workspace ──Events API POST──► axum server (/slack/events)
 
 Set `SLACK_ROOM_CHANNEL_PREFIX` (default `mudl-`) for named-channel slugs.
 
+## Output formatting
+
+Game text is adapted in [`slack/format.rs`](../src/slack/format.rs) before Web API delivery:
+
+| Output | Slack treatment |
+|--------|-----------------|
+| **Room `look`** | Block Kit sections — description, divider, *Obvious exits*, _You see…_ |
+| **`say` / `emote`** | `*Speaker*` bold + quoted speech or _italic_ action |
+| **`tell`** | `:envelope:` whisper styling in DMs |
+| **OOC** | `` `[OOC]` `` code label + bold speaker name |
+| **Help** | Bulleted command list in a single block message |
+| **Notices** | Ephemeral `:warning:` for login/rate-limit hints |
+
+[`SlackBot`](../src/slack/bot.rs) formats at delivery time; [`SlackWebTransport`](../src/slack/transport.rs) sends `blocks` when present (fallback `text` always set for notifications). Reactions are not used — room activity stays in channels/threads.
+
 ## GameTransport mapping
 
 [`SlackWebTransport`](../src/slack/transport.rs) implements the shared [`GameTransport`](../src/transport/mod.rs) trait (same surface as IRC [`StreamTransport`](../src/irc/transport.rs)):

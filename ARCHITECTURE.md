@@ -189,6 +189,7 @@ M5 adds concurrent players over one shared world graph via IRC (TLS/IRCv3) with 
 | `transport/mod.rs` | `GameTransport`, `MockTransport`, `OutgoingAction` — shared deliver/join/leave |
 | `slack/dispatch.rs` | `dispatch_command` → `CommandDispatcher` → `DispatchOutcome` (mirrors IRC adapter) |
 | `slack/session.rs` | `SlackSessionRegistry` — DM channel sidecar keyed by normalized Slack user id |
+| `slack/format.rs` | mrkdwn + Block Kit adaptation (room look, social, OOC, help) |
 | `slack/transport.rs` | `SlackWebTransport` — Web API mapping (`postMessage`, `join`, `leave`, DM open) |
 | `slack/presence.rs` | Recipient encoding (`C…:thread:TS`, `C…:notice:U…`) for multi-frontend dispatch |
 | `irc/transport.rs` | `IrcTransport` (`GameTransport` + `send_raw`), TLS stream adapter |

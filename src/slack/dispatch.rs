@@ -295,12 +295,16 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
             dispatch_login(manager, persistence, user_id, reply_channel, &line.args, config)
                 .await
         }
-        "help" | "?" => DispatchOutcome {
-            user_id: user_id.to_string(),
-            reply_channel: reply_channel.to_string(),
-            to_sender: vec![logged_out_help_text(config)],
-            ..Default::default()
-        },
+        "help" | "?" => {
+            let mut lines = vec![logged_out_help_text(config)];
+            lines.extend(slack_help_lines(config));
+            DispatchOutcome {
+                user_id: user_id.to_string(),
+                reply_channel: reply_channel.to_string(),
+                to_sender: lines,
+                ..Default::default()
+            }
+        }
         _ => DispatchOutcome {
             user_id: user_id.to_string(),
             reply_channel: reply_channel.to_string(),

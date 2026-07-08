@@ -14,13 +14,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use serde::Serialize;
 use serde_json::json;
 use tracing::warn;
 
 use crate::transport::GameTransport;
 
 use super::api::slack_api_post_async;
+use super::format::SlackFormattedMessage;
 use super::presence::{parse_recipient, SlackRecipient};
 
 /// Slack-specific outgoing action (includes Web API calls).
@@ -30,12 +30,14 @@ pub enum OutgoingSlack {
         channel: String,
         text: String,
         thread_ts: Option<String>,
+        blocks: Option<Vec<serde_json::Value>>,
     },
     PostEphemeral {
         channel: String,
         user: String,
         text: String,
         thread_ts: Option<String>,
+        blocks: Option<Vec<serde_json::Value>>,
     },
     Join { channel: String },
     Leave {
@@ -55,6 +57,7 @@ impl From<crate::transport::OutgoingAction> for OutgoingSlack {
                         channel: id,
                         text,
                         thread_ts,
+                        blocks: None,
                     },
                     SlackRecipient::User { id } => OutgoingSlack::OpenDm {
                         user: id,
@@ -66,6 +69,7 @@ impl From<crate::transport::OutgoingAction> for OutgoingSlack {
                         user,
                         text,
                         thread_ts: None,
+                        blocks: None,
                     },
                 }
             }
@@ -77,11 +81,13 @@ impl From<crate::transport::OutgoingAction> for OutgoingSlack {
                         user,
                         text,
                         thread_ts: None,
+                        blocks: None,
                     },
                     _ => OutgoingSlack::PostMessage {
                         channel: recipient,
                         text,
                         thread_ts: None,
+                        blocks: None,
                     },
                 }
             }
@@ -102,6 +108,14 @@ pub trait SlackTransport: GameTransport {
     /// Post a visible message to a channel, DM, or thread.
     async fn post_message(&self, channel: &str, text: &str, thread_ts: Option<&str>);
 
+    /// Post with optional Block Kit sections.
+    async fn post_formatted(
+        &self,
+        channel: &str,
+        message: &SlackFormattedMessage,
+        thread_ts: Option<&str>,
+    );
+
     /// Post an ephemeral notice visible only to one user in a channel.
     async fn post_ephemeral(
         &self,
@@ -111,8 +125,24 @@ pub trait SlackTransport: GameTransport {
         thread_ts: Option<&str>,
     );
 
+    /// Ephemeral delivery with optional blocks.
+    async fn post_ephemeral_formatted(
+        &self,
+        channel: &str,
+        user: &str,
+        message: &SlackFormattedMessage,
+        thread_ts: Option<&str>,
+    );
+
     /// Resolve (and cache) the DM conversation id for a workspace user.
     async fn open_dm(&self, user_id: &str) -> Option<String>;
+}
+
+/// Formatted Slack delivery over any [`GameTransport`] (mrkdwn text; blocks on Web API).
+#[async_trait]
+pub trait SlackFormattedDelivery: GameTransport {
+    async fn send_slack_message(&self, recipient: &str, message: &SlackFormattedMessage);
+    async fn send_slack_notice(&self, recipient: &str, message: &SlackFormattedMessage);
 }
 
 /// Live Slack transport backed by the Web API.
@@ -152,27 +182,35 @@ impl SlackWebTransport {
         !self.bot_token.is_empty()
     }
 
-    async fn deliver_recipient(&self, recipient: &str, text: &str, ephemeral: bool) {
+    async fn deliver_formatted_recipient(
+        &self,
+        recipient: &str,
+        message: &SlackFormattedMessage,
+        ephemeral: bool,
+    ) {
         match parse_recipient(recipient) {
             SlackRecipient::Notice { channel, user } if ephemeral => {
-                self.post_ephemeral(&channel, &user, text, None).await;
+                self.post_ephemeral_formatted(&channel, &user, message, None)
+                    .await;
             }
             SlackRecipient::Channel { id, thread_ts } => {
-                self.post_message(&id, text, thread_ts.as_deref()).await;
+                self.post_formatted(&id, message, thread_ts.as_deref())
+                    .await;
             }
             SlackRecipient::Notice { channel, user } => {
-                self.post_ephemeral(&channel, &user, text, None).await;
+                self.post_ephemeral_formatted(&channel, &user, message, None)
+                    .await;
             }
             SlackRecipient::User { id } => {
                 if let Some(dm) = self.open_dm(&id).await {
-                    self.post_message(&dm, text, None).await;
+                    self.post_formatted(&dm, message, None).await;
                 } else {
                     warn!(user = %id, "failed to open slack DM");
                 }
             }
             SlackRecipient::ChannelName(name) => {
                 self.join(&name).await;
-                self.post_message(&name, text, None).await;
+                self.post_formatted(&name, message, None).await;
             }
         }
     }
@@ -180,29 +218,29 @@ impl SlackWebTransport {
     async fn api_post_message(
         &self,
         channel: &str,
-        text: &str,
+        message: &SlackFormattedMessage,
         thread_ts: Option<&str>,
     ) -> anyhow::Result<()> {
-        #[derive(Serialize)]
-        struct Body<'a> {
-            channel: &'a str,
-            text: &'a str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            thread_ts: Option<&'a str>,
-        }
-
         if !self.network_enabled() {
             return Ok(());
+        }
+
+        let mut body = json!({
+            "channel": channel,
+            "text": message.text,
+            "thread_ts": thread_ts,
+        });
+        if let Some(blocks) = &message.blocks {
+            body["blocks"] = json!(blocks);
+        }
+        if body.get("thread_ts").is_some_and(|v| v.is_null()) {
+            body.as_object_mut().unwrap().remove("thread_ts");
         }
 
         slack_api_post_async(
             self.bot_token.clone(),
             "chat.postMessage".to_string(),
-            json!(Body {
-                channel,
-                text,
-                thread_ts,
-            }),
+            body,
         )
         .await?;
         Ok(())
@@ -212,31 +250,30 @@ impl SlackWebTransport {
         &self,
         channel: &str,
         user: &str,
-        text: &str,
+        message: &SlackFormattedMessage,
         thread_ts: Option<&str>,
     ) -> anyhow::Result<()> {
-        #[derive(Serialize)]
-        struct Body<'a> {
-            channel: &'a str,
-            user: &'a str,
-            text: &'a str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            thread_ts: Option<&'a str>,
-        }
-
         if !self.network_enabled() {
             return Ok(());
+        }
+
+        let mut body = json!({
+            "channel": channel,
+            "user": user,
+            "text": message.text,
+            "thread_ts": thread_ts,
+        });
+        if let Some(blocks) = &message.blocks {
+            body["blocks"] = json!(blocks);
+        }
+        if body.get("thread_ts").is_some_and(|v| v.is_null()) {
+            body.as_object_mut().unwrap().remove("thread_ts");
         }
 
         slack_api_post_async(
             self.bot_token.clone(),
             "chat.postEphemeral".to_string(),
-            json!(Body {
-                channel,
-                user,
-                text,
-                thread_ts,
-            }),
+            body,
         )
         .await?;
         Ok(())
@@ -289,11 +326,21 @@ impl SlackWebTransport {
 #[async_trait]
 impl GameTransport for SlackWebTransport {
     async fn send_direct(&self, recipient: &str, text: &str) {
-        self.deliver_recipient(recipient, text, false).await;
+        self.deliver_formatted_recipient(
+            recipient,
+            &SlackFormattedMessage::plain(text),
+            false,
+        )
+        .await;
     }
 
     async fn send_notice(&self, recipient: &str, text: &str) {
-        self.deliver_recipient(recipient, text, true).await;
+        self.deliver_formatted_recipient(
+            recipient,
+            &SlackFormattedMessage::plain(text),
+            true,
+        )
+        .await;
     }
 
     async fn join(&self, presence: &str) {
@@ -304,7 +351,11 @@ impl GameTransport for SlackWebTransport {
         match parse_recipient(presence) {
             SlackRecipient::Channel { id, thread_ts: Some(thread_ts) } => {
                 if let Err(err) = self
-                    .api_post_message(&id, "_(entered the location)_", Some(&thread_ts))
+                    .api_post_message(
+                        &id,
+                        &SlackFormattedMessage::plain("_(entered the location)_"),
+                        Some(&thread_ts),
+                    )
                     .await
                 {
                     warn!(error = %err, channel = %id, thread = %thread_ts, "slack thread join notice failed");
@@ -337,7 +388,11 @@ impl GameTransport for SlackWebTransport {
         match parse_recipient(presence) {
             SlackRecipient::Channel { id, thread_ts: Some(thread_ts) } => {
                 let _ = self
-                    .api_post_message(&id, "_(left the location)_", Some(&thread_ts))
+                    .api_post_message(
+                        &id,
+                        &SlackFormattedMessage::plain("_(left the location)_"),
+                        Some(&thread_ts),
+                    )
                     .await;
             }
             SlackRecipient::Channel { id, thread_ts: None } => {
@@ -358,12 +413,27 @@ impl GameTransport for SlackWebTransport {
 #[async_trait]
 impl SlackTransport for SlackWebTransport {
     async fn post_message(&self, channel: &str, text: &str, thread_ts: Option<&str>) {
+        self.post_formatted(
+            channel,
+            &SlackFormattedMessage::plain(text),
+            thread_ts,
+        )
+        .await;
+    }
+
+    async fn post_formatted(
+        &self,
+        channel: &str,
+        message: &SlackFormattedMessage,
+        thread_ts: Option<&str>,
+    ) {
         self.record_action(OutgoingSlack::PostMessage {
             channel: channel.to_string(),
-            text: text.to_string(),
+            text: message.text.clone(),
             thread_ts: thread_ts.map(str::to_string),
+            blocks: message.blocks.clone(),
         });
-        if let Err(err) = self.api_post_message(channel, text, thread_ts).await {
+        if let Err(err) = self.api_post_message(channel, message, thread_ts).await {
             warn!(error = %err, channel = %channel, "slack post_message failed");
         }
     }
@@ -375,14 +445,31 @@ impl SlackTransport for SlackWebTransport {
         text: &str,
         thread_ts: Option<&str>,
     ) {
+        self.post_ephemeral_formatted(
+            channel,
+            user,
+            &SlackFormattedMessage::plain(text),
+            thread_ts,
+        )
+        .await;
+    }
+
+    async fn post_ephemeral_formatted(
+        &self,
+        channel: &str,
+        user: &str,
+        message: &SlackFormattedMessage,
+        thread_ts: Option<&str>,
+    ) {
         self.record_action(OutgoingSlack::PostEphemeral {
             channel: channel.to_string(),
             user: user.to_string(),
-            text: text.to_string(),
+            text: message.text.clone(),
             thread_ts: thread_ts.map(str::to_string),
+            blocks: message.blocks.clone(),
         });
         if let Err(err) = self
-            .api_post_ephemeral(channel, user, text, thread_ts)
+            .api_post_ephemeral(channel, user, message, thread_ts)
             .await
         {
             warn!(
@@ -425,6 +512,28 @@ impl SlackTransport for SlackWebTransport {
     }
 }
 
+#[async_trait]
+impl SlackFormattedDelivery for SlackWebTransport {
+    async fn send_slack_message(&self, recipient: &str, message: &SlackFormattedMessage) {
+        self.deliver_formatted_recipient(recipient, message, false).await;
+    }
+
+    async fn send_slack_notice(&self, recipient: &str, message: &SlackFormattedMessage) {
+        self.deliver_formatted_recipient(recipient, message, true).await;
+    }
+}
+
+#[async_trait]
+impl SlackFormattedDelivery for crate::transport::MockTransport {
+    async fn send_slack_message(&self, recipient: &str, message: &SlackFormattedMessage) {
+        self.send_direct(recipient, &message.text).await;
+    }
+
+    async fn send_slack_notice(&self, recipient: &str, message: &SlackFormattedMessage) {
+        self.send_notice(recipient, &message.text).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,7 +548,8 @@ mod tests {
             vec![OutgoingSlack::PostMessage {
                 channel: "C1".to_string(),
                 text: "hello".to_string(),
-                thread_ts: None
+                thread_ts: None,
+                blocks: None,
             }]
         );
     }
@@ -499,6 +609,23 @@ mod tests {
             OutgoingSlack::from(action),
             OutgoingSlack::PostMessage { thread_ts: Some(_), .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn post_formatted_records_blocks() {
+        let transport = SlackWebTransport::new("");
+        let blocks = vec![serde_json::json!({"type": "section", "text": {"type": "mrkdwn", "text": "hi"}})];
+        transport
+            .post_formatted(
+                "C1",
+                &SlackFormattedMessage::with_blocks("hi", blocks.clone()),
+                None,
+            )
+            .await;
+        assert!(transport.recorded().iter().any(|entry| matches!(
+            entry,
+            OutgoingSlack::PostMessage { blocks: Some(b), .. } if b == &blocks
+        )));
     }
 
     #[tokio::test]
