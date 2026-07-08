@@ -139,11 +139,24 @@ pub fn classify_slack_channel(
     channel_type: Option<&str>,
     world_channel: &str,
 ) -> SlackChannelKind {
+    classify_slack_channel_with_rooms(channel_id, channel_type, world_channel, None)
+}
+
+/// Classify with optional shared rooms channel for threaded in-character play.
+pub fn classify_slack_channel_with_rooms(
+    channel_id: &str,
+    channel_type: Option<&str>,
+    world_channel: &str,
+    rooms_channel: Option<&str>,
+) -> SlackChannelKind {
     if channel_type == Some("im") {
         return SlackChannelKind::DirectMessage;
     }
     if !world_channel.is_empty() && channel_id == world_channel {
         return SlackChannelKind::World;
+    }
+    if rooms_channel.is_some_and(|rooms| channel_id == rooms) {
+        return SlackChannelKind::Room;
     }
     if channel_type == Some("channel") || channel_type == Some("group") {
         return SlackChannelKind::Room;
@@ -223,6 +236,19 @@ mod tests {
         );
         assert_eq!(
             classify_slack_channel("C_ROOM", Some("channel"), "C_WORLD"),
+            SlackChannelKind::Room
+        );
+    }
+
+    #[test]
+    fn classifies_shared_rooms_channel_as_room() {
+        assert_eq!(
+            classify_slack_channel_with_rooms(
+                "C_ROOMS",
+                Some("channel"),
+                "C_WORLD",
+                Some("C_ROOMS")
+            ),
             SlackChannelKind::Room
         );
     }

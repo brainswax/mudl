@@ -11,6 +11,7 @@ mod dispatch;
 mod events;
 mod format;
 mod input;
+mod multi_user;
 mod presence;
 mod server;
 mod session;
@@ -33,8 +34,12 @@ pub use format::{
     SlackOutputKind,
 };
 pub use events::{
-    classify_slack_channel, parse_events_payload, SlackChannelKind, SlackEventBody,
-    SlackEventCallback, SlackEventsPayload, SlackMessageEvent,
+    classify_slack_channel, classify_slack_channel_with_rooms, parse_events_payload,
+    SlackChannelKind, SlackEventBody, SlackEventCallback, SlackEventsPayload,
+    SlackMessageEvent,
+};
+pub use multi_user::{
+    append_movement_visibility, is_private_tell_line, speaker_display_name_async,
 };
 pub use input::normalize_slack_command_input;
 pub use presence::{encode_notice, encode_thread, parse_recipient, SlackRecipient};

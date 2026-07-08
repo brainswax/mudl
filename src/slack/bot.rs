@@ -11,7 +11,7 @@ use super::config::SlackConfig;
 use super::dispatch::{dispatch_command, DispatchOutcome, PresenceSync};
 use super::format::{classify_slack_output, format_ooc, format_help_text, format_slack_message};
 use super::transport::SlackFormattedDelivery;
-use super::events::{classify_slack_channel, SlackChannelKind, SlackEventBody, SlackMessageEvent};
+use super::events::{SlackChannelKind, SlackEventBody, SlackMessageEvent};
 use super::input::normalize_slack_command_input;
 use super::presence::encode_notice;
 use super::session::SlackSessionRegistry;
@@ -94,10 +94,11 @@ where
     }
 
     async fn handle_message(&self, message: SlackMessageEvent) -> anyhow::Result<()> {
-        let kind = classify_slack_channel(
+        let kind = super::events::classify_slack_channel_with_rooms(
             &message.channel,
             message.channel_type.as_deref(),
             &self.config.world_channel,
+            self.config.rooms_channel.as_deref(),
         );
 
         match kind {
@@ -197,13 +198,13 @@ where
         }
 
         for (user_id, line) in &outcome.private {
-            self.send_to_presence(user_id, line).await;
+            self.send_to_user_dm(user_id, line).await;
         }
 
         for delivery in &outcome.room_audience {
             for user_id in &delivery.audience {
                 for line in &delivery.lines {
-                    self.send_to_presence(user_id, line).await;
+                    self.send_to_user_dm(user_id, line).await;
                 }
             }
         }
@@ -237,6 +238,23 @@ where
             )
             .await;
         }
+    }
+
+    /// Deliver a private line to one player's DM conversation.
+    async fn send_to_user_dm(&self, user_id: &str, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let target = self
+            .slack_sessions
+            .lock()
+            .await
+            .delivery_target(user_id);
+        let kind = super::format::SlackOutputKind::DirectMessage;
+        let formatted = format_slack_message(text, kind);
+        self.transport
+            .send_slack_message(&target, &formatted)
+            .await;
     }
 
     async fn send_to_presence(&self, presence: &str, text: &str) {

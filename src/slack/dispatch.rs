@@ -23,6 +23,7 @@ use super::channels::{room_join_notice, room_presence};
 use super::config::SlackConfig;
 use crate::irc::players_in_room_async;
 
+use super::multi_user::append_movement_visibility;
 use super::session::slack_logged_out_help;
 use super::visibility::{resolve_connected_user_async, slack_look_scope};
 
@@ -250,7 +251,9 @@ async fn deliver_command_result<P: Persistence + Clone + Send + Sync>(
                     outcome.persist = false;
                     return outcome;
                 };
-                if resolved == actor_id {
+                if crate::gateway::normalize_nick(&resolved)
+                    == crate::gateway::normalize_nick(actor_id)
+                {
                     outcome.to_sender = vec!["You talk to yourself.".to_string()];
                     outcome.persist = false;
                     return outcome;
@@ -275,6 +278,17 @@ async fn deliver_command_result<P: Persistence + Clone + Send + Sync>(
                 outcome
                     .to_sender
                     .push(room_join_notice(&room_presence(config, &new_id)));
+
+                let mgr = manager.lock().await;
+                append_movement_visibility(
+                    &mut outcome,
+                    &mgr,
+                    actor_id,
+                    &old_id,
+                    &new_id,
+                    config,
+                )
+                .await;
             }
         }
     }

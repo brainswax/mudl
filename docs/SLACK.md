@@ -50,6 +50,30 @@ Slack workspace ──Events API POST──► axum server (/slack/events)
 
 Set `SLACK_ROOM_CHANNEL_PREFIX` (default `mudl-`) for named-channel slugs.
 
+## Multi-user group play
+
+All logged-in players share one [`WorldState`](../src/world/world_state.rs) through [`SessionManager`](../src/gateway/session_manager.rs). Visibility and routing mirror IRC:
+
+| Feature | Behavior |
+|---------|----------|
+| **Shared world** | Movement, inventory, and room state are visible to every connected session via the shared graph |
+| **Room `look`** | [`ResolveScope::RoomOnly`](../src/slack/visibility.rs) — shows exits, items, and **other players** in your current room |
+| **`say` / `emote`** | Delivered to co-located players (DM) and posted to the room channel or thread; does **not** cross room boundaries |
+| **`tell`** | Private DM to one connected player (by display name or Slack user id); never posted to room channels |
+| **Movement** | Joins/leaves room presence; notifies co-located players via DM and posts arrival/departure to the room channel |
+| **OOC** | World channel broadcast + DM relay to other logged-in players |
+
+### Channel routing
+
+| Surface | Purpose |
+|---------|---------|
+| **DM to bot** | All game commands (`login`, `look`, `go`, `tell`, …) |
+| **`SLACK_WORLD_CHANNEL`** | Out-of-character chat (no command prefix) |
+| **Per-room channels** (`mudl-<slug>`) | In-character `say` / `emote` and movement notices (default) |
+| **`SLACK_ROOMS_CHANNEL`** | Optional: all in-character speech and movement in per-room **threads** |
+
+Private tells and room-local lines route through [`SlackSessionRegistry`](../src/slack/session.rs) so delivery uses each player's DM conversation id (`D…`), not raw `U…` ids.
+
 ## Output formatting
 
 Game text is adapted in [`slack/format.rs`](../src/slack/format.rs) before Web API delivery:

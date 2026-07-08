@@ -318,6 +318,7 @@ Lock order: **manager (brief) → per-session → world**. No re-entrant world l
 | `gateway::edge_cases` | 10 | Reconnect, double logout, RBAC denials, revision conflict on logout, orphan reclaim |
 | `gateway::m5_scenarios` | 8 | Explicit login, shorthands, OOC login gate, channel sync, inventory isolation |
 | `gateway::m6_scenarios` | 6 | Slack user id login/logout, token + identity binding, OOC DM relay |
+| `gateway::m6_multi_user` | 5 | Room boundaries, private tells via DM, movement visibility, shared look |
 | `irc::` | 57+ | Parsing, caps, channels, visibility, bot relay, dispatch, rate limits, identity |
 | `gateway::rbac` + `registry` | 7 | Tier checks, nick normalization |
 

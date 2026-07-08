@@ -80,12 +80,16 @@ pub fn format_slack_message(text: &str, kind: SlackOutputKind) -> SlackFormatted
         return format_room_look_slack(trimmed);
     }
 
-    let formatted = match kind {
-        SlackOutputKind::InCharacter => format_in_character_line(trimmed),
-        SlackOutputKind::Ooc => format_ooc_line(trimmed),
-        SlackOutputKind::Notice => format_notice_line(trimmed),
-        SlackOutputKind::System => format_system_line(trimmed),
-        SlackOutputKind::DirectMessage => format_direct_line(trimmed),
+    let formatted = if is_private_tell_line(trimmed) {
+        format_tell_line(trimmed)
+    } else {
+        match kind {
+            SlackOutputKind::InCharacter => format_in_character_line(trimmed),
+            SlackOutputKind::Ooc => format_ooc_line(trimmed),
+            SlackOutputKind::Notice => format_notice_line(trimmed),
+            SlackOutputKind::System => format_system_line(trimmed),
+            SlackOutputKind::DirectMessage => format_direct_line(trimmed),
+        }
     };
 
     SlackFormattedMessage::plain(formatted)
@@ -118,6 +122,16 @@ pub fn format_tell(from: &str, text: &str) -> String {
         escape_mrkdwn(from.trim()),
         escape_mrkdwn(text.trim())
     )
+}
+
+/// Movement arrival notice for co-located players and room channels.
+pub fn format_arrival(speaker: &str) -> String {
+    format!("*{}* has arrived.", escape_mrkdwn(speaker.trim()))
+}
+
+/// Movement departure notice for co-located players and room channels.
+pub fn format_departure(speaker: &str) -> String {
+    format!("*{}* has left.", escape_mrkdwn(speaker.trim()))
 }
 
 /// Confirmation shown to the tell sender.
@@ -166,7 +180,16 @@ fn is_ooc_line(text: &str) -> bool {
 }
 
 fn is_in_character_line(text: &str) -> bool {
-    text.contains(" says, \"") || text.contains(" says, “") || text.contains(" tells you, \"")
+    (text.contains(" says, \"") || text.contains(" says, “"))
+        && !text.contains(" tells you, ")
+        && !text.contains(" whispers, ")
+}
+
+fn is_private_tell_line(text: &str) -> bool {
+    text.contains(" tells you, ")
+        || text.contains(" whispers, ")
+        || text.contains("You whisper to ")
+        || text.contains("You tell ")
 }
 
 fn is_system_line(text: &str) -> bool {
@@ -225,9 +248,28 @@ fn parse_say_line(text: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_tell_line(text: &str) -> Option<(&str, &str)> {
-    let (speaker, rest) = text.split_once(" tells you, ")?;
-    let speech = rest.trim_matches('"').trim_matches('“').trim_matches('”');
-    Some((speaker, speech))
+    if let Some((speaker, rest)) = text.split_once(" tells you, ") {
+        let speech = rest.trim_matches('"').trim_matches('“').trim_matches('”');
+        return Some((speaker, speech));
+    }
+    if let Some((speaker, rest)) = text.split_once(" whispers, ") {
+        let speech = rest.trim_matches('"').trim_matches('“').trim_matches('”');
+        return Some((speaker, speech));
+    }
+    None
+}
+
+fn format_tell_line(text: &str) -> String {
+    if text.contains(":envelope:") || text.contains(" whispers, ") {
+        return text.to_string();
+    }
+    if let Some((speaker, speech)) = parse_tell_line(text) {
+        return format_tell(speaker, speech);
+    }
+    if let Some(rest) = text.strip_prefix("You tell ") {
+        return format!("You whisper to *{}*", escape_mrkdwn(rest));
+    }
+    escape_mrkdwn(text)
 }
 
 fn parse_emote_line(text: &str) -> Option<(&str, &str)> {
