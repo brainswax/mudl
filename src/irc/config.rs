@@ -2,6 +2,8 @@
 
 use crate::gateway::{LoginAuthPolicy, RateLimitConfig};
 
+use super::identity::IrcIdentityPolicy;
+
 /// Runtime settings for the MUDL IRC gateway.
 ///
 /// Defaults assume an **IRCv3-capable server over TLS** (port 6697).
@@ -31,6 +33,8 @@ pub struct IrcConfig {
     pub login_auth: LoginAuthPolicy,
     /// Anti-flood rate limits on command, movement, and OOC entry (SEC-50).
     pub rate_limits: RateLimitConfig,
+    /// Optional IRC account-tag verification (SEC-03).
+    pub identity_policy: IrcIdentityPolicy,
 }
 
 impl Default for IrcConfig {
@@ -48,6 +52,7 @@ impl Default for IrcConfig {
             default_player: "player:admin-001".to_string(),
             login_auth: LoginAuthPolicy::permissive(),
             rate_limits: RateLimitConfig::disabled(),
+            identity_policy: IrcIdentityPolicy::default(),
         }
     }
 }
@@ -90,6 +95,7 @@ impl IrcConfig {
         }
         config.login_auth = LoginAuthPolicy::from_env();
         config.rate_limits = RateLimitConfig::from_env();
+        config.identity_policy = IrcIdentityPolicy::from_env();
         config
     }
 

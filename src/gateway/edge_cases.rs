@@ -140,6 +140,7 @@ mod tests {
 
         bot.handle_message(IrcMessage::Quit {
             nick: "stranger".to_string(),
+            account: None,
             reason: Some("gone".to_string()),
         })
         .await
@@ -161,6 +162,7 @@ mod tests {
 
         bot.handle_message(IrcMessage::Quit {
             nick: "alice".to_string(),
+            account: None,
             reason: None,
         })
         .await

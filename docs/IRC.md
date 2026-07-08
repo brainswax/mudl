@@ -81,13 +81,37 @@ Send commands as private messages to the bot nick (`/msg mudl …` in most clien
 
 The bot also accepts `/msg mudl …` and `/query mudl …` pasted directly into mock mode input.
 
-### Nick handling
+### Nick handling and trust boundary
 
-- Session keys are **case-insensitive** (`Alice` and `alice` are the same player).
-- Outgoing PRIVMSG and NOTICE targets use the canonical lowercase nick stored at login.
-- In-character text uses the player's **object name** (e.g. `Alice says, "hi"`), not the IRC nick.
-- OOC lines keep the sender's IRC nick as received (`[OOC] Alice: brb`).
-- `tell` resolves targets case-insensitively; confirmation uses the resolved nick (`You tell bob, "…"`).
+MUDL trusts the IRC **server** to authenticate nicks (SASL, NickServ `+r`, etc.). The bot reads the message prefix and optional IRCv3 `account-tag`; it does not perform SASL itself.
+
+| Layer | Behavior |
+|-------|----------|
+| **Wire parse** | Nicks are validated against IRC rules (length ≤ 30, no control chars). Invalid prefixes are ignored. |
+| **Session key** | Canonical **lowercase** nick (`Alice` → `alice`). |
+| **OOC display** | Sanitized wire nick (control chars stripped, single-line body, 400-char cap). |
+| **In-character** | Player **object name**, not IRC nick (`Alice says, "hi"`). |
+| **`tell`** | Case-insensitive nick resolve; confirmation uses canonical nick. |
+
+**Operator requirements for production:**
+
+1. **TLS** to the IRC network (`IRC_TLS=true`, port 6697).
+2. **Registered nicks** or **SASL** on the IRC network so others cannot impersonate players.
+3. **MUDL login tokens** (`MUDL_LOGIN_REQUIRE_AUTH=true`) — binds game session to credentials you issue.
+4. **Optional** `MUDL_LOGIN_IDENTITY_BINDINGS` — lock IRC nick → player id at login.
+5. **Optional** `IRC_REQUIRE_ACCOUNT_TAG=true` — reject PRIVMSG without IRCv3 `account-tag` (requires identified/SASL account on the network).
+6. **Optional** `MUDL_IRC_ACCOUNT_BINDINGS=alice=AccountName` — require a specific SASL/account name per nick.
+
+```bash
+# Strict public playtest example (Libera Chat)
+IRC_IRCV3=true
+MUDL_LOGIN_REQUIRE_AUTH=true
+MUDL_LOGIN_TOKENS=player:hero-001=rotate-this-secret
+MUDL_LOGIN_IDENTITY_BINDINGS=alice=player:hero-001
+IRC_REQUIRE_ACCOUNT_TAG=true
+```
+
+On networks with `account-tag`, identified users receive `@account=YourAccount` on each message. Unidentified clients send `account=*`; MUDL rejects those when `IRC_REQUIRE_ACCOUNT_TAG=true`.
 
 ### Output formatting
 
@@ -110,6 +134,8 @@ Join `#mudl` for out-of-character chat. Room channels (`#mudl-void-001`, etc.) r
 | `IRC_WORLD_CHANNEL` | `#mudl` | Global OOC channel |
 | `IRC_ROOM_CHANNEL_PREFIX` | `#mudl-` | Per-room channel prefix |
 | `IRC_MOCK` | *(unset)* | Set to any value to enable stdin mock mode |
+| `IRC_REQUIRE_ACCOUNT_TAG` | `false` | Reject PRIVMSG without IRCv3 `account-tag` (identified/SASL account) |
+| `MUDL_IRC_ACCOUNT_BINDINGS` | *(unset)* | `nick=AccountName` — optional per-nick SASL account lock |
 
 ### IRCv3 capabilities requested
 

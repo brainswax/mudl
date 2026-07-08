@@ -203,6 +203,7 @@ mod tests {
 
         bot.handle_message(IrcMessage::Privmsg {
             from: "stranger".to_string(),
+            account: None,
             target: "#mudl".to_string(),
             text: "anyone?".to_string(),
         })

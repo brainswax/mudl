@@ -4,14 +4,16 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::gateway::{normalize_nick, RateLimitKind, SessionManager};
+use crate::gateway::{RateLimitKind, SessionManager};
 use crate::persistence::Persistence;
 
 use super::channels::{classify_target, ChannelTarget};
 use super::config::IrcConfig;
 use super::dispatch::{dispatch_command, DispatchOutcome};
+use super::identity::verify_irc_identity;
 use super::input::normalize_irc_command_input;
 use super::message::IrcMessage;
+use super::nick::{sanitize_irc_nick, sanitize_nick_display};
 use super::social::format_ooc;
 use crate::transport::{split_delivery_lines, GameTransport};
 
@@ -46,9 +48,12 @@ where
     /// Handle one parsed IRC message and route game commands through the session manager.
     pub async fn handle_message(&self, message: IrcMessage) -> anyhow::Result<()> {
         match message {
-            IrcMessage::Privmsg { from, target, text } => {
-                self.handle_privmsg(&from, &target, &text).await
-            }
+            IrcMessage::Privmsg {
+                from,
+                account,
+                target,
+                text,
+            } => self.handle_privmsg(&from, account.as_deref(), &target, &text).await,
             IrcMessage::Quit { nick, .. } => self.handle_disconnect(&nick).await,
             IrcMessage::Part { nick, channel, .. } if channel == self.config.world_channel => {
                 self.handle_disconnect(&nick).await
@@ -71,17 +76,33 @@ where
         Ok(outcome)
     }
 
-    async fn handle_privmsg(&self, from: &str, target: &str, text: &str) -> anyhow::Result<()> {
+    async fn handle_privmsg(
+        &self,
+        from: &str,
+        account: Option<&str>,
+        target: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        let Some(nick) = sanitize_irc_nick(from) else {
+            return Ok(());
+        };
+        let display_nick = sanitize_nick_display(from);
+
+        if let Err(message) = verify_irc_identity(&nick, account, &self.config.identity_policy) {
+            self.transport.send_notice(&nick, &message).await;
+            return Ok(());
+        }
+
         match classify_target(target, &self.config) {
-            ChannelTarget::World => self.handle_world_ooc(from, text).await,
+            ChannelTarget::World => self.handle_world_ooc(&nick, &display_nick, text).await,
             ChannelTarget::Bot | ChannelTarget::Private(_) => {
-                self.handle_input(from, text).await?;
+                self.handle_input(&nick, text).await?;
                 Ok(())
             }
             ChannelTarget::Room(_) => {
                 self.transport
                     .send_notice(
-                        from,
+                        &nick,
                         "Send commands to the bot directly. Use 'say' and 'emote' for in-character speech.",
                     )
                     .await;
@@ -90,38 +111,42 @@ where
         }
     }
 
-    async fn handle_world_ooc(&self, from: &str, text: &str) -> anyhow::Result<()> {
+    async fn handle_world_ooc(
+        &self,
+        nick: &str,
+        display_nick: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Ok(());
         }
 
         let manager = self.manager.lock().await;
-        if !manager.is_connected(from) {
+        if !manager.is_connected(nick) {
             self.transport
-                .send_notice(from, "You are not logged in. Message the bot with 'login'.")
+                .send_notice(nick, "You are not logged in. Message the bot with 'login'.")
                 .await;
             return Ok(());
         }
 
-        if let Err(denied) = manager.check_rate_limit(from, RateLimitKind::Ooc) {
+        if let Err(denied) = manager.check_rate_limit(nick, RateLimitKind::Ooc) {
             self.transport
-                .send_notice(from, &manager.rate_limit_denial_message(denied.kind))
+                .send_notice(nick, &manager.rate_limit_denial_message(denied.kind))
                 .await;
             return Ok(());
         }
 
-        let line = format_ooc(from, trimmed);
+        let line = format_ooc(display_nick, trimmed);
         let nicks = manager.connected_nicks();
         drop(manager);
 
         self.transport
             .send_direct(&self.config.world_channel, &line)
             .await;
-        let from_key = normalize_nick(from);
-        for nick in nicks {
-            if nick != from_key {
-                self.transport.send_direct(&nick, &line).await;
+        for recipient in nicks {
+            if recipient != nick {
+                self.transport.send_direct(&recipient, &line).await;
             }
         }
         Ok(())
@@ -279,6 +304,7 @@ mod tests {
 
         bot.handle_message(IrcMessage::Privmsg {
             from: "alice".to_string(),
+            account: None,
             target: "#mudl".to_string(),
             text: "brb".to_string(),
         })
@@ -357,6 +383,7 @@ mod tests {
 
         bot.handle_message(IrcMessage::Privmsg {
             from: "alice".to_string(),
+            account: None,
             target: "#mudl".to_string(),
             text: "first".to_string(),
         })
@@ -364,6 +391,7 @@ mod tests {
         .unwrap();
         bot.handle_message(IrcMessage::Privmsg {
             from: "alice".to_string(),
+            account: None,
             target: "#mudl".to_string(),
             text: "second".to_string(),
         })
@@ -389,6 +417,7 @@ mod tests {
 
         bot.handle_message(IrcMessage::Privmsg {
             from: "Alice".to_string(),
+            account: None,
             target: "#mudl".to_string(),
             text: "brb".to_string(),
         })
@@ -439,6 +468,65 @@ mod tests {
 
         let alice_lines = transport.privmsgs_to("alice");
         assert!(alice_lines.iter().any(|l| l.contains("You tell bob")));
+    }
+
+    #[tokio::test]
+    async fn ooc_sanitizes_embedded_newlines() {
+        let (bot, transport) = bot_fixture().await;
+        bot.handle_input("alice", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "alice".to_string(),
+            account: None,
+            target: "#mudl".to_string(),
+            text: "line1\nline2".to_string(),
+        })
+        .await
+        .unwrap();
+
+        let lines = transport.channel_messages("#mudl");
+        assert_eq!(lines.len(), 1);
+        assert!(!lines[0].contains('\n'));
+        assert!(lines[0].contains("line1 line2"));
+    }
+
+    #[tokio::test]
+    async fn require_account_tag_blocks_unidentified_privmsg() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let room = ObjectId::new("room:void-001");
+        let mut hero = bare("player:hero-001", "Alice");
+        hero.location = Some(room.clone());
+        let place = bare("room:void-001", "The Void");
+        persistence.save_object(&hero).await.unwrap();
+        persistence.save_object(&place).await.unwrap();
+
+        let manager = SessionManager::open(persistence, crate::mudl::AnatomyRegistry::default())
+            .await
+            .unwrap();
+        let transport = Arc::new(MockTransport::new());
+        let mut config = IrcConfig::default();
+        config.identity_policy.require_account_tag = true;
+        let bot = IrcBot::new(manager, Arc::clone(&transport), config);
+        bot.handle_input("alice", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "alice".to_string(),
+            account: None,
+            target: "mudl".to_string(),
+            text: "look".to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert!(transport.recorded().iter().any(|entry| {
+            matches!(
+                entry,
+                OutgoingAction::Notice { recipient, text }
+                    if recipient == "alice" && text.contains("registered/SASL")
+            )
+        }));
     }
 
     #[tokio::test]

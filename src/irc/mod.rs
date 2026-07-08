@@ -8,8 +8,10 @@ mod channels;
 mod config;
 mod connect;
 mod dispatch;
+mod identity;
 mod input;
 mod message;
+mod nick;
 mod social;
 mod transport;
 mod visibility;
@@ -28,7 +30,9 @@ pub use crate::gateway::{
     LOGIN_TOKEN_PROPERTY,
 };
 pub use input::normalize_irc_command_input;
-pub use message::{format_outgoing, parse_irc_line, strip_ircv3_tags, IrcMessage};
+pub use identity::{verify_irc_identity, IrcIdentityPolicy};
+pub use message::{format_outgoing, parse_irc_line, split_ircv3_tags, strip_ircv3_tags, IrcMessage, Ircv3Tags};
+pub use nick::{sanitize_irc_nick, sanitize_nick_display, sanitize_ooc_text, MAX_OOC_TEXT_LEN};
 pub use social::{format_emote, format_ooc, format_say, format_tell};
 pub use crate::transport::{GameTransport, MockTransport, OutgoingAction};
 pub use transport::{IrcTransport, OutgoingIrc, StreamTransport, TcpIrcClient, TcpTransport};
