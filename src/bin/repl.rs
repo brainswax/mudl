@@ -16,7 +16,7 @@ use mudl::command::{
     TriggerCommand, TriggerError,
 };
 use mudl::creature::{
-    add_behavior_template, attack_creature, damage_creature, format_creature_behavior_list,
+    add_behavior_template, damage_creature, format_creature_behavior_list,
     heal_creature, parse_vital_amount_args, DEFAULT_DAMAGE_AMOUNT, DEFAULT_HEAL_AMOUNT,
 };
 use mudl::display::{
@@ -28,7 +28,7 @@ use mudl::display::{
     DisplayMode, ExamineError, ExamineResolution, ResolveScope, TargetResolution,
 };
 use mudl::inventory::{
-    break_item, close_container, drop_item, harvest_item, lock_container,
+    break_item, close_container, harvest_item, lock_container,
     open_container, parse_put_args, parse_unlock_args, put_item, read_item, remove_item,
     unlock_container, use_item, wear_item, wield_item,
 };
@@ -572,29 +572,13 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let target = parts[1..].join(" ");
-                        match session.with_inventory(|ctx| {
-                            attack_creature(
-                                ctx.dispatch,
-                                ctx.player_id,
-                                ctx.room_id,
-                                ctx.objects,
-                                ctx.anatomy,
-                                ctx.dirty.as_deref_mut(),
-                                &target,
-                            )
-                        }) {
-                            Ok(outcome) => {
-                                for line in outcome.lines {
-                                    println!("{line}");
-                                }
-                                if let Some(loc) = outcome.respawn_location {
-                                    session.set_current_location(loc);
-                                }
-                                if let Err(e) = persist_session(&mut session, &persistence).await {
-                                    error!(error = %e, "persist after attack failed");
-                                }
+                        let result =
+                            CommandDispatcher::attack_async(&mut session, Some(&target)).await;
+                        print_command_result(&result);
+                        if result.persist_world {
+                            if let Err(e) = persist_session(&mut session, &persistence).await {
+                                error!(error = %e, "persist after attack failed");
                             }
-                            Err(e) => println!("{e}"),
                         }
                     }
                     "@damage" => {
@@ -948,14 +932,13 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        match session.with_inventory(|ctx| drop_item(ctx, &item_name)) {
-                            Ok(msg) => {
-                                println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await {
-                                    error!(error = %e, "persist after drop failed");
-                                }
+                        let result =
+                            CommandDispatcher::drop_async(&mut session, Some(&item_name)).await;
+                        print_command_result(&result);
+                        if result.persist_world {
+                            if let Err(e) = persist_session(&mut session, &persistence).await {
+                                error!(error = %e, "persist after drop failed");
                             }
-                            Err(e) => println!("{e}"),
                         }
                     }
                     "put" => {

@@ -10,7 +10,8 @@ use crate::display::{
     format_room_look_player, narrate_no_location, narrate_target_not_found, Describable,
     DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::inventory::{describe_inventory, take_item, InventoryError};
+use crate::creature::attack_creature;
+use crate::inventory::{describe_inventory, drop_item, take_item, InventoryError};
 use crate::object::ObjectId;
 use crate::persistence::Persistence;
 use crate::repl::Session;
@@ -130,6 +131,14 @@ impl CommandDispatcher {
                 let target = (!line.args.is_empty()).then(|| line.args.join(" "));
                 Self::take_async(session, target.as_deref()).await
             }
+            "drop" => {
+                let target = (!line.args.is_empty()).then(|| line.args.join(" "));
+                Self::drop_async(session, target.as_deref()).await
+            }
+            "attack" => {
+                let target = (!line.args.is_empty()).then(|| line.args.join(" "));
+                Self::attack_async(session, target.as_deref()).await
+            }
             "go" | _ => Self::movement_async(session, line).await,
         }
     }
@@ -207,6 +216,63 @@ impl CommandDispatcher {
             })
             .await;
         Self::message(text)
+    }
+
+    pub async fn drop_async(session: &mut Session, args: Option<&str>) -> CommandResult {
+        let Some(args) = args else {
+            return Self::message("Usage: drop [count] <item>".to_string());
+        };
+        match session
+            .with_inventory_async(|ctx| drop_item(ctx, args))
+            .await
+        {
+            Ok(msg) => CommandResult {
+                lines_to_actor: vec![msg],
+                persist_world: true,
+                ..Default::default()
+            },
+            Err(InventoryError::NotFound(name)) => Self::message(narrate_target_not_found(&name)),
+            Err(err) => Self::message(err.to_string()),
+        }
+    }
+
+    pub async fn attack_async(session: &mut Session, target: Option<&str>) -> CommandResult {
+        let Some(target) = target else {
+            return Self::message("Usage: attack <creature>".to_string());
+        };
+        let old_room = session.current_location().cloned();
+        match session
+            .with_inventory_async(|ctx| {
+                attack_creature(
+                    ctx.dispatch,
+                    ctx.player_id,
+                    ctx.room_id,
+                    ctx.objects,
+                    ctx.anatomy,
+                    ctx.dirty.as_deref_mut(),
+                    target,
+                )
+            })
+            .await
+        {
+            Ok(outcome) => {
+                let mut result = CommandResult {
+                    lines_to_actor: outcome.lines,
+                    persist_world: true,
+                    ..Default::default()
+                };
+                if let Some(new_room) = outcome.respawn_location {
+                    session.set_current_location(new_room.clone());
+                    result.movement = Some(MovementChange {
+                        old_room,
+                        new_room: Some(new_room),
+                        lines: Vec::new(),
+                    });
+                }
+                result
+            }
+            Err(err) => Self::message(err.to_string()),
+        }
     }
 
     pub async fn take_async(session: &mut Session, target: Option<&str>) -> CommandResult {
@@ -348,6 +414,8 @@ impl CommandDispatcher {
                 "  go <dir>            - move (or use exit name: north, n, ...)".to_string(),
                 "  inventory (i)       - list carried items".to_string(),
                 "  take <item>         - pick up an item".to_string(),
+                "  drop [count] <item> - drop a carried item".to_string(),
+                "  attack <creature>   - strike a creature (turn-based combat)".to_string(),
                 "  say <text>          - speak to players in your room".to_string(),
                 "  emote <text>        - perform an action in your room".to_string(),
                 "  tell <nick> <text>  - private message to a connected player".to_string(),
@@ -451,5 +519,25 @@ mod tests {
         let session = session_in_void().await;
         let result = CommandDispatcher::say_intent(&session, &[]).await;
         assert!(result.lines_to_actor.iter().any(|l| l.contains("Say what")));
+    }
+
+    #[tokio::test]
+    async fn drop_requires_item_name() {
+        let mut session = session_in_void().await;
+        let result = CommandDispatcher::drop_async(&mut session, None).await;
+        assert!(result
+            .lines_to_actor
+            .iter()
+            .any(|l| l.contains("Usage: drop")));
+    }
+
+    #[tokio::test]
+    async fn attack_requires_target() {
+        let mut session = session_in_void().await;
+        let result = CommandDispatcher::attack_async(&mut session, None).await;
+        assert!(result
+            .lines_to_actor
+            .iter()
+            .any(|l| l.contains("Usage: attack")));
     }
 }

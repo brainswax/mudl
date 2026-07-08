@@ -184,7 +184,7 @@ M5 adds concurrent players over one shared world graph via IRC (TLS/IRCv3) with 
 | `irc/transport.rs` | `IrcTransport` (`GameTransport` + `send_raw`), TLS stream adapter |
 | `bin/irc.rs` | Thin bootstrap: universe load → `SessionManager::open` → event loop |
 
-**M6 prep:** [`CommandDispatcher`](src/command/dispatcher.rs) routes shared player verbs; IRC maps [`CommandResult`](src/command/dispatcher.rs) → `DispatchOutcome`. **Still deferred:** builder meta execution over IRC, `attack`/full inventory on transports. Meta verbs hit RBAC then return *"Builder commands over IRC are not enabled yet. Use the REPL."*
+**M6 prep:** [`CommandDispatcher`](src/command/dispatcher.rs) routes shared player verbs (including `attack`, `drop`); IRC maps [`CommandResult`](src/command/dispatcher.rs) → `DispatchOutcome`. **Still deferred:** builder meta execution over IRC, container verbs (`put`, `open`, …). Meta verbs hit RBAC then return *"Builder commands over IRC are not enabled yet. Use the REPL."*
 
 ## Hard-coded vs MUDL-driven
 
@@ -372,7 +372,7 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 | `dispatch_command` (~860 lines, IRC-specific) | **M6** extract `CommandDispatcher`; shrink to transport adapters |
 | Per-nick `Arc<Mutex<Session>>` + `with_locked_async` | **M9** per-room locking if contention measured |
 | RBAC gate on IRC meta (defer message) | **M7** execute meta; undo/audit |
-| Player verbs: look, go, take, say, emote, tell | **M7** attack, drop, containers; **M8** combat polish |
+| Player verbs: look, go, take, drop, attack, say, emote, tell | **M7** containers (`put`, `open`, …); **M8** combat polish |
 | **83** M5-focused / **532** total tests | |
 
 ### Recommended priorities (post-M5)
@@ -386,7 +386,7 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 | ~~**P0**~~ | ~~Extract `CommandDispatcher` + `CommandResult`~~ | **Done** | Shared player verbs; IRC/REPL adapters |
 | ~~**P0**~~ | ~~Generalize `IrcTransport` → `GameTransport` trait~~ | **Done** | Slack/WebSocket share deliver/join/leave semantics |
 | ~~**P1**~~ | ~~M4 tail: `behavior_line` parser, persist fallback audit~~ | **Done** | Shared parser; incremental-only persist |
-| **P1** | IRC `attack` + `drop` via dispatcher | M7 | Needed for expansion playtests over IRC/Slack |
+| ~~**P1**~~ | ~~IRC `attack` + `drop` via dispatcher~~ | **Done** | Combat + drop on IRC/Slack via `CommandDispatcher` |
 | **P1** | Builder meta execution + undo/audit | M7 | Prerequisite for M10 LLM apply |
 | **P2** | Rate limiting on dispatch entry | M9 | Before public deployment |
 | **P2** | Sandboxed `event_script` runtime | M9 | Prerequisite for safe M11–M12 NPC/JIT generation |
@@ -757,7 +757,7 @@ Test suites: `gateway::multi_user`, `gateway::session_manager`, `gateway::load`,
 |----------|------|-----------|
 | **P0** | Builder meta execution over IRC/Slack (`@dig`, `@set`, …) | RBAC gate exists; replace defer message with real handlers |
 | **P0** | Undo / audit trail for wizard edits | Safe live modification; **blocks M10** LLM apply |
-| **P0** | Player verb parity: `attack`, `drop`, `open`, `examine` over transports | Expansion playtests need combat + containers on IRC/Slack |
+| **P0** | Player verb parity: `open`, `examine`, containers over transports | ~~`attack`, `drop`~~ **Done** via dispatcher; containers remain |
 | **P1** | GitHub webhooks + module hot-reload | File/GitHub authoring path from vision |
 | **P1** | Graph validator on hydrate/bootstrap | Orphan refs, dangling `contents` |
 

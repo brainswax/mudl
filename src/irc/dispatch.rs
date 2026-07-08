@@ -436,6 +436,38 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
+    fn human_anatomy() -> crate::mudl::AnatomyRegistry {
+        use crate::mudl::{BodySlotDef, CreatureDef, SlotType};
+        let mut anatomy = crate::mudl::AnatomyRegistry::default();
+        anatomy.creatures.insert(
+            "human".to_string(),
+            CreatureDef {
+                name: "human".to_string(),
+                slots: vec![
+                    BodySlotDef {
+                        name: "left_hand".to_string(),
+                        capacity: 1,
+                        slot_type: SlotType::Grasp,
+                        hands: 1,
+                        effect: None,
+                    },
+                    BodySlotDef {
+                        name: "right_hand".to_string(),
+                        capacity: 1,
+                        slot_type: SlotType::Grasp,
+                        hands: 1,
+                        effect: None,
+                    },
+                ],
+                max_health: 100,
+                base_max_weight: Some(100),
+                stats: HashMap::new(),
+                skills: HashMap::new(),
+            },
+        );
+        anatomy
+    }
+
     fn bare(id: &str, name: &str) -> Object {
         Object {
             id: ObjectId::new(id),
@@ -462,8 +494,10 @@ mod tests {
 
         let mut hero1 = bare("player:hero-001", "Alice");
         hero1.location = Some(room.clone());
+        hero1.set_property_string("body_plan", "human");
         let mut hero2 = bare("player:hero-002", "Bob");
         hero2.location = Some(room.clone());
+        hero2.set_property_string("body_plan", "human");
 
         let mut place = bare("room:void-001", "The Void");
         place.set_property_map(
@@ -478,7 +512,7 @@ mod tests {
         persistence.save_object(&place).await.unwrap();
         persistence.save_object(&north_room).await.unwrap();
 
-        let manager = SessionManager::open(persistence.clone(), crate::mudl::AnatomyRegistry::default())
+        let manager = SessionManager::open(persistence.clone(), human_anatomy())
             .await
             .unwrap();
         (persistence, manager, IrcConfig::default())
@@ -624,8 +658,10 @@ mod tests {
 
         let mut hero1 = bare("player:hero-001", "Alice");
         hero1.location = Some(room.clone());
+        hero1.set_property_string("body_plan", "human");
         let mut hero2 = bare("player:hero-002", "Bob");
         hero2.location = Some(room.clone());
+        hero2.set_property_string("body_plan", "human");
 
         let mut place = bare("room:void-001", "The Void");
         place.set_property_map(
@@ -644,10 +680,108 @@ mod tests {
         persistence.save_object(&north_room).await.unwrap();
         persistence.save_object(&sword).await.unwrap();
 
-        let manager = SessionManager::open(persistence, crate::mudl::AnatomyRegistry::default())
+        let manager = SessionManager::open(persistence, human_anatomy())
             .await
             .unwrap();
         (Arc::new(Mutex::new(manager)), IrcConfig::default())
+    }
+
+    #[tokio::test]
+    async fn drop_via_dispatcher_persists() {
+        let room = ObjectId::new("room:void-001");
+        let (manager, config) = manager_with_sword_at(&room).await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+        let take = dispatch_command(Arc::clone(&manager), "alice", "take rusty sword", &config).await;
+        assert!(take.persist, "take should succeed: {:?}", take.to_sender);
+
+        let outcome = dispatch_command(manager.clone(), "alice", "drop rusty sword", &config).await;
+        assert!(outcome.persist);
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("drop") && l.contains("rusty sword")));
+
+        let sword_on_ground = manager
+            .lock()
+            .await
+            .with_session("alice", |s| {
+                s.with_world(|world, player| {
+                    let hand = world
+                        .object(player.actor_id())
+                        .and_then(|p| p.body_slot_item("right_hand"));
+                    let sword = world.object(&ObjectId::new("item:rusty-sword"));
+                    (hand.is_none(), sword.and_then(|o| o.location.clone()))
+                })
+            })
+            .await
+            .unwrap();
+        assert!(sword_on_ground.0, "hand should be empty after drop");
+        assert_eq!(
+            sword_on_ground.1.as_ref().map(|id| id.as_str()),
+            Some("room:void-001")
+        );
+    }
+
+    async fn manager_with_rat() -> (Arc<Mutex<SessionManager<SqlitePersistence>>>, IrcConfig) {
+        use crate::creature::vitality::init_creature_vitality;
+        use crate::mudl::PlayerTemplate;
+
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let room = ObjectId::new("room:void-001");
+        let anatomy = human_anatomy();
+        let human = anatomy.creatures.get("human").expect("human anatomy");
+
+        let mut hero = bare("player:hero-001", "Alice");
+        hero.location = Some(room.clone());
+        hero.init_creature_role(&PlayerTemplate {
+            name: "Alice".to_string(),
+            creature: "human".to_string(),
+            gender: "neutral".to_string(),
+        });
+        init_creature_vitality(&mut hero, human);
+
+        let mut rat = bare("npc:rat-001", "Giant Rat");
+        rat.location = Some(room.clone());
+        rat.init_creature_role(&PlayerTemplate {
+            name: "Giant Rat".to_string(),
+            creature: "human".to_string(),
+            gender: "neutral".to_string(),
+        });
+        init_creature_vitality(&mut rat, human);
+
+        let place = bare("room:void-001", "The Void");
+        persistence.save_object(&hero).await.unwrap();
+        persistence.save_object(&rat).await.unwrap();
+        persistence.save_object(&place).await.unwrap();
+
+        let manager = SessionManager::open(persistence, anatomy).await.unwrap();
+        (Arc::new(Mutex::new(manager)), IrcConfig::default())
+    }
+
+    #[tokio::test]
+    async fn attack_via_dispatcher_strikes_room_creature() {
+        let (manager, config) = manager_with_rat().await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+
+        let outcome = dispatch_command(manager.clone(), "alice", "attack giant rat", &config).await;
+        assert!(outcome.persist, "attack outcome: {:?}", outcome.to_sender);
+        assert!(outcome.to_sender.iter().any(|l| {
+            l.contains("strike") || l.contains("strikes") || l.contains("damage")
+        }));
+
+        let rat_health = manager
+            .lock()
+            .await
+            .with_session("alice", |s| {
+                s.with_world(|world, _| {
+                    world
+                        .object(&ObjectId::new("npc:rat-001"))
+                        .map(crate::creature::creature_health)
+                })
+            })
+            .await
+            .unwrap();
+        assert!(rat_health.unwrap_or(100) < 100);
     }
 
     #[tokio::test]
