@@ -40,7 +40,7 @@ The long-term vision is IRC-first play, multi-modal authoring (REPL, files, GitH
 | **Builder tools** | `@set` / `@unset`, `@dig` / `@link`, `@trigger`, `@examine`, place building |
 | **IRC bot (M5)** | IRCv3 + TLS, multi-user `SessionManager`, room visibility, tells, channels |
 | **Clean architecture** | Pure core engine; gateway RBAC (Player / Builder / Wizard) on `PermissionFlags` |
-| **Tests** | 488 unit/integration tests across loader, inventory, combat, events, IRC, and persistence |
+| **Tests** | 500 unit/integration tests across loader, inventory, combat, events, IRC, multi-user, and persistence |
 
 ---
 

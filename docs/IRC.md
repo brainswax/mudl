@@ -146,6 +146,12 @@ The bot joins room channels as players enter places and parts when they leave. P
 
 ```bash
 cargo test irc::
+cargo test gateway::multi_user
 ```
 
-Tests cover message parsing, IRCv3 capability helpers, channel naming, visibility, dispatch, and multi-player bot integration. Mock transport is used — no live TLS connection in CI.
+Coverage includes:
+
+- **IRC layer** — message parsing, IRCv3 caps, channel naming, visibility, dispatch, bot relay
+- **Multi-user** (`gateway::multi_user`) — shared world movement, room-boundary `say`/`emote`, private `tell`, concurrent `go`/`take`, logout isolation, mixed-case nicks
+
+Mock transport is used — no live TLS connection in CI.

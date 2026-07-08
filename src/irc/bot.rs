@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::gateway::SessionManager;
+use crate::gateway::{normalize_nick, SessionManager};
 use crate::persistence::Persistence;
 
 use super::channels::{classify_target, ChannelTarget};
@@ -107,8 +107,9 @@ where
         self.transport
             .send_privmsg(&self.config.world_channel, &line)
             .await;
+        let from_key = normalize_nick(from);
         for nick in nicks {
-            if nick != from {
+            if nick != from_key {
                 self.transport.send_privmsg(&nick, &line).await;
             }
         }
@@ -310,6 +311,26 @@ mod tests {
             .iter()
             .any(|l| l.contains("featureless void")));
         let _ = transport_a;
+    }
+
+    #[tokio::test]
+    async fn ooc_skips_duplicate_privmsg_for_mixed_case_sender() {
+        let (bot, transport) = bot_fixture().await;
+        bot.handle_input("alice", "login").await.unwrap();
+        bot.handle_input("bob", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "Alice".to_string(),
+            target: "#mudl".to_string(),
+            text: "brb".to_string(),
+        })
+        .await
+        .unwrap();
+
+        let alice_priv = transport.privmsgs_to("alice");
+        assert!(alice_priv.is_empty());
+        assert!(transport.privmsgs_to("bob").iter().any(|l| l.contains("brb")));
     }
 
     #[tokio::test]

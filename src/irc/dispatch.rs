@@ -6,7 +6,7 @@ use crate::display::{
     format_room_look_player, narrate_no_location, narrate_target_not_found, Describable,
     DisplayMode, ResolveScope, TargetResolution,
 };
-use crate::gateway::SessionManager;
+use crate::gateway::{normalize_nick, SessionManager};
 use crate::inventory::{describe_inventory, take_item, InventoryError};
 use crate::object::{Object, ObjectId};
 use crate::persistence::Persistence;
@@ -74,7 +74,7 @@ pub async fn dispatch_command<P: Persistence + Clone>(
     config: &IrcConfig,
 ) -> DispatchOutcome {
     let line = parse_command_line(input);
-    let sender = nick.to_string();
+    let sender = normalize_nick(nick);
 
     if manager.session(nick).is_none() {
         return dispatch_logged_out(manager, persistence, nick, &line, config).await;
@@ -108,7 +108,7 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
     line: &CommandLine,
     config: &IrcConfig,
 ) -> DispatchOutcome {
-    let sender = nick.to_string();
+    let sender = normalize_nick(nick);
     match line.verb.as_str() {
         "login" => dispatch_login(manager, persistence, nick, &line.args, sender, config).await,
         "help" | "?" => DispatchOutcome {
@@ -629,8 +629,6 @@ fn logged_out_help_text() -> String {
     "Send 'login' to bind your IRC nick to a player, or 'login <player-id>'."
         .to_string()
 }
-
-use crate::gateway::normalize_nick;
 
 #[cfg(test)]
 mod tests {

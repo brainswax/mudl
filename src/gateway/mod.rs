@@ -5,6 +5,9 @@ mod rbac;
 mod registry;
 mod session_manager;
 
+#[cfg(test)]
+mod multi_user;
+
 pub use persistence::{hydrate_actor, persist_connection_state};
 pub use rbac::{
     actor_has_tier, actor_tier, authorize_meta_command, authorize_plain_command,
