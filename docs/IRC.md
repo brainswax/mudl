@@ -187,7 +187,7 @@ Lock order is always **manager (brief) → per-session → world**. There is no 
 
 | Layer | Type | Scope |
 |-------|------|--------|
-| [`SessionManager`](../src/gateway/session_manager.rs) | `Arc<tokio::sync::Mutex<…>>` | Login, logout, registry — held only for lifecycle and nick lookup |
+| [`SessionManager`](../src/gateway/session_manager.rs) | `Arc<tokio::sync::Mutex<…>>` | **Sole connection registry** — login, logout, nick→actor map, per-nick session handles |
 | Per-connection session | `Arc<tokio::sync::Mutex<Session>>` | One mutex per IRC nick; different players can run commands in parallel |
 | [`SharedWorld`](../src/world/world_state.rs) | `Arc<tokio::sync::Mutex<WorldState>>` | Serializes in-memory graph mutations (movement, take, events) |
 

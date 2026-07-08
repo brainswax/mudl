@@ -175,7 +175,7 @@ M5 adds concurrent players over one shared world graph via IRC (TLS/IRCv3) with 
 | `world/world_state.rs` | `WorldState` + `SharedWorld` (`Arc<Mutex<…>>`); graph, dirty, dispatch stack |
 | `repl/player_session.rs` | Per-actor location cache, prefs; `persist_to_actor` on disconnect |
 | `repl/session.rs` | `Session::attach(world, player)`; `with_locked` (REPL) / `with_locked_async` (IRC) |
-| `gateway/session_manager.rs` | One shared world, `ConnectionRegistry`, per-nick `Arc<Mutex<Session>>` |
+| `gateway/session_manager.rs` | **Sole connection registry** — shared world, `ConnectionRegistry`, per-nick `Arc<Mutex<Session>>` |
 | `gateway/rbac.rs` | `PermissionFlags` → `ActorTier`; `authorize_meta_command` / `authorize_plain_command` |
 | `gateway/persistence.rs` | `hydrate_actor`, `persist_connection_state` (actor row + dirty flush) |
 | `irc/dispatch.rs` | `dispatch_command` → `DispatchOutcome` (routing, not transport I/O) |
@@ -211,7 +211,7 @@ MUDL has a **coherent multi-user core**: one `SharedWorld` graph, per-nick `Arc<
 
 **M5 is production-viable for exploration and social play** (look, move, take, say, emote, tell, OOC). It is **not yet playtest-ready for combat-heavy expansion packs** — IRC lacks `attack`, containers, and most inventory verbs; builder meta is RBAC-checked but intentionally deferred to the REPL.
 
-The highest-priority post-M5 work is **transport DRY** (`CommandDispatcher` + remove dead `Gateway` struct) before adding Slack (M6). Wizard tooling and audit (M7) must precede LLM apply (M10–M12).
+The highest-priority post-M5 work is **transport DRY** (`CommandDispatcher`) before adding Slack (M6). Wizard tooling and audit (M7) must precede LLM apply (M10–M12).
 
 ### Strengths
 
@@ -289,7 +289,6 @@ Lock order: **manager (brief) → per-session → world**. No re-entrant world l
 | Gap | Risk | Mitigation (roadmap) |
 |-----|------|----------------------|
 | **Parallel command routers** — `repl.rs` (~1.6k) + `irc/dispatch.rs` (~860) | Drift, triple duplication with Slack | **M6 P0:** `CommandDispatcher` in `command/` or `gateway/` |
-| **Dead `Gateway` struct** in `gateway/mod.rs` | Confusion; `SessionManager` is canonical | Remove in pre-M6 cleanup PR |
 | **IRC command subset** | Expansion combat unplayable over IRC | **M7:** player verb parity; **M8:** combat module polish |
 | **World mutex contention** | Parallel `look`/`say` queue on busy rooms | Acceptable for playtesting; **M9** per-room lock if profiled |
 | **No rate limiting** | Flood / abuse on public IRC | **M9** (stub in M6 bridge if Slack is external-facing) |
@@ -312,7 +311,6 @@ Lock order: **manager (brief) → per-session → world**. No re-entrant world l
 | Issue | Location | Impact | Recommendation |
 |-------|----------|--------|----------------|
 | **Fat frontend adapters** | `src/bin/repl.rs` (~1.6k), `irc/dispatch.rs` (~860) | Third transport (Slack) would triplicate routing | **M6 P0:** `CommandDispatcher` returning `CommandResult` + transport-specific `DeliveryPlan` (IRC/Slack formatting). |
-| **Dead `Gateway` struct** | `gateway/mod.rs` (~110 lines) | `SessionManager` superseded it; unused in tree | Delete `Gateway` or fold helpers into `SessionManager` in pre-M6 PR. |
 | **God-module bootstrap** | `world/bootstrap.rs` (~2.5k lines) | Hard to extend spawn phases or test in isolation | Split: `bootstrap/places.rs`, `bootstrap/creatures.rs`, `bootstrap/spawners.rs`, orchestrator only. |
 | **`event_script` growth** | `world/event_script.rs` (~1.3k lines) | Every new action needs Rust | Cap M4 actions; plan M9 sandboxed runtime. Short term: register actions via enum + `register_action` table driven from MUDL metadata. |
 | **Dual AI execution path** | `run_creature_behaviors()` after `execute_event(on_enter)` | Tactics (flee/attack/wander) still outside the bus; ordering is implicit in `Session::go` | Document ordering contract (done in room-entry diagram). Long term: optional `react` as subscriber or phase-3 of `on_enter`. |
@@ -368,7 +366,7 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 
 | Delivered (M5) | Deferred to roadmap |
 |----------------|---------------------|
-| `SessionManager` + `ConnectionRegistry` | **M6** `GameTransport` + Slack; remove dead `Gateway` |
+| `SessionManager` + `ConnectionRegistry` (sole registry) | **M6** `GameTransport` + Slack on same manager |
 | `IrcBot` + `DispatchOutcome` delivery model | **M6** reuse delivery model for Slack threads |
 | `dispatch_command` (~860 lines, IRC-specific) | **M6** extract `CommandDispatcher`; shrink to transport adapters |
 | Per-nick `Arc<Mutex<Session>>` + `with_locked_async` | **M9** per-room locking if contention measured |
@@ -384,7 +382,6 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 | **P0** | **SEC-50** — rate limiting on `dispatch_command` entry | M6/M9 | Blocks command/OOC/move floods |
 | **P0** | **SEC-60** — IRC `look` → `ResolveScope::RoomOnly` | Pre-M6 | Blocks cross-room information disclosure |
 | **P0** | **SEC-23** — single-writer ops policy or unified service process | Ops/M7 | Blocks REPL+IRC split-brain on one DB |
-| **P0** | Delete dead `Gateway`; document `SessionManager` as sole registry | Pre-M6 | Reduces architectural confusion |
 | **P0** | Extract `CommandDispatcher` + `CommandResult` | M6 | Blocks Slack without a third router copy |
 | **P0** | Generalize `IrcTransport` → `GameTransport` trait | M6 | Slack/WebSocket share deliver/join/part semantics |
 | **P1** | M4 tail: `behavior_line` parser, persist fallback audit | M4 | Low risk; unblocks cleaner bootstrap |
@@ -456,11 +453,11 @@ Creatures now use a **single script surface** with split storage:
                                │ (Commands + DSL snippets)
                                ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    API Gateway / Auth Layer                  │
-│  • Authentication (nick, tokens, etc.)                       │
+│              SessionManager + gateway (RBAC, rate limits)    │
+│  • ConnectionRegistry (nick → player actor)                  │
+│  • Authentication (login tokens, identity bindings)          │
 │  • Authorization (RBAC: Player / Builder / Wizard)           │
-│  • Rate limiting, validation, auditing                       │
-│  • Single point of entry for all world modifications         │
+│  • Single registry for all live multi-user transports        │
 └──────────────────────────────┬──────────────────────────────┘
                                │ (Authorized calls)
                                ▼
@@ -476,7 +473,7 @@ Creatures now use a **single script surface** with split storage:
 ```
 **Key Principles**:
 - Core Engine is pure (no knowledge of IRC or auth).
-- All modifications go through the Gateway.
+- Multi-user transports mutate the world only through `SessionManager` + per-nick `Session`.
 - Frontends are thin adapters.
 - Self-modification and LLM generation are built on top of the DSL/runtime.
 
@@ -509,9 +506,10 @@ Creatures now use a **single script surface** with split storage:
 - **`EventScheduler`** (`world/scheduler.rs`) — room-scoped ticks, named property counters, and `@schedule` jobs that fire host triggers on interval.
 - **`@resource-spawner`** — renewable harvest nodes on `on_harvest` / `on_enter` / `timer`; player command `harvest <object>`.
 
-### 5. API Gateway / RBAC (M5 partial, M7 target)
-- **As-built:** `SessionManager` + `ConnectionRegistry`; RBAC on IRC meta commands (`gateway/rbac.rs`).
-- **Planned (M7):** Undo/audit trail; builder meta execution over all transports; rate limiting (M9).
+### 5. Session gateway / RBAC (M5 partial, M7 target)
+- **As-built:** [`SessionManager`](src/gateway/session_manager.rs) is the **sole connection registry** — one `SharedWorld`, `ConnectionRegistry`, per-nick `Arc<Mutex<Session>>`. RBAC on IRC meta commands (`gateway/rbac.rs`); rate limits on dispatch entry (SEC-50).
+- **REPL:** single `Session` for local authoring (not registered in `SessionManager`); single-writer lock prevents REPL+IRC split-brain on one DB (SEC-23).
+- **Planned (M7):** Undo/audit trail; builder meta execution over all transports.
 - Roles: Player, Builder, Wizard (`PermissionFlags` on actor object).
 
 ### 6. Frontends
@@ -521,11 +519,11 @@ Creatures now use a **single script surface** with split storage:
 - **Loaders**: File + GitHub integration (webhooks expanded in M7).
 
 ## Data Flow Example (Player Command)
-1. IRC Bot receives message → forwards to Gateway.
-2. Gateway authenticates + authorizes.
-3. Gateway calls Engine → dispatches to relevant Verb/Event.
-4. Engine executes DSL code (sandboxed).
-5. Results sent back through Gateway → IRC Bot.
+1. IRC client sends PRIVMSG → `IrcBot` normalizes input.
+2. `dispatch_command` checks rate limits, resolves nick via `SessionManager` registry.
+3. Per-nick `Session::with_locked_async` runs the verb under the `SharedWorld` mutex.
+4. Engine executes events / `@trigger` scripts; dirty objects marked.
+5. `DispatchOutcome` routes lines to sender, room audience, channels; persist on logout or explicit flush.
 
 ## Self-Modification & Extensibility
 - **Fundamental** (hard-coded in core): Objects, Properties, Verbs, Events, basic types.
@@ -554,7 +552,7 @@ mudl/
 │   ├── loot/               # Loot spawner runtime (M3)
 │   ├── inventory/          # Body-slot inventory (delegates to MoveManager)
 │   ├── repl/               # Session, PlayerSession (REPL + IRC)
-│   ├── gateway/            # SessionManager, RBAC, registry (M5)
+│   ├── gateway/            # SessionManager (sole registry), RBAC, rate limits (M5)
 │   ├── irc/                # IrcBot, dispatch, transport, channels (M5)
 │   ├── persistence/        # SQLite abstraction
 │   ├── bin/repl.rs         # REPL command router (~1.6k lines)
@@ -738,7 +736,6 @@ Test suites: `gateway::multi_user`, `gateway::session_manager`, `gateway::load`,
 
 | Task | Rationale |
 |------|-----------|
-| Remove unused `Gateway` struct from `gateway/mod.rs` | `SessionManager` is canonical; avoids dual APIs |
 | Sketch `CommandDispatcher` trait + `CommandResult { lines, dirty, social }` | Design pass before M6 implementation |
 | Align REPL `has_wizard_permission` stub with `gateway/rbac` | Consistent auth story once dispatcher lands |
 

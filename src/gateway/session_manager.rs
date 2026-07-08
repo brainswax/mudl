@@ -1,4 +1,17 @@
-//! Multi-user session lifecycle: login, active connections, disconnect persistence.
+//! Central connection registry and session lifecycle for multi-user transports (M5).
+//!
+//! [`SessionManager`] is the **only** multi-connection entry point in the tree. IRC
+//! ([`IrcBot`](crate::irc::IrcBot)), future Slack bots, and gateway tests all open one
+//! manager per database, then bind transport identities through [`Self::login`].
+//!
+//! Registry responsibilities (do not duplicate elsewhere):
+//! - [`ConnectionRegistry`] — nick / user id → player actor, actor-in-use guard;
+//! - `sessions` — per-connection [`Session`] mutexes for concurrent commands;
+//! - shared [`SharedWorld`] — one object graph, optimistic dirty flush on logout;
+//! - [`RateLimiter`](super::rate_limit::RateLimiter) — anti-flood policy (SEC-50).
+//!
+//! The REPL uses a single [`Session`](crate::repl::Session) directly (no registry) for
+//! local authoring; only one live writer per SQLite file is allowed (SEC-23).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -73,10 +86,10 @@ impl From<RegistryError> for LogoutError {
     }
 }
 
-/// Hosts one shared world and many simultaneous player connections (IRC / REPL).
+/// Sole multi-connection registry: one shared world, many transport-bound sessions.
 ///
-/// Each connection has its own [`AsyncMutex`] so IRC commands from different nicks
-/// can run concurrently; only the shared [`SharedWorld`] mutex serializes graph mutations.
+/// Each connection has its own [`AsyncMutex`] so commands from different nicks can run
+/// concurrently; only the shared [`SharedWorld`] mutex serializes graph mutations.
 pub struct SessionManager<P> {
     world: SharedWorld,
     registry: ConnectionRegistry,

@@ -1,4 +1,4 @@
-//! IRC nick → player actor mapping for multi-connection gateways.
+//! Transport identity → player actor mapping, owned by [`SessionManager`](super::SessionManager).
 
 use std::collections::HashMap;
 
@@ -26,7 +26,9 @@ impl std::fmt::Display for RegistryError {
 
 impl std::error::Error for RegistryError {}
 
-/// Maps IRC nicks to authoritative player [`ObjectId`]s.
+/// Maps transport identities (IRC nick, future Slack user id) to player [`ObjectId`]s.
+///
+/// Always accessed through [`SessionManager`](super::SessionManager); not a standalone registry.
 #[derive(Debug, Default, Clone)]
 pub struct ConnectionRegistry {
     by_nick: HashMap<String, ObjectId>,
