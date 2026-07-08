@@ -1,13 +1,15 @@
-//! IRC transport abstraction — real TCP client and in-memory mock for tests.
+//! IRC transport — [`GameTransport`] mapping plus protocol-specific raw lines.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::io::AsyncWriteExt;
 
+use crate::transport::GameTransport;
+
 use super::message::format_outgoing;
 
-/// Outgoing IRC action recorded by [`MockTransport`].
+/// IRC-specific outgoing action (includes raw protocol lines).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutgoingIrc {
     Privmsg { target: String, text: String },
@@ -17,97 +19,34 @@ pub enum OutgoingIrc {
     Raw(String),
 }
 
-/// Transport surface used by [`super::bot::IrcBot`].
+impl From<crate::transport::OutgoingAction> for OutgoingIrc {
+    fn from(action: crate::transport::OutgoingAction) -> Self {
+        match action {
+            crate::transport::OutgoingAction::Direct { recipient, text } => {
+                OutgoingIrc::Privmsg {
+                    target: recipient,
+                    text,
+                }
+            }
+            crate::transport::OutgoingAction::Notice { recipient, text } => OutgoingIrc::Notice {
+                target: recipient,
+                text,
+            },
+            crate::transport::OutgoingAction::Join { presence } => OutgoingIrc::Join {
+                channel: presence,
+            },
+            crate::transport::OutgoingAction::Leave { presence, message } => OutgoingIrc::Part {
+                channel: presence,
+                message,
+            },
+        }
+    }
+}
+
+/// IRC extension of [`GameTransport`] for registration and capability negotiation.
 #[async_trait]
-pub trait IrcTransport: Send + Sync {
-    async fn send_privmsg(&self, target: &str, text: &str);
-    async fn send_notice(&self, target: &str, text: &str);
-    async fn join(&self, channel: &str);
-    async fn part(&self, channel: &str, message: Option<&str>);
+pub trait IrcTransport: GameTransport {
     async fn send_raw(&self, line: &str);
-}
-
-/// In-memory transport that records all outgoing messages for assertions.
-#[derive(Debug, Default, Clone)]
-pub struct MockTransport {
-    log: Arc<Mutex<Vec<OutgoingIrc>>>,
-}
-
-impl MockTransport {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn recorded(&self) -> Vec<OutgoingIrc> {
-        self.log.lock().expect("mock transport lock").clone()
-    }
-
-    pub fn clear(&self) {
-        self.log.lock().expect("mock transport lock").clear();
-    }
-
-    pub fn privmsgs_to(&self, target: &str) -> Vec<String> {
-        self.recorded()
-            .into_iter()
-            .filter_map(|entry| match entry {
-                OutgoingIrc::Privmsg { target: t, text } if t == target => Some(text),
-                _ => None,
-            })
-            .collect()
-    }
-
-    pub fn channel_messages(&self, channel: &str) -> Vec<String> {
-        self.privmsgs_to(channel)
-    }
-}
-
-#[async_trait]
-impl IrcTransport for MockTransport {
-    async fn send_privmsg(&self, target: &str, text: &str) {
-        self.log
-            .lock()
-            .expect("mock transport lock")
-            .push(OutgoingIrc::Privmsg {
-                target: target.to_string(),
-                text: text.to_string(),
-            });
-    }
-
-    async fn send_notice(&self, target: &str, text: &str) {
-        self.log
-            .lock()
-            .expect("mock transport lock")
-            .push(OutgoingIrc::Notice {
-                target: target.to_string(),
-                text: text.to_string(),
-            });
-    }
-
-    async fn join(&self, channel: &str) {
-        self.log
-            .lock()
-            .expect("mock transport lock")
-            .push(OutgoingIrc::Join {
-                channel: channel.to_string(),
-            });
-    }
-
-    async fn part(&self, channel: &str, message: Option<&str>) {
-        self.log
-            .lock()
-            .expect("mock transport lock")
-            .push(OutgoingIrc::Part {
-                channel: channel.to_string(),
-                message: message.map(str::to_string),
-            });
-    }
-
-    async fn send_raw(&self, line: &str) {
-        self.log
-            .lock()
-            .expect("mock transport lock")
-            .push(OutgoingIrc::Raw(line.to_string()));
-    }
 }
 
 /// Tokio TCP IRC client that reads lines and forwards them to a handler.
@@ -182,31 +121,34 @@ impl StreamTransport {
 }
 
 #[async_trait]
+impl GameTransport for StreamTransport {
+    async fn send_direct(&self, recipient: &str, text: &str) {
+        let line = format_outgoing("PRIVMSG", &[recipient], Some(text));
+        let mut writer = self.writer.lock().await;
+        let _ = writer.write_all(line.as_bytes()).await;
+    }
+
+    async fn send_notice(&self, recipient: &str, text: &str) {
+        let line = format_outgoing("NOTICE", &[recipient], Some(text));
+        let mut writer = self.writer.lock().await;
+        let _ = writer.write_all(line.as_bytes()).await;
+    }
+
+    async fn join(&self, presence: &str) {
+        let line = format_outgoing("JOIN", &[presence], None);
+        let mut writer = self.writer.lock().await;
+        let _ = writer.write_all(line.as_bytes()).await;
+    }
+
+    async fn leave(&self, presence: &str, message: Option<&str>) {
+        let line = format_outgoing("PART", &[presence], message);
+        let mut writer = self.writer.lock().await;
+        let _ = writer.write_all(line.as_bytes()).await;
+    }
+}
+
+#[async_trait]
 impl IrcTransport for StreamTransport {
-    async fn send_privmsg(&self, target: &str, text: &str) {
-        let line = format_outgoing("PRIVMSG", &[target], Some(text));
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(line.as_bytes()).await;
-    }
-
-    async fn send_notice(&self, target: &str, text: &str) {
-        let line = format_outgoing("NOTICE", &[target], Some(text));
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(line.as_bytes()).await;
-    }
-
-    async fn join(&self, channel: &str) {
-        let line = format_outgoing("JOIN", &[channel], None);
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(line.as_bytes()).await;
-    }
-
-    async fn part(&self, channel: &str, message: Option<&str>) {
-        let line = format_outgoing("PART", &[channel], message);
-        let mut writer = self.writer.lock().await;
-        let _ = writer.write_all(line.as_bytes()).await;
-    }
-
     async fn send_raw(&self, line: &str) {
         let payload = if line.ends_with("\r\n") {
             line.to_string()

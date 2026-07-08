@@ -9,7 +9,8 @@ use mudl::command::bootstrap_active_universe;
 use mudl::gateway::SessionManager;
 use mudl::irc::{
     cap_end_command, cap_ls_complete, cap_request_command, connect, is_welcome,
-    registration_commands, IrcBot, IrcConfig, IrcMessage, IrcTransport, MockTransport,
+    registration_commands, GameTransport, IrcBot, IrcConfig, IrcMessage, IrcTransport,
+    MockTransport,
 };
 use mudl::mudl::default_module_dir;
 use mudl::object::{ObjectFactory, ObjectId};

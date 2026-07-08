@@ -9,6 +9,7 @@ mod tests {
 
     use crate::gateway::SessionManager;
     use crate::irc::{dispatch_command, IrcBot, IrcConfig, IrcMessage, MockTransport};
+    use crate::transport::OutgoingAction;
     use crate::mudl::{AnatomyRegistry, BodySlotDef, CreatureDef, SlotType};
     use crate::object::{Object, ObjectId, PermissionFlags};
     use crate::persistence::{Persistence, SqlitePersistence};
@@ -211,8 +212,8 @@ mod tests {
         assert!(transport.recorded().iter().any(|entry| {
             matches!(
                 entry,
-                crate::irc::OutgoingIrc::Notice { target, text }
-                    if target == "stranger" && text.contains("not logged in")
+                OutgoingAction::Notice { recipient, text }
+                    if recipient == "stranger" && text.contains("not logged in")
             )
         }));
         assert!(transport.channel_messages("#mudl").is_empty());
@@ -227,15 +228,15 @@ mod tests {
         assert!(transport.recorded().iter().any(|entry| {
             matches!(
                 entry,
-                crate::irc::OutgoingIrc::Join { channel }
-                    if channel == "#mudl-north-001"
+                OutgoingAction::Join { presence }
+                    if presence == "#mudl-north-001"
             )
         }));
         assert!(transport.recorded().iter().any(|entry| {
             matches!(
                 entry,
-                crate::irc::OutgoingIrc::Part { channel, .. }
-                    if channel == "#mudl-void-001"
+                OutgoingAction::Leave { presence, .. }
+                    if presence == "#mudl-void-001"
             )
         }));
     }

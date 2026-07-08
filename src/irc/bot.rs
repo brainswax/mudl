@@ -13,7 +13,7 @@ use super::dispatch::{dispatch_command, DispatchOutcome};
 use super::input::normalize_irc_command_input;
 use super::message::IrcMessage;
 use super::social::format_ooc;
-use super::transport::IrcTransport;
+use crate::transport::{split_delivery_lines, GameTransport};
 
 /// IRC gateway bot backed by a shared [`SessionManager`].
 pub struct IrcBot<P, T> {
@@ -25,7 +25,7 @@ pub struct IrcBot<P, T> {
 impl<P, T> IrcBot<P, T>
 where
     P: Persistence + Clone + Send + Sync + 'static,
-    T: IrcTransport + 'static,
+    T: GameTransport + 'static,
 {
     pub fn new(manager: SessionManager<P>, transport: Arc<T>, config: IrcConfig) -> Self {
         Self {
@@ -116,12 +116,12 @@ where
         drop(manager);
 
         self.transport
-            .send_privmsg(&self.config.world_channel, &line)
+            .send_direct(&self.config.world_channel, &line)
             .await;
         let from_key = normalize_nick(from);
         for nick in nicks {
             if nick != from_key {
-                self.transport.send_privmsg(&nick, &line).await;
+                self.transport.send_direct(&nick, &line).await;
             }
         }
         Ok(())
@@ -137,28 +137,28 @@ where
 
     async fn deliver(&self, outcome: &DispatchOutcome) {
         for line in &outcome.to_sender {
-            self.send_privmsg_lines(&outcome.sender, line).await;
+            self.send_direct_lines(&outcome.sender, line).await;
         }
 
         for (nick, line) in &outcome.private {
-            self.send_privmsg_lines(nick, line).await;
+            self.send_direct_lines(nick, line).await;
         }
 
         for delivery in &outcome.room_audience {
             for nick in &delivery.audience {
                 for line in &delivery.lines {
-                    self.send_privmsg_lines(nick, line).await;
+                    self.send_direct_lines(nick, line).await;
                 }
             }
         }
 
         for (channel, line) in &outcome.channel {
-            self.send_privmsg_lines(channel, line).await;
+            self.send_direct_lines(channel, line).await;
         }
 
         if let Some(sync) = &outcome.channel_sync {
             for channel in &sync.part {
-                self.transport.part(channel, Some("leaving")).await;
+                self.transport.leave(channel, Some("leaving")).await;
             }
             for channel in &sync.join {
                 self.transport.join(channel).await;
@@ -177,16 +177,11 @@ where
         }
     }
 
-    /// IRC clients expect one protocol line per PRIVMSG — split embedded newlines.
-    async fn send_privmsg_lines(&self, target: &str, text: &str) {
-        let parts: Vec<&str> = if text.contains('\n') {
-            text.lines().collect()
-        } else {
-            vec![text]
-        };
-        for part in parts {
+    /// Frontends expect one protocol line per direct message — split embedded newlines.
+    async fn send_direct_lines(&self, target: &str, text: &str) {
+        for part in split_delivery_lines(text) {
             if !part.is_empty() {
-                self.transport.send_privmsg(target, part).await;
+                self.transport.send_direct(target, part).await;
             }
         }
     }
@@ -197,7 +192,8 @@ mod tests {
     use super::*;
     use crate::gateway::SessionManager;
     use crate::object::ObjectId;
-    use crate::irc::transport::{MockTransport, OutgoingIrc};
+    use crate::irc::MockTransport;
+    use crate::transport::OutgoingAction;
     use crate::object::{Object, PermissionFlags};
     use crate::persistence::SqlitePersistence;
     use std::collections::HashMap;
@@ -378,8 +374,8 @@ mod tests {
         assert!(transport.recorded().iter().any(|entry| {
             matches!(
                 entry,
-                OutgoingIrc::Notice { target, text }
-                    if target == "alice" && text.contains("out-of-character")
+                OutgoingAction::Notice { recipient, text }
+                    if recipient == "alice" && text.contains("out-of-character")
             )
         }));
     }
@@ -454,6 +450,6 @@ mod tests {
         assert!(transport
             .recorded()
             .iter()
-            .any(|entry| matches!(entry, OutgoingIrc::Part { .. })));
+            .any(|entry| matches!(entry, OutgoingAction::Leave { .. })));
     }
 }

@@ -20,7 +20,7 @@
 
 | Milestone | Focus | Target deliverables |
 |-----------|-------|---------------------|
-| **M6** | Slack integration | `GameTransport` trait (generalize `IrcTransport`); `SlackBot` on `SessionManager`; `CommandDispatcher` extracted from `repl.rs` / `irc/dispatch.rs`; thread/channel OOC vs in-character routing; mock transport tests |
+| **M6** | Slack integration | ~~`GameTransport` trait~~ **Done**; ~~`CommandDispatcher`~~ **Done**; `SlackBot` on `SessionManager`; thread/channel OOC vs in-character routing; mock transport tests |
 | **M7** | Wizard tools & persistence | Builder meta execution over IRC/Slack (`@dig`, `@set`, …); undo/audit trail; GitHub webhooks + module hot-reload; graph validator; IRC player parity (`attack`, `drop`, containers) |
 | **M8** | Gameplay modules | Optional MUDL packs + engine hooks — economy (currency, shops), combat polish (`@formula`, PvP), magic (spells, mana), crafting (recipes, workstations) |
 | **M9** | Polish & extensibility | Sandboxed DSL runtime; rate limiting / flood protection; prototype resolver; `object`/`display` decoupling; per-room locking if needed; WebSocket client |
@@ -179,8 +179,9 @@ M5 adds concurrent players over one shared world graph via IRC (TLS/IRCv3) with 
 | `gateway/rbac.rs` | `PermissionFlags` → `ActorTier`; `authorize_meta_command` / `authorize_plain_command` |
 | `gateway/persistence.rs` | `hydrate_actor`, `persist_connection_state` (actor row + dirty flush) |
 | `irc/dispatch.rs` | `dispatch_command` → `DispatchOutcome` (routing, not transport I/O) |
-| `irc/bot.rs` | `IrcBot` — PRIVMSG/OOC handling, `deliver`, channel JOIN/PART |
-| `irc/transport.rs` | `IrcTransport`, `MockTransport`, TLS stream adapter |
+| `irc/bot.rs` | `IrcBot` — OOC handling, `deliver` via [`GameTransport`](src/transport/mod.rs) |
+| `transport/mod.rs` | `GameTransport`, `MockTransport`, `OutgoingAction` — shared deliver/join/leave |
+| `irc/transport.rs` | `IrcTransport` (`GameTransport` + `send_raw`), TLS stream adapter |
 | `bin/irc.rs` | Thin bootstrap: universe load → `SessionManager::open` → event loop |
 
 **M6 prep:** [`CommandDispatcher`](src/command/dispatcher.rs) routes shared player verbs; IRC maps [`CommandResult`](src/command/dispatcher.rs) → `DispatchOutcome`. **Still deferred:** builder meta execution over IRC, `attack`/full inventory on transports. Meta verbs hit RBAC then return *"Builder commands over IRC are not enabled yet. Use the REPL."*
@@ -366,7 +367,7 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 
 | Delivered (M5) | Deferred to roadmap |
 |----------------|---------------------|
-| `SessionManager` + `ConnectionRegistry` (sole registry) | **M6** `GameTransport` + Slack on same manager |
+| `SessionManager` + `ConnectionRegistry` (sole registry) | **M6** `SlackBot` on same manager (`GameTransport` shipped) |
 | `IrcBot` + `DispatchOutcome` delivery model | **M6** reuse delivery model for Slack threads |
 | `dispatch_command` (~860 lines, IRC-specific) | **M6** extract `CommandDispatcher`; shrink to transport adapters |
 | Per-nick `Arc<Mutex<Session>>` + `with_locked_async` | **M9** per-room locking if contention measured |
@@ -383,7 +384,7 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 | **P0** | **SEC-60** — IRC `look` → `ResolveScope::RoomOnly` | Pre-M6 | Blocks cross-room information disclosure |
 | **P0** | **SEC-23** — single-writer ops policy or unified service process | Ops/M7 | Blocks REPL+IRC split-brain on one DB |
 | ~~**P0**~~ | ~~Extract `CommandDispatcher` + `CommandResult`~~ | **Done** | Shared player verbs; IRC/REPL adapters |
-| **P0** | Generalize `IrcTransport` → `GameTransport` trait | M6 | Slack/WebSocket share deliver/join/part semantics |
+| ~~**P0**~~ | ~~Generalize `IrcTransport` → `GameTransport` trait~~ | **Done** | Slack/WebSocket share deliver/join/leave semantics |
 | **P1** | M4 tail: `behavior_line` parser, persist fallback audit | M4 | Low risk; unblocks cleaner bootstrap |
 | **P1** | IRC `attack` + `drop` via dispatcher | M7 | Needed for expansion playtests over IRC/Slack |
 | **P1** | Builder meta execution + undo/audit | M7 | Prerequisite for M10 LLM apply |
@@ -743,8 +744,8 @@ Test suites: `gateway::multi_user`, `gateway::session_manager`, `gateway::load`,
 
 | Priority | Task | Rationale |
 |----------|------|-----------|
-| **P0** | `CommandDispatcher` — extract from `repl.rs` + `irc/dispatch.rs` | M5 proved parallel routers drift; Slack must not add a third |
-| **P0** | `GameTransport` trait (from `IrcTransport`) | Shared deliver/join/notice interface for IRC + Slack |
+| ~~**P0**~~ | ~~`CommandDispatcher` — extract from `repl.rs` + `irc/dispatch.rs`~~ | **Done** |
+| ~~**P0**~~ | ~~`GameTransport` trait (from `IrcTransport`)~~ | **Done** — `send_direct` / `join` / `leave` / `send_notice` |
 | **P0** | `SlackBot` + `SessionManager` binding | Reuse M5 multi-user model; workspace user → player session |
 | **P0** | Channel/thread routing | OOC workspace channel vs per-room threads for in-character speech |
 | **P1** | Mock transport + `gateway::m6_scenarios` tests | Mirror `irc::` / `m5_scenarios` pattern for CI |
@@ -801,7 +802,7 @@ Test suites: `gateway::multi_user`, `gateway::session_manager`, `gateway::load`,
 
 ## Future Directions
 
-- **Pre-M6 → M6:** Extract `CommandDispatcher` and `GameTransport` — M5 validated the session model; the next bottleneck is transport/router duplication
+- **Pre-M6 → M6:** ~~Extract `CommandDispatcher` and `GameTransport`~~ **Done** — next: `SlackBot` on `SessionManager` + channel/thread routing
 - **M7:** Wizard undo/audit and player verb parity — gate for combat expansion playtests and all LLM apply paths
 - **M8:** Gameplay modules as optional MUDL packs (economy, magic, crafting) atop stable multi-user transports
 - **M9:** Sandboxed runtime + rate limiting — hard prerequisite for M11–M12 LLM-generated logic at runtime

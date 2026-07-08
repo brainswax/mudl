@@ -30,5 +30,6 @@ pub use crate::gateway::{
 pub use input::normalize_irc_command_input;
 pub use message::{format_outgoing, parse_irc_line, strip_ircv3_tags, IrcMessage};
 pub use social::{format_emote, format_ooc, format_say, format_tell};
-pub use transport::{IrcTransport, MockTransport, OutgoingIrc, StreamTransport, TcpIrcClient, TcpTransport};
+pub use crate::transport::{GameTransport, MockTransport, OutgoingAction};
+pub use transport::{IrcTransport, OutgoingIrc, StreamTransport, TcpIrcClient, TcpTransport};
 pub use visibility::{players_in_room, resolve_connected_nick};
