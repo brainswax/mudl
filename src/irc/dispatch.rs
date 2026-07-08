@@ -105,6 +105,11 @@ pub async fn dispatch_command<P: Persistence + Clone + Send + Sync>(
             to_sender: vec![help_text()],
             ..Default::default()
         },
+        "login" => DispatchOutcome {
+            sender,
+            to_sender: vec!["You are already logged in. Send 'quit' to disconnect.".to_string()],
+            ..Default::default()
+        },
         "quit" | "logout" | "exit" => dispatch_quit(&manager, nick, sender, config).await,
         "look" | "l" => dispatch_look(&manager, nick, &line.args, sender).await,
         "inventory" | "i" => dispatch_inventory(&manager, nick, sender).await,

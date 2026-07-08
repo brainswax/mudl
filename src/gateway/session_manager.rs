@@ -155,6 +155,7 @@ impl<P: Persistence + Clone> SessionManager<P> {
         actor_id: ObjectId,
         bootstrap_location: Option<ObjectId>,
     ) -> Result<(), LoginError> {
+        self.reclaim_orphan_nick(nick, &actor_id)?;
         let session = self
             .build_connection(nick, actor_id, bootstrap_location)
             .await?;
@@ -225,6 +226,20 @@ impl<P: Persistence + Clone> SessionManager<P> {
         let nicks: Vec<String> = self.sessions.keys().cloned().collect();
         for nick in nicks {
             self.logout(&nick).await?;
+        }
+        Ok(())
+    }
+
+    /// Drop a registry entry left by [`Self::connect`] when the owned [`Session`] was dropped
+    /// without [`Self::release`], so the same nick can log in again.
+    fn reclaim_orphan_nick(&mut self, nick: &str, actor_id: &ObjectId) -> Result<(), LoginError> {
+        if self.session_handle(nick).is_some() {
+            return Ok(());
+        }
+        if let Some(bound) = self.registry.resolve(nick) {
+            if bound == actor_id {
+                self.registry.unbind(nick)?;
+            }
         }
         Ok(())
     }

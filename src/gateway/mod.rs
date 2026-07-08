@@ -6,6 +6,8 @@ mod registry;
 mod session_manager;
 
 #[cfg(test)]
+mod edge_cases;
+#[cfg(test)]
 mod load;
 #[cfg(test)]
 mod multi_user;

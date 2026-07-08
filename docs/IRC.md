@@ -163,11 +163,13 @@ Persistence releases the world mutex before SQLite I/O so other connections can 
 cargo test irc::
 cargo test gateway::multi_user
 cargo test gateway::load
+cargo test gateway::edge_cases
 ```
 
 Coverage includes:
 
 - **IRC layer** — message parsing, IRCv3 caps, channel naming, visibility, dispatch, bot relay
 - **Multi-user** (`gateway::multi_user`) — shared world movement, room-boundary `say`/`emote`, private `tell`, concurrent `go`/`take`, logout isolation, mixed-case nicks
+- **Edge cases** (`gateway::edge_cases`) — disconnect/reconnect, IRC `QUIT`, double logout, login while connected, RBAC denials, revision-conflict retry on logout, orphan `connect()` reclaim
 
 Mock transport is used — no live TLS connection in CI.
