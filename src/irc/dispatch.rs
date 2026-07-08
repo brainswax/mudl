@@ -1,28 +1,28 @@
-//! Command dispatch from IRC input to [`Session`] operations.
+//! IRC transport adapter: rate limits, login lifecycle, and [`CommandResult`] delivery.
+//!
+//! Player verbs route through [`CommandDispatcher`](crate::command::CommandDispatcher);
+//! this module maps transport-neutral results to [`DispatchOutcome`].
 
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
 use crate::command::parse_command_line;
-use crate::command::{authorize_meta_command, authorize_plain_command, CommandLine};
-use crate::display::{
-    format_room_look_player, narrate_no_location, narrate_target_not_found, Describable,
-    DisplayMode, TargetResolution,
+use crate::command::{
+    CommandDispatcher, CommandLine, CommandResult, LookOptions, PlayerDispatchOptions, SocialIntent,
 };
+use crate::display::{format_room_look_player, DisplayMode};
 use crate::gateway::{
     normalize_nick, parse_login_args, rate_limit_kind_for_line, resolve_player_for_login,
     verify_login, LoginRequest, RateLimitKind, SessionManager,
 };
-use crate::inventory::{describe_inventory, take_item, InventoryError};
 use crate::persistence::Persistence;
-use crate::world::{exit_index, movement_from_line};
 
 use super::channels::{room_channel_name, room_join_notice};
 use super::config::IrcConfig;
 use super::social::{format_emote, format_say, format_tell, format_tell_sent};
 use super::visibility::{
-    actor_display_name_async, irc_look_scope, players_in_room_async, resolve_connected_nick,
+    irc_look_scope, players_in_room_async, resolve_connected_nick,
 };
 
 /// IRC routing instructions produced by command dispatch.
@@ -101,30 +101,145 @@ pub async fn dispatch_command<P: Persistence + Clone + Send + Sync>(
         return dispatch_logged_out(&mut mgr, &persistence, nick, &line, config).await;
     }
 
-    if line.is_meta {
-        return dispatch_meta(&manager, nick, &line, sender).await;
+    if matches!(line.verb.as_str(), "quit" | "logout" | "exit") {
+        return dispatch_quit(&manager, nick, sender, config).await;
     }
 
-    match line.verb.as_str() {
-        "help" | "?" => DispatchOutcome {
+    dispatch_player_command(&manager, nick, &line, sender, config).await
+}
+
+async fn dispatch_player_command<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
+    nick: &str,
+    line: &CommandLine,
+    sender: String,
+    config: &IrcConfig,
+) -> DispatchOutcome {
+    let persistence = {
+        let mgr = manager.lock().await;
+        mgr.persistence().clone()
+    };
+    let handle = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick)
+    };
+    let Some(handle) = handle else {
+        return DispatchOutcome {
             sender,
-            to_sender: help_lines(),
+            to_sender: vec!["You are not logged in.".to_string()],
             ..Default::default()
-        },
-        "login" => DispatchOutcome {
-            sender,
-            to_sender: vec!["You are already logged in. Send 'quit' to disconnect.".to_string()],
-            ..Default::default()
-        },
-        "quit" | "logout" | "exit" => dispatch_quit(&manager, nick, sender, config).await,
-        "look" | "l" => dispatch_look(&manager, nick, &line.args, sender).await,
-        "inventory" | "i" => dispatch_inventory(&manager, nick, sender).await,
-        "say" | "'" => dispatch_say(&manager, nick, &line.args, sender, config).await,
-        "emote" | ":" => dispatch_emote(&manager, nick, &line.args, sender, config).await,
-        "tell" | "whisper" => dispatch_tell(&manager, nick, &line.args, sender).await,
-        "take" | "get" => dispatch_take(&manager, nick, &line.args, sender).await,
-        "go" | _ => dispatch_movement(&manager, nick, &line, sender, config).await,
+        };
+    };
+
+    let options = PlayerDispatchOptions {
+        look: LookOptions::player(irc_look_scope()),
+    };
+    let result = {
+        let mut session = handle.lock().await;
+        CommandDispatcher::dispatch_player_line(&mut session, &persistence, line, &options).await
+    };
+
+    deliver_command_result(result, sender, nick, manager, config).await
+}
+
+async fn deliver_command_result<P: Persistence + Clone + Send + Sync>(
+    result: CommandResult,
+    sender: String,
+    nick: &str,
+    manager: &Arc<Mutex<SessionManager<P>>>,
+    config: &IrcConfig,
+) -> DispatchOutcome {
+    let mut outcome = DispatchOutcome {
+        sender,
+        to_sender: result.lines_to_actor,
+        persist: result.persist_world,
+        ..Default::default()
+    };
+
+    if let Some(social) = result.social {
+        match social {
+            SocialIntent::Say {
+                room_id,
+                speaker_name,
+                text,
+            } => {
+                let formatted = format_say(&speaker_name, &text);
+                outcome.to_sender.push(formatted.clone());
+                let mgr = manager.lock().await;
+                let audience = players_in_room_async(&mgr, &room_id, Some(nick))
+                    .await
+                    .into_iter()
+                    .map(|p| p.nick)
+                    .collect();
+                let room_channel = room_channel_name(&config.room_channel_prefix, &room_id);
+                outcome.room_audience.push(RoomDelivery {
+                    audience,
+                    lines: vec![formatted.clone()],
+                });
+                outcome.channel.push((room_channel, formatted));
+            }
+            SocialIntent::Emote {
+                room_id,
+                speaker_name,
+                text,
+            } => {
+                let formatted = format_emote(&speaker_name, &text);
+                outcome.to_sender.push(formatted.clone());
+                let mgr = manager.lock().await;
+                let audience = players_in_room_async(&mgr, &room_id, Some(nick))
+                    .await
+                    .into_iter()
+                    .map(|p| p.nick)
+                    .collect();
+                let room_channel = room_channel_name(&config.room_channel_prefix, &room_id);
+                outcome.room_audience.push(RoomDelivery {
+                    audience,
+                    lines: vec![formatted.clone()],
+                });
+                outcome.channel.push((room_channel, formatted));
+            }
+            SocialIntent::Tell {
+                target_identity,
+                speaker_name,
+                text,
+            } => {
+                let mgr = manager.lock().await;
+                let Some(resolved) = resolve_connected_nick(&mgr, &target_identity) else {
+                    outcome.to_sender = vec![format!("{target_identity} is not connected.")];
+                    outcome.persist = false;
+                    return outcome;
+                };
+                if normalize_nick(&resolved) == normalize_nick(nick) {
+                    outcome.to_sender = vec!["You talk to yourself.".to_string()];
+                    outcome.persist = false;
+                    return outcome;
+                }
+                outcome.to_sender = vec![format_tell_sent(&resolved, &text)];
+                outcome
+                    .private
+                    .push((resolved, format_tell(&speaker_name, &text)));
+            }
+        }
     }
+
+    if let Some(movement) = result.movement {
+        outcome.to_sender.extend(movement.lines);
+        if let (Some(old_id), Some(new_id)) = (movement.old_room, movement.new_room) {
+            if old_id != new_id {
+                outcome.channel_sync = Some(ChannelSync {
+                    nick: outcome.sender.clone(),
+                    join: vec![room_channel_name(&config.room_channel_prefix, &new_id)],
+                    part: vec![room_channel_name(&config.room_channel_prefix, &old_id)],
+                });
+                outcome.to_sender.push(room_join_notice(&room_channel_name(
+                    &config.room_channel_prefix,
+                    &new_id,
+                )));
+            }
+        }
+    }
+
+    outcome
 }
 
 async fn dispatch_logged_out<P: Persistence + Clone>(
@@ -304,460 +419,6 @@ async fn dispatch_quit<P: Persistence + Clone + Send + Sync>(
             ..Default::default()
         },
     }
-}
-
-async fn dispatch_meta<P: Persistence + Clone + Send + Sync>(
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    nick: &str,
-    line: &CommandLine,
-    sender: String,
-) -> DispatchOutcome {
-    let handle = {
-        let mgr = manager.lock().await;
-        mgr.session_handle(nick)
-    };
-    let Some(handle) = handle else {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec!["You are not logged in.".to_string()],
-            ..Default::default()
-        };
-    };
-
-    let session = handle.lock().await;
-    let message = session
-        .with_world_async(|world, player| {
-            let Some(actor) = world.object(player.actor_id()) else {
-                return "You seem to have lost yourself.".to_string();
-            };
-            let result = if line.verb == "create" || line.verb == "load" || line.verb == "save" {
-                authorize_plain_command(actor, &line.verb, line.args.first().map(String::as_str))
-            } else {
-                authorize_meta_command(actor, &line.verb)
-            };
-            match result {
-                Ok(()) => "Builder commands over IRC are not enabled yet. Use the REPL.".to_string(),
-                Err(err) => err.to_string(),
-            }
-        })
-        .await;
-
-    DispatchOutcome {
-        sender,
-        to_sender: vec![message],
-        ..Default::default()
-    }
-}
-
-async fn dispatch_look<P: Persistence + Clone + Send + Sync>(
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    nick: &str,
-    args: &[String],
-    sender: String,
-) -> DispatchOutcome {
-    let persistence = {
-        let mgr = manager.lock().await;
-        mgr.persistence().clone()
-    };
-    let handle = {
-        let mgr = manager.lock().await;
-        mgr.session_handle(nick)
-    };
-    let Some(handle) = handle else {
-        return DispatchOutcome::default();
-    };
-
-    let target_name = (!args.is_empty()).then(|| args.join(" "));
-    let resolution = {
-        let session = handle.lock().await;
-        if let Some(name) = target_name.as_deref() {
-            session.resolve_target_async(name, irc_look_scope()).await
-        } else if let Some(loc) = session.current_location() {
-            TargetResolution::Found(loc.clone())
-        } else {
-            TargetResolution::NotFound
-        }
-    };
-
-    if let TargetResolution::Found(ref id) = resolution {
-        let mut session = handle.lock().await;
-        let _ = session.ensure_object(&persistence, id).await;
-    }
-
-    let mut lines = Vec::new();
-    let mut session = handle.lock().await;
-    match resolution {
-        TargetResolution::Found(id) => {
-            let is_room = session
-                .objects_async()
-                .await
-                .get(&id)
-                .is_some_and(|obj| obj.is_location());
-            if is_room {
-                let discovery = session.perceive_hidden_on_look_async().await;
-                lines.extend(discovery.lines);
-            }
-            let ctx = session.display_context_async(DisplayMode::Player).await;
-            if let Some(obj) = ctx.objects.get(&id) {
-                if obj.is_location() {
-                    lines.push(format_room_look_player(obj, &ctx));
-                } else {
-                    lines.push(obj.describe(&ctx));
-                }
-            } else if let Some(name) = target_name.as_deref() {
-                lines.push(narrate_target_not_found(name));
-            } else {
-                lines.push(narrate_no_location());
-            }
-        }
-        TargetResolution::Ambiguous(msg) => lines.push(msg),
-        TargetResolution::NotFound => {
-            if let Some(name) = target_name.as_deref() {
-                lines.push(narrate_target_not_found(name));
-            } else {
-                lines.push(narrate_no_location());
-            }
-        }
-    }
-
-    DispatchOutcome {
-        sender,
-        to_sender: lines,
-        ..Default::default()
-    }
-}
-
-async fn dispatch_inventory<P: Persistence + Clone + Send + Sync>(
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    nick: &str,
-    sender: String,
-) -> DispatchOutcome {
-    let handle = {
-        let mgr = manager.lock().await;
-        mgr.session_handle(nick)
-    };
-    let Some(handle) = handle else {
-        return DispatchOutcome::default();
-    };
-
-    let session = handle.lock().await;
-    let text = session
-        .with_world_async(|world, player| {
-            world
-                .object(player.actor_id())
-                .map(|obj| describe_inventory(obj, world.objects(), world.anatomy()))
-                .unwrap_or_else(|| "You seem to have lost yourself.".to_string())
-        })
-        .await;
-
-    DispatchOutcome {
-        sender,
-        to_sender: vec![text],
-        ..Default::default()
-    }
-}
-
-async fn dispatch_say<P: Persistence + Clone + Send + Sync>(
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    nick: &str,
-    args: &[String],
-    sender: String,
-    config: &IrcConfig,
-) -> DispatchOutcome {
-    if args.is_empty() {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec!["Say what?".to_string()],
-            ..Default::default()
-        };
-    }
-
-    let handle = {
-        let mgr = manager.lock().await;
-        mgr.session_handle(nick)
-    };
-    let Some(handle) = handle else {
-        return DispatchOutcome::default();
-    };
-
-    let room_id = {
-        let session = handle.lock().await;
-        session.current_location().cloned()
-    };
-    let Some(room_id) = room_id else {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec![narrate_no_location()],
-            ..Default::default()
-        };
-    };
-
-    let speaker = actor_display_name_async(&handle).await;
-    let text = args.join(" ");
-    let formatted = format_say(&speaker, &text);
-    let mgr = manager.lock().await;
-    let audience = players_in_room_async(&mgr, &room_id, Some(nick))
-        .await
-        .into_iter()
-        .map(|p| p.nick)
-        .collect();
-
-    let room_channel = room_channel_name(&config.room_channel_prefix, &room_id);
-    DispatchOutcome {
-        sender,
-        to_sender: vec![formatted.clone()],
-        room_audience: vec![RoomDelivery {
-            audience,
-            lines: vec![formatted.clone()],
-        }],
-        channel: vec![(room_channel, formatted)],
-        ..Default::default()
-    }
-}
-
-async fn dispatch_emote<P: Persistence + Clone + Send + Sync>(
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    nick: &str,
-    args: &[String],
-    sender: String,
-    config: &IrcConfig,
-) -> DispatchOutcome {
-    if args.is_empty() {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec!["Emote what?".to_string()],
-            ..Default::default()
-        };
-    }
-
-    let handle = {
-        let mgr = manager.lock().await;
-        mgr.session_handle(nick)
-    };
-    let Some(handle) = handle else {
-        return DispatchOutcome::default();
-    };
-
-    let room_id = {
-        let session = handle.lock().await;
-        session.current_location().cloned()
-    };
-    let Some(room_id) = room_id else {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec![narrate_no_location()],
-            ..Default::default()
-        };
-    };
-
-    let speaker = actor_display_name_async(&handle).await;
-    let text = args.join(" ");
-    let formatted = format_emote(&speaker, &text);
-    let mgr = manager.lock().await;
-    let audience = players_in_room_async(&mgr, &room_id, Some(nick))
-        .await
-        .into_iter()
-        .map(|p| p.nick)
-        .collect();
-    let room_channel = room_channel_name(&config.room_channel_prefix, &room_id);
-
-    DispatchOutcome {
-        sender,
-        to_sender: vec![formatted.clone()],
-        room_audience: vec![RoomDelivery {
-            audience,
-            lines: vec![formatted.clone()],
-        }],
-        channel: vec![(room_channel, formatted)],
-        ..Default::default()
-    }
-}
-
-async fn dispatch_tell<P: Persistence + Clone + Send + Sync>(
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    nick: &str,
-    args: &[String],
-    sender: String,
-) -> DispatchOutcome {
-    if args.len() < 2 {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec!["Usage: tell <player> <message>".to_string()],
-            ..Default::default()
-        };
-    }
-
-    let target_nick = &args[0];
-    let text = args[1..].join(" ");
-    let resolved = {
-        let mgr = manager.lock().await;
-        resolve_connected_nick(&mgr, target_nick)
-    };
-    let Some(resolved) = resolved else {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec![format!("{target_nick} is not connected.")],
-            ..Default::default()
-        };
-    };
-
-    if normalize_nick(&resolved) == normalize_nick(nick) {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec!["You talk to yourself.".to_string()],
-            ..Default::default()
-        };
-    }
-
-    let from_name = {
-        let mgr = manager.lock().await;
-        if let Some(handle) = mgr.session_handle(nick) {
-            actor_display_name_async(&handle).await
-        } else {
-            nick.to_string()
-        }
-    };
-
-    DispatchOutcome {
-        sender,
-        to_sender: vec![format_tell_sent(&resolved, &text)],
-        private: vec![(resolved, format_tell(&from_name, &text))],
-        ..Default::default()
-    }
-}
-
-async fn dispatch_take<P: Persistence + Clone + Send + Sync>(
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    nick: &str,
-    args: &[String],
-    sender: String,
-) -> DispatchOutcome {
-    let Some(target) = args.first() else {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec!["Take what?".to_string()],
-            ..Default::default()
-        };
-    };
-
-    let handle = {
-        let mgr = manager.lock().await;
-        mgr.session_handle(nick)
-    };
-    let Some(handle) = handle else {
-        return DispatchOutcome::default();
-    };
-
-    let mut session = handle.lock().await;
-    let result = session.with_inventory_async(|ctx| take_item(ctx, target)).await;
-    match result {
-        Ok(msg) => DispatchOutcome {
-            sender,
-            to_sender: vec![msg],
-            persist: true,
-            ..Default::default()
-        },
-        Err(InventoryError::NotFound(_)) => DispatchOutcome {
-            sender,
-            to_sender: vec![narrate_target_not_found(target)],
-            ..Default::default()
-        },
-        Err(err) => DispatchOutcome {
-            sender,
-            to_sender: vec![err.to_string()],
-            ..Default::default()
-        },
-    }
-}
-
-async fn dispatch_movement<P: Persistence + Clone + Send + Sync>(
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    nick: &str,
-    line: &CommandLine,
-    sender: String,
-    config: &IrcConfig,
-) -> DispatchOutcome {
-    let handle = {
-        let mgr = manager.lock().await;
-        mgr.session_handle(nick)
-    };
-    let Some(handle) = handle else {
-        return DispatchOutcome::default();
-    };
-
-    let index = {
-        let session = handle.lock().await;
-        session
-            .with_world_async(|world, player| {
-                player
-                    .current_location()
-                    .and_then(|loc| world.object(loc))
-                    .map(exit_index)
-            })
-            .await
-    };
-
-    let arg_refs: Vec<&str> = line.args.iter().map(String::as_str).collect();
-    let direction = movement_from_line(&line.verb, &arg_refs, index.as_ref());
-    let Some(direction) = direction else {
-        return DispatchOutcome {
-            sender,
-            to_sender: vec![format!("Unknown command: {}. Type 'help'.", line.verb)],
-            ..Default::default()
-        };
-    };
-
-    let old_room = {
-        let session = handle.lock().await;
-        session.current_location().cloned()
-    };
-    let mut session = handle.lock().await;
-    match session.go_async(&direction).await {
-        Ok(msg) => {
-            let mut outcome = DispatchOutcome {
-                sender,
-                to_sender: msg.lines().map(str::to_string).collect(),
-                persist: true,
-                ..Default::default()
-            };
-
-            if let (Some(old_id), Some(new_id)) = (old_room, session.current_location()) {
-                if old_id != *new_id {
-                    outcome.channel_sync = Some(ChannelSync {
-                        nick: outcome.sender.clone(),
-                        join: vec![room_channel_name(&config.room_channel_prefix, new_id)],
-                        part: vec![room_channel_name(&config.room_channel_prefix, &old_id)],
-                    });
-                    outcome.to_sender.push(room_join_notice(&room_channel_name(
-                        &config.room_channel_prefix,
-                        new_id,
-                    )));
-                }
-            }
-
-            outcome
-        }
-        Err(err) => DispatchOutcome {
-            sender,
-            to_sender: vec![err.to_string()],
-            ..Default::default()
-        },
-    }
-}
-
-fn help_lines() -> Vec<String> {
-    vec![
-        "MUDL IRC commands:".to_string(),
-        "  look (l) [target]   - view room or object".to_string(),
-        "  go <dir>            - move (or use exit name: north, n, ...)".to_string(),
-        "  inventory (i)       - list carried items".to_string(),
-        "  take <item>         - pick up an item".to_string(),
-        "  say <text>          - speak to players in your room".to_string(),
-        "  emote <text>        - perform an action in your room".to_string(),
-        "  tell <nick> <text>  - private message to a connected player".to_string(),
-        "  quit                - save and disconnect".to_string(),
-        "World channel (#mudl): speak freely for OOC (no 'say' prefix).".to_string(),
-    ]
 }
 
 fn logged_out_help_text(config: &IrcConfig) -> String {

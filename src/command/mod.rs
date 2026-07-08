@@ -1,5 +1,6 @@
 //! Command-layer helpers shared by REPL and future frontends.
 
+pub mod dispatcher;
 pub mod editor;
 pub mod parse;
 pub mod place;
@@ -8,6 +9,10 @@ pub mod trigger;
 pub use editor::{
     apply_set, apply_unset, parse_set_command, parse_unset_command, ParsedSetCommand,
     ParsedUnsetCommand,
+};
+pub use dispatcher::{
+    CommandDispatcher, CommandResult, LookOptions, MovementChange, PlayerDispatchOptions,
+    SocialIntent,
 };
 pub use parse::{is_meta_command, parse_command_line, CommandLine};
 pub use crate::gateway::{

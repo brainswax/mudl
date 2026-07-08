@@ -183,7 +183,7 @@ M5 adds concurrent players over one shared world graph via IRC (TLS/IRCv3) with 
 | `irc/transport.rs` | `IrcTransport`, `MockTransport`, TLS stream adapter |
 | `bin/irc.rs` | Thin bootstrap: universe load → `SessionManager::open` → event loop |
 
-**Intentionally not in M5:** `CommandDispatcher` (shared routing), builder meta execution over IRC, `attack`/full inventory, rate limiting. Meta verbs hit RBAC then return *"Builder commands over IRC are not enabled yet. Use the REPL."*
+**M6 prep:** [`CommandDispatcher`](src/command/dispatcher.rs) routes shared player verbs; IRC maps [`CommandResult`](src/command/dispatcher.rs) → `DispatchOutcome`. **Still deferred:** builder meta execution over IRC, `attack`/full inventory on transports. Meta verbs hit RBAC then return *"Builder commands over IRC are not enabled yet. Use the REPL."*
 
 ## Hard-coded vs MUDL-driven
 
@@ -288,7 +288,7 @@ Lock order: **manager (brief) → per-session → world**. No re-entrant world l
 
 | Gap | Risk | Mitigation (roadmap) |
 |-----|------|----------------------|
-| **Parallel command routers** — `repl.rs` (~1.6k) + `irc/dispatch.rs` (~860) | Drift, triple duplication with Slack | **M6 P0:** `CommandDispatcher` in `command/` or `gateway/` |
+| **REPL-only verbs** — `repl.rs` still owns builder/combat/inventory surface | Slack would duplicate REPL-only paths | **M6:** extend `CommandDispatcher`; thin REPL adapter |
 | **IRC command subset** | Expansion combat unplayable over IRC | **M7:** player verb parity; **M8:** combat module polish |
 | **World mutex contention** | Parallel `look`/`say` queue on busy rooms | Acceptable for playtesting; **M9** per-room lock if profiled |
 | **No rate limiting** | Flood / abuse on public IRC | **M9** (stub in M6 bridge if Slack is external-facing) |
@@ -382,7 +382,7 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 | **P0** | **SEC-50** — rate limiting on `dispatch_command` entry | M6/M9 | Blocks command/OOC/move floods |
 | **P0** | **SEC-60** — IRC `look` → `ResolveScope::RoomOnly` | Pre-M6 | Blocks cross-room information disclosure |
 | **P0** | **SEC-23** — single-writer ops policy or unified service process | Ops/M7 | Blocks REPL+IRC split-brain on one DB |
-| **P0** | Extract `CommandDispatcher` + `CommandResult` | M6 | Blocks Slack without a third router copy |
+| ~~**P0**~~ | ~~Extract `CommandDispatcher` + `CommandResult`~~ | **Done** | Shared player verbs; IRC/REPL adapters |
 | **P0** | Generalize `IrcTransport` → `GameTransport` trait | M6 | Slack/WebSocket share deliver/join/part semantics |
 | **P1** | M4 tail: `behavior_line` parser, persist fallback audit | M4 | Low risk; unblocks cleaner bootstrap |
 | **P1** | IRC `attack` + `drop` via dispatcher | M7 | Needed for expansion playtests over IRC/Slack |
@@ -736,7 +736,7 @@ Test suites: `gateway::multi_user`, `gateway::session_manager`, `gateway::load`,
 
 | Task | Rationale |
 |------|-----------|
-| Sketch `CommandDispatcher` trait + `CommandResult { lines, dirty, social }` | Design pass before M6 implementation |
+| Extend `CommandDispatcher` for Slack `SocialIntent` delivery | Mirror `deliver_command_result` in `slack/dispatch.rs` |
 | Align REPL `has_wizard_permission` stub with `gateway/rbac` | Consistent auth story once dispatcher lands |
 
 ### M6 — Slack integration (planned)

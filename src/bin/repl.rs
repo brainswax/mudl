@@ -12,7 +12,8 @@ use mudl::command::{
     parse_dig_command, parse_link_command, parse_set_command, parse_trigger_command,
     parse_unlink_command, parse_unset_command, preview_trigger_test, reload_universe,
     resolve_container_target, resolve_trigger_target_name, soft_delete_object, trigger_command_help,
-    undelete_object, validate_trigger_host, TriggerCommand, TriggerError,
+    undelete_object, validate_trigger_host, CommandDispatcher, CommandResult, LookOptions,
+    TriggerCommand, TriggerError,
 };
 use mudl::creature::{
     add_behavior_template, attack_creature, damage_creature, format_creature_behavior_list,
@@ -24,12 +25,12 @@ use mudl::display::{
     narrate_module_reloaded, narrate_no_location, narrate_no_location_builder,
     narrate_not_in_cache, narrate_saved, narrate_target_not_found, narrate_wizard_not_found,
     parse_examine_request, resolve_examine_request, resolve_target, Describable, DisplayContext,
-    DisplayFlags, DisplayMode, ExamineError, ExamineResolution, ResolveScope, TargetResolution,
+    DisplayMode, ExamineError, ExamineResolution, ResolveScope, TargetResolution,
 };
 use mudl::inventory::{
-    break_item, close_container, describe_inventory, drop_item, harvest_item, lock_container,
+    break_item, close_container, drop_item, harvest_item, lock_container,
     open_container, parse_put_args, parse_unlock_args, put_item, read_item, remove_item,
-    take_item, unlock_container, use_item, wear_item, wield_item,
+    unlock_container, use_item, wear_item, wield_item,
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
@@ -66,6 +67,12 @@ async fn persist_session(session: &mut Session, persistence: &SqlitePersistence)
     Ok(())
 }
 
+fn print_command_result(result: &CommandResult) {
+    for line in &result.lines_to_actor {
+        println!("{line}");
+    }
+}
+
 fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -99,67 +106,13 @@ async fn run_look_command(
     target: Option<&str>,
     builder: bool,
 ) -> Result<(), anyhow::Error> {
-    match resolve_in_session(session, persistence, target).await {
-        Ok(TargetResolution::Found(id)) => {
-            let mode = if builder {
-                DisplayMode::Builder
-            } else {
-                DisplayMode::Player
-            };
-            let is_room_look =
-                !builder && session.objects().get(&id).is_some_and(|obj| obj.is_location());
-            if is_room_look {
-                let discovery = session.perceive_hidden_on_look();
-                for line in discovery.lines {
-                    println!("{line}");
-                }
-            }
-            let mut ctx = session.display_context(mode.clone());
-            if !builder {
-                ctx = ctx.with_flags(DisplayFlags::BRIEF);
-            }
-            if let Some(obj) = ctx.objects.get(&id) {
-                render_object(obj, &ctx, builder, false);
-            } else if let Some(target) = target {
-                println!("{}", narrate_target_not_found(target));
-            } else {
-                println!(
-                    "{}",
-                    if builder {
-                        narrate_no_location_builder("Try '@look <target>' or '@look here'.")
-                    } else {
-                        narrate_no_location()
-                    }
-                );
-            }
-        }
-        Ok(TargetResolution::Ambiguous(msg)) => println!("{msg}"),
-        Ok(TargetResolution::NotFound) => {
-            if let Some(name) = target {
-                println!("{}", narrate_target_not_found(name));
-            } else {
-                println!(
-                    "{}",
-                    if builder {
-                        narrate_no_location_builder("Try '@look <target>' or '@look here'.")
-                    } else {
-                        narrate_no_location()
-                    }
-                );
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "look failed");
-            println!(
-                "{}",
-                if builder {
-                    "The builder view remains obscured."
-                } else {
-                    "Something stirs in the void, but you cannot make sense of it."
-                }
-            );
-        }
-    }
+    let options = if builder {
+        LookOptions::builder()
+    } else {
+        LookOptions::player(ResolveScope::General)
+    };
+    let result = CommandDispatcher::look_async(session, persistence, target, options).await;
+    print_command_result(&result);
     Ok(())
 }
 
@@ -366,15 +319,19 @@ async fn main() -> Result<()> {
                     .current_location()
                     .and_then(|loc| session.object(loc))
                     .map(|place| exit_index::ExitIndex::from_place(&place));
-                if let Some(dir) = movement_from_line(cmd, &parts[1..], exit_index.as_ref()) {
-                    match session.go(&dir) {
-                        Ok(msg) => {
-                            println!("{msg}");
-                            if let Err(e) = persist_session(&mut session, &persistence).await {
-                                error!(error = %e, "persist after go failed");
-                            }
+                if movement_from_line(cmd, &parts[1..], exit_index.as_ref()).is_some() {
+                    let movement_line = mudl::command::CommandLine {
+                        is_meta: false,
+                        verb: parsed.verb.clone(),
+                        args: parsed.args.clone(),
+                    };
+                    let result =
+                        CommandDispatcher::movement_async(&mut session, &movement_line).await;
+                    print_command_result(&result);
+                    if result.persist_world {
+                        if let Err(e) = persist_session(&mut session, &persistence).await {
+                            error!(error = %e, "persist after go failed");
                         }
-                        Err(e) => println!("{e}"),
                     }
                     continue;
                 }
@@ -967,15 +924,8 @@ async fn main() -> Result<()> {
                         }
                     }
                     "inventory" | "i" => {
-                        if let Some(player) = session.object(session.player_id()) {
-                            let graph = session.objects();
-                            println!(
-                                "{}",
-                                describe_inventory(&player, &graph, &session.anatomy())
-                            );
-                        } else {
-                            println!("You seem to have lost yourself.");
-                        }
+                        let result = CommandDispatcher::inventory_async(&session).await;
+                        print_command_result(&result);
                     }
                     "get" | "take" => {
                         if parts.len() < 2 {
@@ -983,14 +933,13 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let item_name = parts[1..].join(" ");
-                        match session.with_inventory(|ctx| take_item(ctx, &item_name)) {
-                            Ok(msg) => {
-                                println!("{msg}");
-                                if let Err(e) = persist_session(&mut session, &persistence).await {
-                                    error!(error = %e, "persist after take failed");
-                                }
+                        let result =
+                            CommandDispatcher::take_async(&mut session, Some(&item_name)).await;
+                        print_command_result(&result);
+                        if result.persist_world {
+                            if let Err(e) = persist_session(&mut session, &persistence).await {
+                                error!(error = %e, "persist after take failed");
                             }
-                            Err(e) => println!("{e}"),
                         }
                     }
                     "drop" => {

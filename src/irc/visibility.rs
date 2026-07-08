@@ -1,16 +1,12 @@
 //! Audience resolution for room-local speech and actions.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use tokio::sync::Mutex;
 
 use crate::display::ResolveScope;
 use crate::gateway::normalize_nick;
 use crate::gateway::SessionManager;
 use crate::object::ObjectId;
 use crate::persistence::Persistence;
-use crate::repl::Session;
 
 /// Scope for IRC player `look` — current room only (SEC-60).
 ///
@@ -101,19 +97,6 @@ pub fn resolve_connected_nick<P: Persistence + Clone>(
         .connected_nicks()
         .into_iter()
         .find(|nick| normalize_nick(nick) == key)
-}
-
-/// Display name for a connected actor, falling back to the nick.
-pub async fn actor_display_name_async(handle: &Arc<Mutex<Session>>) -> String {
-    let session = handle.lock().await;
-    session
-        .with_world_async(|world, player| {
-            world
-                .object(player.actor_id())
-                .map(|obj| obj.name.clone())
-                .unwrap_or_else(|| player.actor_id().as_str().to_string())
-        })
-        .await
 }
 
 /// Map nick → current room id for all connected sessions.
