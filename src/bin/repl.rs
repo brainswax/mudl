@@ -33,7 +33,9 @@ use mudl::inventory::{
 };
 use mudl::mudl::{default_module_dir, LoadedUniverse};
 use mudl::object::{Object, ObjectFactory, ObjectId};
-use mudl::persistence::{Persistence, SqlitePersistence};
+use mudl::persistence::{
+    Persistence, SqlitePersistence, WriterGuard, WriterLockOptions, WriterMode,
+};
 use mudl::repl::Session;
 use mudl::world::{exit_index, movement_from_line};
 use mudl::world::place_builder::DigRequest;
@@ -233,6 +235,15 @@ async fn main() -> Result<()> {
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "repl.db".to_string());
 
     info!("MUDL REPL starting");
+    let writer_options = WriterLockOptions::from_env(WriterMode::Repl);
+    let _writer_guard = WriterGuard::acquire(&db_url, &writer_options).map_err(anyhow::Error::from)?;
+    if let Some(record) = _writer_guard.record() {
+        info!(
+            mode = record.mode.as_str(),
+            pid = record.pid,
+            "acquired single-writer database lock (SEC-23)"
+        );
+    }
     let persistence = SqlitePersistence::new(&db_url).await?;
     let factory = ObjectFactory::new(persistence.clone());
     let player_id = ObjectId::new(

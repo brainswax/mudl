@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 use std::path::Path;
 use std::str::FromStr;
 
-use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
 
 use anyhow::{anyhow, Result};
 
@@ -44,7 +44,10 @@ impl SqlitePersistence {
             }
         }
 
-        let options = SqliteConnectOptions::from_str(&connect_url)?.create_if_missing(true);
+        let mut options = SqliteConnectOptions::from_str(&connect_url)?.create_if_missing(true);
+        if !is_memory {
+            options = options.journal_mode(SqliteJournalMode::Wal);
+        }
 
         let pool = SqlitePool::connect_with(options).await?;
 

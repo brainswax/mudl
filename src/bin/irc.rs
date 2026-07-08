@@ -13,7 +13,9 @@ use mudl::irc::{
 };
 use mudl::mudl::default_module_dir;
 use mudl::object::{ObjectFactory, ObjectId};
-use mudl::persistence::SqlitePersistence;
+use mudl::persistence::{
+    SqlitePersistence, WriterGuard, WriterLockOptions, WriterMode,
+};
 use tracing::{info, warn};
 
 fn init_tracing() {
@@ -25,7 +27,17 @@ fn init_tracing() {
         .init();
 }
 
-async fn open_session_manager(config: &IrcConfig) -> Result<SessionManager<SqlitePersistence>> {
+async fn open_session_manager(
+    config: &IrcConfig,
+    writer_guard: &WriterGuard,
+) -> Result<SessionManager<SqlitePersistence>> {
+    if let Some(record) = writer_guard.record() {
+        info!(
+            mode = record.mode.as_str(),
+            pid = record.pid,
+            "acquired single-writer database lock (SEC-23)"
+        );
+    }
     let persistence = SqlitePersistence::new(&config.database_url).await?;
     let factory = ObjectFactory::new(persistence.clone());
     let player_id = ObjectId::new(&config.default_player);
@@ -55,7 +67,10 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let config = IrcConfig::from_env();
-    let manager = open_session_manager(&config).await?;
+    let writer_options = WriterLockOptions::from_env(WriterMode::Irc);
+    let writer_guard = WriterGuard::acquire(&config.database_url, &writer_options)
+        .map_err(anyhow::Error::from)?;
+    let manager = open_session_manager(&config, &writer_guard).await?;
     info!(
         connection = %config.connection_summary(),
         nick = %config.bot_nick,
@@ -65,15 +80,16 @@ async fn main() -> Result<()> {
     );
 
     if std::env::var("IRC_MOCK").is_ok() {
-        run_mock_bot(manager, config).await
+        run_mock_bot(manager, config, writer_guard).await
     } else {
-        run_live_bot(manager, config).await
+        run_live_bot(manager, config, writer_guard).await
     }
 }
 
 async fn run_mock_bot(
     manager: SessionManager<SqlitePersistence>,
     config: IrcConfig,
+    _writer_guard: WriterGuard,
 ) -> Result<()> {
     let transport = Arc::new(MockTransport::new());
     let bot = IrcBot::new(manager, Arc::clone(&transport), config);
@@ -101,6 +117,7 @@ async fn run_mock_bot(
 async fn run_live_bot(
     manager: SessionManager<SqlitePersistence>,
     config: IrcConfig,
+    _writer_guard: WriterGuard,
 ) -> Result<()> {
     let mut connection = connect(&config).await?;
     let transport = Arc::new(connection.transport.clone());
