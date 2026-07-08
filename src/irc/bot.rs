@@ -13,6 +13,7 @@ use super::dispatch::{dispatch_command, DispatchOutcome};
 use super::identity::verify_irc_identity;
 use super::input::normalize_irc_command_input;
 use super::message::IrcMessage;
+use super::nickserv::parse_nickserv_reply;
 use super::nick::{sanitize_irc_nick, sanitize_nick_display};
 use super::social::format_ooc;
 use crate::transport::{split_delivery_lines, GameTransport};
@@ -45,6 +46,40 @@ where
         Arc::clone(&self.manager)
     }
 
+    /// Handle NickServ NOTICE/PRIVMSG feedback and relay results to players when possible.
+    pub async fn handle_nickserv_reply(&self, text: &str) -> anyhow::Result<()> {
+        match parse_nickserv_reply(text) {
+            super::nickserv::NickServNotice::Identified { nick: Some(nick) } => {
+                self.transport
+                    .send_notice(
+                        &nick,
+                        "NickServ: you are identified. You may now 'login'.",
+                    )
+                    .await;
+            }
+            super::nickserv::NickServNotice::InvalidPassword => {
+                // NickServ does not include the nick in all failure texts; operators see logs.
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Send bot startup NickServ commands (REGISTER / IDENTIFY) after server welcome.
+    pub async fn send_nickserv_startup(&self) {
+        if !self.config.nickserv.is_configured() {
+            return;
+        }
+        for command in self
+            .config
+            .nickserv
+            .bot_startup_commands(&self.config.bot_nick)
+        {
+            let service = &self.config.nickserv.service;
+            self.transport.send_direct(service, &command).await;
+        }
+    }
+
     /// Handle one parsed IRC message and route game commands through the session manager.
     pub async fn handle_message(&self, message: IrcMessage) -> anyhow::Result<()> {
         match message {
@@ -54,6 +89,16 @@ where
                 target,
                 text,
             } => self.handle_privmsg(&from, account.as_deref(), &target, &text).await,
+            IrcMessage::Notice {
+                from,
+                target,
+                text,
+                ..
+            } if from.eq_ignore_ascii_case(&self.config.nickserv.service)
+                || target.eq_ignore_ascii_case(&self.config.bot_nick) =>
+            {
+                self.handle_nickserv_reply(&text).await
+            }
             IrcMessage::Quit { nick, .. } => self.handle_disconnect(&nick).await,
             IrcMessage::Part { nick, channel, .. } if channel == self.config.world_channel => {
                 self.handle_disconnect(&nick).await
@@ -179,6 +224,11 @@ where
 
         for (channel, line) in &outcome.channel {
             self.send_direct_lines(channel, line).await;
+        }
+
+        for command in &outcome.nickserv_outbound {
+            let service = &self.config.nickserv.service;
+            self.transport.send_direct(service, command).await;
         }
 
         if let Some(sync) = &outcome.channel_sync {
@@ -525,6 +575,45 @@ mod tests {
                 entry,
                 OutgoingAction::Notice { recipient, text }
                     if recipient == "alice" && text.contains("registered/SASL")
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn nickserv_identify_relays_to_service() {
+        let (bot, transport) = bot_fixture().await;
+        transport.clear();
+
+        bot.handle_input("alice", "nickserv identify sekrit")
+            .await
+            .unwrap();
+
+        let nickserv_lines = transport.privmsgs_to("NickServ");
+        assert_eq!(nickserv_lines, vec!["IDENTIFY alice sekrit"]);
+        let alice_lines = transport.privmsgs_to("alice");
+        assert!(alice_lines.iter().any(|l| l.contains("Identification request")));
+        assert!(!alice_lines.iter().any(|l| l.contains("sekrit")));
+    }
+
+    #[tokio::test]
+    async fn nickserv_notice_notifies_identified_player() {
+        let (bot, transport) = bot_fixture().await;
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Notice {
+            from: "NickServ".to_string(),
+            account: None,
+            target: "mudl".to_string(),
+            text: "Password accepted - you are now recognized as user 'alice'.".to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert!(transport.recorded().iter().any(|entry| {
+            matches!(
+                entry,
+                OutgoingAction::Notice { recipient, text }
+                    if recipient == "alice" && text.contains("you are identified")
             )
         }));
     }

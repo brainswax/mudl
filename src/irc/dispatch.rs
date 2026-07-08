@@ -20,6 +20,9 @@ use crate::persistence::Persistence;
 
 use super::channels::{room_channel_name, room_join_notice};
 use super::config::IrcConfig;
+use super::nickserv::{
+    identify_nick_command, identify_relay_ack, player_help_text, register_client_instruction,
+};
 use super::social::{format_emote, format_say, format_tell, format_tell_sent};
 use super::visibility::{
     irc_look_scope, players_in_room_async, resolve_connected_nick,
@@ -34,6 +37,8 @@ pub struct DispatchOutcome {
     pub room_audience: Vec<RoomDelivery>,
     pub channel: Vec<(String, String)>,
     pub channel_sync: Option<ChannelSync>,
+    /// NickServ PRIVMSG bodies relayed from the bot connection (`IDENTIFY nick pass`, etc.).
+    pub nickserv_outbound: Vec<String>,
     pub persist: bool,
 }
 
@@ -252,6 +257,15 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
     let sender = normalize_nick(nick);
     match line.verb.as_str() {
         "login" => dispatch_login(manager, persistence, nick, &line.args, sender, config).await,
+        "nickserv" | "ns" => {
+            dispatch_nickserv_logged_out(nick, sender, &line.args, config)
+        }
+        "identify" => dispatch_nickserv_identify(nick, sender, &line.args, config),
+        "register" if line.args.len() >= 2 => DispatchOutcome {
+            sender,
+            to_sender: vec![register_client_instruction().to_string()],
+            ..Default::default()
+        },
         "help" | "?" => DispatchOutcome {
             sender,
             to_sender: vec![logged_out_help_text(config)],
@@ -266,6 +280,62 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
             ..Default::default()
         },
     }
+}
+
+fn dispatch_nickserv_logged_out(
+    nick: &str,
+    sender: String,
+    args: &[String],
+    config: &IrcConfig,
+) -> DispatchOutcome {
+    if args.is_empty() || matches!(args[0].as_str(), "help" | "?") {
+        return DispatchOutcome {
+            sender,
+            to_sender: split_help_lines(&player_help_text(config.identity_policy.is_strict())),
+            ..Default::default()
+        };
+    }
+    match args[0].as_str() {
+        "identify" => dispatch_nickserv_identify(nick, sender, &args[1..], config),
+        "register" => DispatchOutcome {
+            sender,
+            to_sender: vec![register_client_instruction().to_string()],
+            ..Default::default()
+        },
+        _ => DispatchOutcome {
+            sender,
+            to_sender: vec![player_help_text(config.identity_policy.is_strict())],
+            ..Default::default()
+        },
+    }
+}
+
+fn dispatch_nickserv_identify(
+    nick: &str,
+    sender: String,
+    args: &[String],
+    _config: &IrcConfig,
+) -> DispatchOutcome {
+    let Some(password) = args.first().map(String::as_str).filter(|s| !s.is_empty()) else {
+        return DispatchOutcome {
+            sender,
+            to_sender: vec![
+                "Usage: nickserv identify <password> (or /msg NickServ IDENTIFY <password>)"
+                    .to_string(),
+            ],
+            ..Default::default()
+        };
+    };
+    DispatchOutcome {
+        sender,
+        to_sender: vec![identify_relay_ack().to_string()],
+        nickserv_outbound: vec![identify_nick_command(nick, password)],
+        ..Default::default()
+    }
+}
+
+fn split_help_lines(text: &str) -> Vec<String> {
+    text.lines().map(str::to_string).collect()
 }
 
 async fn dispatch_login<P: Persistence + Clone>(
@@ -422,7 +492,11 @@ async fn dispatch_quit<P: Persistence + Clone + Send + Sync>(
 }
 
 fn logged_out_help_text(config: &IrcConfig) -> String {
-    config.login_auth.logged_out_help()
+    let mut lines = vec![config.login_auth.logged_out_help()];
+    if config.identity_policy.is_strict() || config.nickserv.is_configured() {
+        lines.push("NickServ: 'nickserv identify <password>' or 'nickserv help'.".to_string());
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -861,6 +935,41 @@ mod tests {
             .to_sender
             .iter()
             .any(|l| l.contains("too quickly")));
+    }
+
+    #[tokio::test]
+    async fn nickserv_identify_relays_without_echoing_password() {
+        let (manager, config) = manager_arc().await;
+        let outcome = dispatch_command(
+            manager,
+            "alice",
+            "nickserv identify sekrit-pass",
+            &config,
+        )
+        .await;
+        assert_eq!(outcome.nickserv_outbound, vec!["IDENTIFY alice sekrit-pass"]);
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("Identification request sent")));
+        assert!(!outcome.to_sender.iter().any(|l| l.contains("sekrit-pass")));
+    }
+
+    #[tokio::test]
+    async fn nickserv_register_directs_to_client() {
+        let (manager, config) = manager_arc().await;
+        let outcome = dispatch_command(
+            manager,
+            "alice",
+            "nickserv register sekrit-pass alice@example.com",
+            &config,
+        )
+        .await;
+        assert!(outcome.nickserv_outbound.is_empty());
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("your own IRC connection")));
     }
 
     #[tokio::test]

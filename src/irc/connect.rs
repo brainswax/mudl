@@ -1,6 +1,6 @@
 //! TLS and plain TCP connections to IRCv3 servers.
 
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use anyhow::Context;
 use rustls::pki_types::ServerName;
@@ -11,6 +11,17 @@ use tokio_rustls::TlsConnector;
 
 use super::config::IrcConfig;
 use super::transport::StreamTransport;
+
+static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
+
+/// Install rustls's ring backend once per process (required since rustls 0.23).
+fn ensure_crypto_provider() {
+    INSTALL_CRYPTO_PROVIDER.call_once(|| {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("failed to install rustls ring crypto provider");
+    });
+}
 
 /// Live IRC connection: line reader plus a shared outbound transport.
 pub struct IrcConnection {
@@ -50,6 +61,8 @@ async fn connect_plain(addr: &str) -> anyhow::Result<IrcConnection> {
 }
 
 async fn connect_tls(addr: &str, server_name: &str) -> anyhow::Result<IrcConnection> {
+    ensure_crypto_provider();
+
     let stream = TcpStream::connect(addr)
         .await
         .with_context(|| format!("failed to connect to IRC server at {addr}"))?;
@@ -76,4 +89,19 @@ async fn connect_tls(addr: &str, server_name: &str) -> anyhow::Result<IrcConnect
         lines: BufReader::new(reader).lines(),
         transport: StreamTransport::new(Box::new(writer)),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crypto_provider_allows_tls_client_config_build() {
+        ensure_crypto_provider();
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let _config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    }
 }

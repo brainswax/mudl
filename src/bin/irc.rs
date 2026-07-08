@@ -139,6 +139,7 @@ async fn run_live_bot(
         }
 
         if !joined_world && is_welcome(&line) {
+            bot.send_nickserv_startup().await;
             transport.join(&config.world_channel).await;
             joined_world = true;
             info!(channel = %config.world_channel, "joined world channel");

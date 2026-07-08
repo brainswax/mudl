@@ -3,6 +3,7 @@
 use crate::gateway::{LoginAuthPolicy, RateLimitConfig};
 
 use super::identity::IrcIdentityPolicy;
+use super::nickserv::IrcNickServConfig;
 
 /// Runtime settings for the MUDL IRC gateway.
 ///
@@ -35,6 +36,8 @@ pub struct IrcConfig {
     pub rate_limits: RateLimitConfig,
     /// Optional IRC account-tag verification (SEC-03).
     pub identity_policy: IrcIdentityPolicy,
+    /// NickServ REGISTER / IDENTIFY for bot startup and player relay.
+    pub nickserv: IrcNickServConfig,
 }
 
 impl Default for IrcConfig {
@@ -53,6 +56,7 @@ impl Default for IrcConfig {
             login_auth: LoginAuthPolicy::permissive(),
             rate_limits: RateLimitConfig::disabled(),
             identity_policy: IrcIdentityPolicy::default(),
+            nickserv: IrcNickServConfig::default(),
         }
     }
 }
@@ -96,6 +100,7 @@ impl IrcConfig {
         config.login_auth = LoginAuthPolicy::from_env();
         config.rate_limits = RateLimitConfig::from_env();
         config.identity_policy = IrcIdentityPolicy::from_env();
+        config.nickserv = IrcNickServConfig::from_env();
         config
     }
 
