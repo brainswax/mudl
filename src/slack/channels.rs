@@ -59,6 +59,40 @@ pub fn classify_channel(
     ChannelTarget::Other
 }
 
+/// Whether in-character routing uses threads in a shared channel or one channel per room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoomRoutingMode {
+    /// Each room maps to `mudl-<slug>` joined via `conversations.join`.
+    NamedChannel,
+    /// Each room maps to a thread in [`SlackConfig::rooms_channel`].
+    Threaded,
+}
+
+/// Routing mode derived from configuration.
+pub fn room_routing_mode(config: &SlackConfig) -> RoomRoutingMode {
+    if config.rooms_channel.is_some() {
+        RoomRoutingMode::Threaded
+    } else {
+        RoomRoutingMode::NamedChannel
+    }
+}
+
+/// Presence key for in-character speech and movement sync for a game room.
+pub fn room_presence(config: &SlackConfig, room_id: &ObjectId) -> String {
+    match room_routing_mode(config) {
+        RoomRoutingMode::Threaded => {
+            let rooms = config
+                .rooms_channel
+                .as_deref()
+                .expect("rooms_channel required for threaded mode");
+            room_thread_presence(rooms, room_id)
+        }
+        RoomRoutingMode::NamedChannel => {
+            room_channel_name(&config.room_channel_prefix, room_id)
+        }
+    }
+}
+
 /// Ephemeral notice inviting a player to a room channel or thread.
 pub fn room_join_notice(presence: &str) -> String {
     format!("Follow {presence} for speech and actions in your current location.")

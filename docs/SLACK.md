@@ -2,7 +2,7 @@
 
 **Milestone 6 (in progress)** — The Slack bot is the group-playtesting transport for MUDL. It shares one [`WorldState`](../src/world/world_state.rs) across all connected players via [`SessionManager`](../src/gateway/session_manager.rs), receives workspace events over HTTP, and delivers responses through [`GameTransport`](../src/transport/mod.rs).
 
-Command dispatch (`slack/dispatch.rs` mirroring IRC) is the next M6 step. This document covers app setup and the receiving skeleton.
+Command dispatch via [`slack/dispatch.rs`](../src/slack/dispatch.rs) mirrors IRC — player verbs route through [`CommandDispatcher`](../src/command/dispatcher.rs).
 
 ## Architecture
 
@@ -19,9 +19,18 @@ Slack workspace ──Events API POST──► axum server (/slack/events)
                     chat.postMessage / postEphemeral / conversations.*
 ```
 
-- **Game commands** arrive as direct messages to the bot (for now acknowledged; full dispatch next).
-- **OOC chat** on the configured world channel (`SLACK_WORLD_CHANNEL`) broadcasts when the user is logged in.
-- **Room presence** uses `conversations.join` for named room channels (`mudl-void-001`) or thread keys (`C…:thread:…`) for shared-channel play.
+- **Game commands** arrive as DMs to the bot (`login`, `look`, `go`, `take`, `attack`, …).
+- **OOC chat** on `SLACK_WORLD_CHANNEL` broadcasts when logged in (rate-limited).
+- **In-character speech** routes to per-room channels **or** threads (see below).
+
+## Room routing (multi-channel / threaded play)
+
+| Mode | Config | In-character `say` / `emote` | Movement `join` / `leave` |
+|------|--------|------------------------------|----------------------------|
+| **Named channels** (default) | `SLACK_ROOMS_CHANNEL` unset | Posts to `mudl-<room-slug>` channel | `conversations.join` / `leave` |
+| **Threaded** | `SLACK_ROOMS_CHANNEL=C…` | Posts in thread `C…:thread:room-<slug>` | Thread entry/exit notices |
+
+Set `SLACK_ROOM_CHANNEL_PREFIX` (default `mudl-`) for named-channel slugs.
 
 ## GameTransport mapping
 
@@ -95,6 +104,7 @@ U_ALICE C_WORLD brb dinner
 | `SLACK_SIGNING_SECRET` | Events API signature verification | required for live mode |
 | `SLACK_APP_ID` | Strip `<@APP>` mentions from commands | optional |
 | `SLACK_WORLD_CHANNEL` | Channel ID for OOC | empty |
+| `SLACK_ROOMS_CHANNEL` | Shared channel for per-room threads (optional) | unset → named channels |
 | `SLACK_BIND_ADDR` | HTTP listen address | `0.0.0.0:3000` |
 | `SLACK_EVENTS_PATH` | Events endpoint path | `/slack/events` |
 | `SLACK_ROOM_CHANNEL_PREFIX` | Future per-room routing prefix | `mudl-` |
@@ -118,8 +128,20 @@ cargo test slack::
 
 Covers payload parsing, signature verification, input normalization, bot acknowledgements, and the events HTTP handler.
 
+## Commands (DM the bot)
+
+```text
+login
+look
+go north
+say Hello!
+tell Bob psst
+quit
+```
+
+`tell` accepts a connected player's **display name** or Slack user id. OOC goes to the world channel without a prefix.
+
 ## Next steps (M6)
 
-- `slack/dispatch.rs` — map `CommandResult` → Slack delivery (mirror `irc/dispatch.rs`)
-- Wire movement `join`/`leave` to `room_channel_name` / `room_thread_presence`
 - `gateway::m6_scenarios` integration tests
+- Container verbs (`put`, `open`, …) over Slack

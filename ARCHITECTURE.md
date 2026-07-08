@@ -2,7 +2,7 @@
 
 **MUDL** (working name) — An IRC-first, programmable MUD/MOO with a custom domain-specific language (DSL), self-modifying world capabilities, and multi-modal authoring (IRC chat, REPL, files, GitHub).
 
-**Status**: High-level design + **Milestones 1–5 implemented**; **M5/M6 security & transport prep complete** (July 2026): `WorldState` split, `CommandDispatcher`, `GameTransport`, rate limits, login tokens, `WriterGuard`, IRC `RoomOnly` look, `attack`/`drop` parity, shared `behavior_line` parser, persist no-op on empty dirty. **590** unit/integration tests. This document tracks as-built state (M1–M5 + M6 prep), technical debt, and the forward roadmap (M6–M12).
+**Status**: High-level design + **Milestones 1–5 implemented**; **M6 Slack command relay shipped**; **M5/M6 security & transport prep complete** (July 2026): `WorldState` split, `CommandDispatcher`, `GameTransport`, rate limits, login tokens, `WriterGuard`, IRC `RoomOnly` look, `attack`/`drop` parity, shared `behavior_line` parser, persist no-op on empty dirty. **590** unit/integration tests. This document tracks as-built state (M1–M5 + M6 prep), technical debt, and the forward roadmap (M6–M12).
 
 ## Milestone Summary
 
@@ -187,6 +187,7 @@ M5 adds concurrent players over one shared world graph via IRC (TLS/IRCv3) with 
 | `persistence/writer_lock.rs` | `WriterGuard` advisory lock — one live writer per DB file (SEC-23) |
 | `irc/bot.rs` | `IrcBot` — identity verification at PRIVMSG, OOC rate limits, `deliver` via [`GameTransport`](src/transport/mod.rs) |
 | `transport/mod.rs` | `GameTransport`, `MockTransport`, `OutgoingAction` — shared deliver/join/leave |
+| `slack/dispatch.rs` | `dispatch_command` → `CommandDispatcher` → `DispatchOutcome` (mirrors IRC adapter) |
 | `slack/transport.rs` | `SlackWebTransport` — Web API mapping (`postMessage`, `join`, `leave`, DM open) |
 | `slack/presence.rs` | Recipient encoding (`C…:thread:TS`, `C…:notice:U…`) for multi-frontend dispatch |
 | `irc/transport.rs` | `IrcTransport` (`GameTransport` + `send_raw`), TLS stream adapter |

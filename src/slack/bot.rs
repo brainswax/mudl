@@ -1,23 +1,21 @@
-//! Slack bot — event relay and multi-session coordination (M6 skeleton).
+//! Slack bot — command relay, visibility, and multi-session coordination.
 
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::gateway::SessionManager;
+use crate::gateway::{RateLimitKind, SessionManager};
+use crate::irc::format_ooc;
 use crate::persistence::Persistence;
 use crate::transport::{split_delivery_lines, GameTransport};
 
 use super::config::SlackConfig;
+use super::dispatch::{dispatch_command, DispatchOutcome, PresenceSync};
 use super::events::{classify_slack_channel, SlackChannelKind, SlackEventBody, SlackMessageEvent};
 use super::input::normalize_slack_command_input;
 use super::presence::encode_notice;
 
 /// Slack gateway bot backed by a shared [`SessionManager`].
-///
-/// Command dispatch via [`CommandDispatcher`](crate::command::CommandDispatcher) lands in
-/// `slack/dispatch.rs` (next M6 step). This skeleton receives messages and acknowledges
-/// them through [`GameTransport`].
 pub struct SlackBot<P, T> {
     manager: Arc<Mutex<SessionManager<P>>>,
     transport: Arc<T>,
@@ -53,29 +51,24 @@ where
         }
     }
 
-    /// Handle a raw command line from a Slack user id (tests and mock mode).
+    /// Handle a raw command line from a Slack user (tests and mock mode).
     pub async fn handle_input(
         &self,
         user_id: &str,
         channel_id: &str,
         text: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<DispatchOutcome> {
         let command = normalize_slack_command_input(text, self.config.app_id.as_deref());
-        if command.is_empty() {
-            self.send_to_channel(channel_id, "Send a command, or 'help' once dispatch is wired.")
-                .await;
-            return Ok(());
-        }
-
-        tracing::info!(user = %user_id, channel = %channel_id, command = %command, "slack command received");
-        self.send_to_channel(
+        let outcome = dispatch_command(
+            Arc::clone(&self.manager),
+            user_id,
             channel_id,
-            &format!(
-                "MUDL Slack bot received `{command}`. Full command dispatch arrives in the next M6 step — use the IRC bot or REPL for play today."
-            ),
+            &command,
+            &self.config,
         )
         .await;
-        Ok(())
+        self.deliver(&outcome).await;
+        Ok(outcome)
     }
 
     async fn handle_message(&self, message: SlackMessageEvent) -> anyhow::Result<()> {
@@ -88,14 +81,15 @@ where
         match kind {
             SlackChannelKind::DirectMessage => {
                 self.handle_input(&message.user, &message.channel, &message.text)
-                    .await
+                    .await?;
+                Ok(())
             }
             SlackChannelKind::World => self.handle_world_ooc(&message).await,
             SlackChannelKind::Room => {
                 self.send_notice(
                     &message.channel,
                     &message.user,
-                    "Send game commands in a DM to the MUDL bot. Use channel threads for in-character speech once routing lands.",
+                    "Send game commands in a DM to the MUDL bot. Use `say` and `emote` for in-character speech in your room channel or thread.",
                 )
                 .await;
                 Ok(())
@@ -120,17 +114,94 @@ where
             .await;
             return Ok(());
         }
+
+        if let Err(denied) = manager.check_rate_limit(&message.user, RateLimitKind::Ooc) {
+            self.send_notice(
+                &message.channel,
+                &message.user,
+                &manager.rate_limit_denial_message(denied.kind),
+            )
+            .await;
+            return Ok(());
+        }
+
+        let display = manager
+            .with_session(&message.user, |session| {
+                session.with_world(|world, player| {
+                    world
+                        .object(player.actor_id())
+                        .map(|obj| obj.name.clone())
+                        .unwrap_or_else(|| message.user.clone())
+                })
+            })
+            .await
+            .unwrap_or_else(|| message.user.clone());
+
+        let connected: Vec<String> = manager.connected_nicks();
         drop(manager);
 
-        let line = format!("<@{}> (OOC): {}", message.user, trimmed);
-        self.send_to_channel(&self.config.world_channel, &line).await;
+        let line = format_ooc(&display, trimmed);
+        self.send_to_presence(&self.config.world_channel, &line).await;
+        for user_id in connected {
+            if user_id != message.user {
+                self.transport.send_direct(&user_id, &line).await;
+            }
+        }
         Ok(())
     }
 
-    async fn send_to_channel(&self, channel: &str, text: &str) {
+    async fn deliver(&self, outcome: &DispatchOutcome) {
+        for line in &outcome.to_sender {
+            self.send_to_presence(&outcome.reply_channel, line).await;
+        }
+
+        for (user_id, line) in &outcome.private {
+            self.send_to_presence(user_id, line).await;
+        }
+
+        for delivery in &outcome.room_audience {
+            for user_id in &delivery.audience {
+                for line in &delivery.lines {
+                    self.send_to_presence(user_id, line).await;
+                }
+            }
+        }
+
+        for (presence, line) in &outcome.channel {
+            self.send_to_presence(presence, line).await;
+        }
+
+        if let Some(sync) = &outcome.presence_sync {
+            self.apply_presence_sync(sync).await;
+        }
+
+        if outcome.persist {
+            let (world, persistence) = {
+                let manager = self.manager.lock().await;
+                (manager.world().clone(), manager.persistence().clone())
+            };
+            let _ = world.persist_changes(&persistence).await;
+        }
+    }
+
+    async fn apply_presence_sync(&self, sync: &PresenceSync) {
+        for presence in &sync.part {
+            self.transport.leave(presence, Some("leaving")).await;
+        }
+        for presence in &sync.join {
+            self.transport.join(presence).await;
+            self.send_to_presence(
+                &sync.user_id,
+                &super::channels::room_join_notice(presence),
+            )
+            .await;
+        }
+    }
+
+    async fn send_to_presence(&self, presence: &str, text: &str) {
         for part in split_delivery_lines(text) {
             if !part.is_empty() {
-                self.transport.send_direct(channel, part).await;
+                self.transport.send_direct(presence, part).await;
             }
         }
     }
@@ -150,12 +221,41 @@ mod tests {
     use super::*;
     use crate::gateway::SessionManager;
     use crate::mudl::AnatomyRegistry;
+    use crate::object::{Object, ObjectId, PermissionFlags};
     use crate::persistence::SqlitePersistence;
     use crate::transport::OutgoingAction;
     use crate::transport::MockTransport;
+    use std::collections::HashMap;
+
+    fn bare(id: &str, name: &str) -> Object {
+        Object {
+            id: ObjectId::new(id),
+            name: name.to_string(),
+            aliases: Vec::new(),
+            location: None,
+            prototype: None,
+            owner: ObjectId::new("player:hero-001"),
+            permissions: PermissionFlags::OWNER,
+            properties: HashMap::new(),
+            verbs: HashMap::new(),
+            event_handlers: HashMap::new(),
+            revision: 0,
+            updated_at: None,
+            is_deleted: false,
+            deleted_at: None,
+        }
+    }
 
     async fn test_bot() -> SlackBot<SqlitePersistence, MockTransport> {
         let persistence = SqlitePersistence::new("sqlite::memory:").await.unwrap();
+        let room = ObjectId::new("room:void-001");
+        let mut hero = bare("player:hero-001", "alice");
+        hero.location = Some(room);
+        let mut place = bare("room:void-001", "The Void");
+        place.set_property_string("description", "void");
+        persistence.save_object(&hero).await.unwrap();
+        persistence.save_object(&place).await.unwrap();
+
         let manager = SessionManager::open(persistence, AnatomyRegistry::default())
             .await
             .unwrap();
@@ -168,14 +268,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dm_input_is_acknowledged() {
+    async fn dm_look_replies_in_channel() {
         let bot = test_bot().await;
         let transport = Arc::clone(&bot.transport);
-        bot.handle_input("U1", "D1", "look").await.unwrap();
-        assert_eq!(
-            transport.direct_messages_to("D1"),
-            vec!["MUDL Slack bot received `look`. Full command dispatch arrives in the next M6 step — use the IRC bot or REPL for play today.".to_string()]
-        );
+        bot.handle_input("alice", "d1", "login").await.unwrap();
+        transport.clear();
+        bot.handle_input("alice", "d1", "look").await.unwrap();
+        assert!(transport
+            .direct_messages_to("d1")
+            .iter()
+            .any(|l| l.contains("void") || l.contains("Void")));
     }
 
     #[tokio::test]
@@ -211,22 +313,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn strips_app_mention_in_dm() {
+    async fn login_joins_world_and_room_presence() {
         let bot = test_bot().await;
-        let mut config = bot.config().clone();
-        config.app_id = Some("A_APP".to_string());
         let transport = Arc::clone(&bot.transport);
-        let manager = bot.manager();
-        let rebuilt = {
-            let guard = manager.lock().await;
-            SessionManager::from_world(guard.persistence().clone(), guard.world().clone())
-        };
-        let bot = SlackBot::new(rebuilt, transport, config);
-        bot.handle_input("U1", "D1", "<@A_APP> help").await.unwrap();
-        assert!(bot
-            .transport
-            .direct_messages_to("D1")
-            .first()
-            .is_some_and(|m| m.contains("`help`")));
+        bot.handle_input("alice", "d1", "login").await.unwrap();
+        let joins: Vec<String> = transport
+            .recorded()
+            .into_iter()
+            .filter_map(|entry| match entry {
+                OutgoingAction::Join { presence } => Some(presence),
+                _ => None,
+            })
+            .collect();
+        assert!(joins.iter().any(|p| p == "C_WORLD"));
+        assert!(joins.iter().any(|p| p.contains("void-001")));
     }
 }

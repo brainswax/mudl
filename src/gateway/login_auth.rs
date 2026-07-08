@@ -38,7 +38,9 @@ impl LoginAuthPolicy {
     pub fn from_env() -> Self {
         let require_auth = match std::env::var("MUDL_LOGIN_REQUIRE_AUTH") {
             Ok(raw) => parse_bool_env(&raw, true),
-            Err(_) => std::env::var("IRC_MOCK").is_err(),
+            Err(_) => {
+                std::env::var("IRC_MOCK").is_err() && std::env::var("SLACK_MOCK").is_err()
+            }
         };
         Self {
             require_auth,

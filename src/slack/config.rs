@@ -13,7 +13,11 @@ pub struct SlackConfig {
     pub app_id: Option<String>,
     /// Workspace channel ID (`C…`) for out-of-character chat.
     pub world_channel: String,
-    /// Prefix for per-room channel names when routing in-character speech (future).
+    /// Optional shared channel (`C…`) for per-room **threads** (multi-channel threaded play).
+    /// When set, in-character speech posts as threads here; when unset, each room uses a
+    /// dedicated channel slug (`mudl-void-001`) via `conversations.join`.
+    pub rooms_channel: Option<String>,
+    /// Prefix for per-room channel slugs when `rooms_channel` is unset.
     pub room_channel_prefix: String,
     /// Bind address for the Events API HTTP server (e.g. `0.0.0.0:3000`).
     pub bind_addr: String,
@@ -36,6 +40,7 @@ impl Default for SlackConfig {
             signing_secret: String::new(),
             app_id: None,
             world_channel: String::new(),
+            rooms_channel: None,
             room_channel_prefix: "mudl-".to_string(),
             bind_addr: "0.0.0.0:3000".to_string(),
             events_path: "/slack/events".to_string(),
@@ -65,6 +70,12 @@ impl SlackConfig {
         }
         if let Ok(channel) = std::env::var("SLACK_WORLD_CHANNEL") {
             config.world_channel = channel.trim().to_string();
+        }
+        if let Ok(channel) = std::env::var("SLACK_ROOMS_CHANNEL") {
+            let trimmed = channel.trim();
+            if !trimmed.is_empty() {
+                config.rooms_channel = Some(trimmed.to_string());
+            }
         }
         if let Ok(prefix) = std::env::var("SLACK_ROOM_CHANNEL_PREFIX") {
             config.room_channel_prefix = prefix.trim().to_string();
