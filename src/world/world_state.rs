@@ -73,12 +73,19 @@ impl SharedWorld {
     ///
     /// Uses `try_lock` + yield (not `blocking_lock`) so callers inside a Tokio runtime —
     /// including `#[tokio::test]` and `#[tokio::main]` — do not block the executor thread.
+    /// IRC paths should prefer [`Self::lock`] via [`Session::with_locked_async`].
     pub fn lock_blocking(&self) -> MutexGuard<'_, WorldState> {
+        let mut spins = 0u32;
         loop {
             if let Ok(guard) = self.inner.try_lock() {
                 return guard;
             }
-            std::thread::yield_now();
+            spins = spins.saturating_add(1);
+            if spins % 64 == 0 {
+                std::thread::yield_now();
+            } else {
+                std::hint::spin_loop();
+            }
         }
     }
 

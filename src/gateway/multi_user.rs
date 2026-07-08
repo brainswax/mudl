@@ -123,16 +123,19 @@ mod tests {
             .unwrap();
     }
 
-    fn sword_holder(manager: &SessionManager<SqlitePersistence>, nick: &str) -> bool {
-        manager.session(nick).is_some_and(|session| {
-            session.with_world(|world, player| {
-                world
-                    .object(&ObjectId::new("item:sword-001"))
-                    .and_then(|o| o.location.as_ref())
-                    .map(|loc| loc == player.actor_id())
-                    .unwrap_or(false)
+    async fn sword_holder(manager: &SessionManager<SqlitePersistence>, nick: &str) -> bool {
+        manager
+            .with_session(nick, |session| {
+                session.with_world(|world, player| {
+                    world
+                        .object(&ObjectId::new("item:sword-001"))
+                        .and_then(|o| o.location.as_ref())
+                        .map(|loc| loc == player.actor_id())
+                        .unwrap_or(false)
+                })
             })
-        })
+            .await
+            .unwrap_or(false)
     }
 
     #[tokio::test]
@@ -140,34 +143,41 @@ mod tests {
         let (_persistence, mut manager) = three_player_world().await;
         login_trio(&mut manager).await;
 
-        manager.session_mut("alice").unwrap().go("north").unwrap();
+        manager
+            .with_session("alice", |session| session.go("north"))
+            .await
+            .unwrap()
+            .unwrap();
 
-        let bob = manager.session("bob").unwrap();
-        assert_eq!(
-            bob.with_world(|world, _| {
-                world
-                    .object(&ObjectId::new("player:hero-001"))
-                    .and_then(|p| p.location.as_ref().map(|id| id.as_str().to_string()))
-            }),
-            Some("room:north-001".to_string())
-        );
-        assert_eq!(
-            bob.current_location().map(|id| id.as_str()),
-            Some("room:void-001")
-        );
+        let hero1_loc = manager
+            .with_session("bob", |session| {
+                session.with_world(|world, _| {
+                    world
+                        .object(&ObjectId::new("player:hero-001"))
+                        .and_then(|p| p.location.as_ref().map(|id| id.as_str().to_string()))
+                })
+            })
+            .await
+            .unwrap();
+        let bob_loc = manager
+            .with_session("bob", |session| session.current_location().cloned())
+            .await
+            .unwrap();
+        assert_eq!(hero1_loc, Some("room:north-001".to_string()));
+        assert_eq!(bob_loc.as_ref().map(|id| id.as_str()), Some("room:void-001"));
     }
 
     #[tokio::test]
     async fn say_does_not_cross_room_boundaries() {
-        let (persistence, mut manager) = three_player_world().await;
+        let (_persistence, mut manager) = three_player_world().await;
         let config = IrcConfig::default();
         login_trio(&mut manager).await;
+        let manager = Arc::new(Mutex::new(manager));
 
-        dispatch_command(&mut manager, &persistence, "alice", "go north", &config).await;
+        dispatch_command(Arc::clone(&manager), "alice", "go north", &config).await;
 
         let outcome =
-            dispatch_command(&mut manager, &persistence, "alice", "say anyone there?", &config)
-                .await;
+            dispatch_command(manager, "alice", "say anyone there?", &config).await;
 
         let audience: Vec<_> = outcome
             .room_audience
@@ -180,13 +190,13 @@ mod tests {
 
     #[tokio::test]
     async fn emote_does_not_reach_distant_players() {
-        let (persistence, mut manager) = three_player_world().await;
+        let (_persistence, mut manager) = three_player_world().await;
         let config = IrcConfig::default();
         login_trio(&mut manager).await;
+        let manager = Arc::new(Mutex::new(manager));
 
-        dispatch_command(&mut manager, &persistence, "alice", "go north", &config).await;
-        let outcome =
-            dispatch_command(&mut manager, &persistence, "alice", "emote waves.", &config).await;
+        dispatch_command(Arc::clone(&manager), "alice", "go north", &config).await;
+        let outcome = dispatch_command(manager, "alice", "emote waves.", &config).await;
 
         let audience: Vec<_> = outcome
             .room_audience
@@ -198,13 +208,13 @@ mod tests {
 
     #[tokio::test]
     async fn tell_is_private_without_room_broadcast() {
-        let (persistence, mut manager) = three_player_world().await;
+        let (_persistence, mut manager) = three_player_world().await;
         let config = IrcConfig::default();
         login_trio(&mut manager).await;
+        let manager = Arc::new(Mutex::new(manager));
 
         let outcome = dispatch_command(
-            &mut manager,
-            &persistence,
+            manager,
             "alice",
             "tell scout meet me north",
             &config,
@@ -219,24 +229,27 @@ mod tests {
 
     #[tokio::test]
     async fn take_by_one_player_updates_shared_room_for_other() {
-        let (persistence, mut manager) = three_player_world().await;
+        let (_persistence, mut manager) = three_player_world().await;
         let config = IrcConfig::default();
         login_trio(&mut manager).await;
+        let manager = Arc::new(Mutex::new(manager));
 
-        let take = dispatch_command(&mut manager, &persistence, "alice", "take rusty", &config).await;
+        let take = dispatch_command(Arc::clone(&manager), "alice", "take rusty", &config).await;
         assert!(take.to_sender.iter().any(|l| l.contains("pick up")));
 
-        let sword_in_void = manager.session("bob").unwrap().with_world(|world, _| {
-            world
-                .object(&ObjectId::new("item:sword-001"))
-                .and_then(|o| o.location.as_ref().map(|id| id.as_str().to_string()))
-        });
+        let sword_in_void = manager.lock().await.with_session("bob", |session| {
+            session.with_world(|world, _| {
+                world
+                    .object(&ObjectId::new("item:sword-001"))
+                    .and_then(|o| o.location.as_ref().map(|id| id.as_str().to_string()))
+            })
+        }).await.unwrap();
         assert_eq!(sword_in_void, Some("player:hero-001".to_string()));
     }
 
     #[tokio::test]
     async fn concurrent_go_moves_both_players() {
-        let (persistence, manager) = three_player_world().await;
+        let (_persistence, manager) = three_player_world().await;
         let config = IrcConfig::default();
         let manager = Arc::new(Mutex::new(manager));
         {
@@ -247,18 +260,14 @@ mod tests {
         let north = ObjectId::new("room:north-001");
         let m1 = Arc::clone(&manager);
         let m2 = Arc::clone(&manager);
-        let p = persistence.clone();
         let c = config.clone();
-
-        let p_alice = p.clone();
         let c_alice = c.clone();
+
         let alice = tokio::spawn(async move {
-            let mut guard = m1.lock().await;
-            dispatch_command(&mut guard, &p_alice, "alice", "go north", &c_alice).await
+            dispatch_command(m1, "alice", "go north", &c_alice).await
         });
         let bob = tokio::spawn(async move {
-            let mut guard = m2.lock().await;
-            dispatch_command(&mut guard, &p, "bob", "north", &c).await
+            dispatch_command(m2, "bob", "north", &c).await
         });
 
         let (a, b) = tokio::join!(alice, bob);
@@ -266,16 +275,21 @@ mod tests {
         assert!(b.unwrap().to_sender.iter().any(|l| l.contains("north")));
 
         let guard = manager.lock().await;
-        assert_eq!(
-            guard.session("alice").unwrap().current_location(),
-            Some(&north)
-        );
-        assert_eq!(guard.session("bob").unwrap().current_location(), Some(&north));
+        let alice_loc = guard
+            .with_session("alice", |session| session.current_location().cloned())
+            .await
+            .unwrap();
+        let bob_loc = guard
+            .with_session("bob", |session| session.current_location().cloned())
+            .await
+            .unwrap();
+        assert_eq!(alice_loc.as_ref(), Some(&north));
+        assert_eq!(bob_loc.as_ref(), Some(&north));
     }
 
     #[tokio::test]
     async fn concurrent_take_only_one_player_gets_sword() {
-        let (persistence, manager) = three_player_world().await;
+        let (_persistence, manager) = three_player_world().await;
         let config = IrcConfig::default();
         let manager = Arc::new(Mutex::new(manager));
         {
@@ -285,18 +299,14 @@ mod tests {
 
         let m1 = Arc::clone(&manager);
         let m2 = Arc::clone(&manager);
-        let p = persistence.clone();
         let c = config.clone();
-
-        let p_alice = p.clone();
         let c_alice = c.clone();
+
         let alice = tokio::spawn(async move {
-            let mut guard = m1.lock().await;
-            dispatch_command(&mut guard, &p_alice, "alice", "take rusty", &c_alice).await
+            dispatch_command(m1, "alice", "take rusty", &c_alice).await
         });
         let bob = tokio::spawn(async move {
-            let mut guard = m2.lock().await;
-            dispatch_command(&mut guard, &p, "bob", "take rusty", &c).await
+            dispatch_command(m2, "bob", "take rusty", &c).await
         });
 
         let (a, b) = tokio::join!(alice, bob);
@@ -306,7 +316,7 @@ mod tests {
 
         let guard = manager.lock().await;
         assert_eq!(
-            sword_holder(&guard, "alice") as u8 + sword_holder(&guard, "bob") as u8,
+            sword_holder(&guard, "alice").await as u8 + sword_holder(&guard, "bob").await as u8,
             1
         );
     }
@@ -326,7 +336,7 @@ mod tests {
 
     #[tokio::test]
     async fn mixed_case_nick_receives_replies() {
-        let (persistence, mut manager) = three_player_world().await;
+        let (_persistence, mut manager) = three_player_world().await;
         let config = IrcConfig::default();
 
         manager
@@ -338,8 +348,8 @@ mod tests {
             .await
             .unwrap();
 
-        let outcome =
-            dispatch_command(&mut manager, &persistence, "Alice", "look", &config).await;
+        let manager = Arc::new(Mutex::new(manager));
+        let outcome = dispatch_command(manager, "Alice", "look", &config).await;
 
         assert_eq!(outcome.sender, "alice");
         assert!(outcome
@@ -366,7 +376,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bot_concurrent_handle_input_serializes_safely() {
+    async fn bot_concurrent_handle_input_runs_in_parallel() {
         let (_persistence, mut manager) = three_player_world().await;
         let config = IrcConfig::default();
         login_trio(&mut manager).await;
@@ -386,9 +396,10 @@ mod tests {
 
         let manager = bot.manager();
         let guard = manager.lock().await;
-        assert_eq!(
-            guard.session("alice").unwrap().current_location().map(|id| id.as_str()),
-            Some("room:north-001")
-        );
+        let location = guard
+            .with_session("alice", |session| session.current_location().cloned())
+            .await
+            .unwrap();
+        assert_eq!(location.as_ref().map(|id| id.as_str()), Some("room:north-001"));
     }
 }

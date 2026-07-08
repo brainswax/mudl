@@ -198,7 +198,7 @@ The main gaps are **scale and multi-user readiness**: `src/bin/repl.rs` is a 1.6
 | Issue | Location | Impact | Recommendation |
 |-------|----------|--------|----------------|
 | ~~**World + player conflated**~~ | ~~`repl::Session` held graph + `player_id`~~ | **Done** — `world::WorldState` (graph, anatomy, dirty, dispatch) + `repl::PlayerSession` (actor, location cache). `Session` bundles `SharedWorld` + `PlayerSession`; IRC holds one `SharedWorld` and one `PlayerSession` per nick. | — |
-| ~~**No concurrency control**~~ | ~~Single-threaded REPL; `DISPATCH_STACK` was `thread_local`~~ | **Done** — `DispatchStack` on `WorldState`; `SharedWorld` (`Arc<Mutex<WorldState>>`) with `lock()` / `lock_blocking()`; `Session::with_locked` holds the mutex for the whole command. Batch saves use SQLite transactions. Per-room mutex deferred. | — |
+| ~~**No concurrency control**~~ | ~~Single-threaded REPL; `DISPATCH_STACK` was `thread_local`~~ | **Done** — `DispatchStack` on `WorldState`; `SharedWorld` (`Arc<Mutex<WorldState>>`) with `lock()` / `lock_blocking()`; IRC uses per-nick `Arc<Mutex<Session>>` + `with_locked_async`; REPL uses `with_locked`. Batch saves release the world lock during SQLite I/O. Per-room mutex deferred. | — |
 | **RBAC stubbed** | `has_wizard_permission()` always `true` | Any IRC nick could run `@set` / `@delete` | Gateway checks `PermissionFlags` on actor object; map IRC auth → player ID. Enforce builder vs wizard tiers before meta-commands. |
 | ~~**Last-write-wins persistence**~~ | ~~`SqlitePersistence::save_object` per row, no version field~~ | **Done** — `Object.revision` + `updated_at`; CAS `UPDATE … WHERE revision = ?`; `PersistenceError::RevisionConflict`; `save_and_sync`, `save_object_with_retry`, `persist_dirty` batch retry. | — |
 
@@ -270,7 +270,8 @@ repl.rs ──► Session               IRC bot ──┐
 | Real RBAC (`PermissionFlags` on actor) | LLM / GitHub authoring hooks |
 | `SessionManager` login/logout + disconnect persist | |
 | `IrcBot` — TLS + IRCv3 caps, room visibility, tells, channels | |
-| 482 tests (incl. multi-user IRC) | |
+| Per-session IRC locking + `gateway::load` stress tests | Rate limiting / flood protection |
+| 500+ tests (multi-user IRC + load) | |
 
 **Minimum M5 slice:** (1) ~~`WorldState` + `PlayerSession` split~~, (2) ~~`dispatch_command` + IRC bot~~, (3) ~~real RBAC~~, (4) ~~world `Mutex` + transactional saves~~, (5) ~~IRC adapter calling gateway~~.
 

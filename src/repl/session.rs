@@ -138,18 +138,36 @@ impl Session {
         })
     }
 
-    /// Read-only access under the world mutex.
+    /// Read-only access under the world mutex (sync REPL).
     pub fn with_world<R>(&self, f: impl FnOnce(&WorldState, &PlayerSession) -> R) -> R {
         let guard = self.world.lock_blocking();
         f(&guard, &self.player)
     }
 
-    /// Mutable access for one command — holds the lock for the whole closure.
+    /// Read-only access under the world mutex (async IRC / gateway).
+    pub async fn with_world_async<R>(
+        &self,
+        f: impl FnOnce(&WorldState, &PlayerSession) -> R,
+    ) -> R {
+        let guard = self.world.lock().await;
+        f(&guard, &self.player)
+    }
+
+    /// Mutable access for one command — holds the lock for the whole closure (sync REPL).
     pub fn with_locked<R>(
         &mut self,
         f: impl FnOnce(&mut WorldState, &mut PlayerSession) -> R,
     ) -> R {
         let mut guard = self.world.lock_blocking();
+        f(&mut guard, &mut self.player)
+    }
+
+    /// Mutable access for one command — async lock; yields under contention (IRC).
+    pub async fn with_locked_async<R>(
+        &mut self,
+        f: impl FnOnce(&mut WorldState, &mut PlayerSession) -> R,
+    ) -> R {
+        let mut guard = self.world.lock().await;
         f(&mut guard, &mut self.player)
     }
 
@@ -231,8 +249,22 @@ impl Session {
         self.with_world(|world, player| player.resolve_target(world, name, scope))
     }
 
+    pub async fn resolve_target_async(&self, name: &str, scope: ResolveScope) -> TargetResolution {
+        self.with_world_async(|world, player| player.resolve_target(world, name, scope))
+            .await
+    }
+
     pub fn display_context(&self, mode: DisplayMode) -> DisplayContext {
         self.with_world(|world, player| player.display_context(world, mode))
+    }
+
+    pub async fn display_context_async(&self, mode: DisplayMode) -> DisplayContext {
+        self.with_world_async(|world, player| player.display_context(world, mode))
+            .await
+    }
+
+    pub async fn objects_async(&self) -> HashMap<ObjectId, Object> {
+        self.with_world_async(|world, _| world.objects().clone()).await
     }
 
     pub fn perceive_hidden_on_look(&mut self) -> crate::world::EventOutcome {
@@ -260,6 +292,32 @@ impl Session {
         })
     }
 
+    pub async fn perceive_hidden_on_look_async(&mut self) -> crate::world::EventOutcome {
+        self.with_locked_async(|world, player| {
+            let Some(room_id) = player.current_location().cloned() else {
+                return crate::world::EventOutcome::default();
+            };
+            let crate::world::WorldMutation {
+                objects,
+                anatomy,
+                dispatch,
+                dirty,
+            } = world.borrow_mutation();
+            let outcome = crate::world::run_discovery_on_look(
+                dispatch,
+                &room_id,
+                player.player_id(),
+                objects,
+                anatomy,
+            );
+            for id in &outcome.dirty {
+                dirty.mark(id);
+            }
+            outcome
+        })
+        .await
+    }
+
     pub fn inventory_context<'a>(&'a mut self) -> InventoryContextHolder<'a> {
         InventoryContextHolder { session: self }
     }
@@ -275,6 +333,24 @@ impl Session {
     /// Move the player along an exit from the current location.
     pub fn go(&mut self, direction: &str) -> Result<String, SessionError> {
         self.mutate_player(|world, player| go_impl(direction, world, player))
+    }
+
+    /// Async movement for IRC handlers (`world.lock().await` under contention).
+    pub async fn go_async(&mut self, direction: &str) -> Result<String, SessionError> {
+        self.with_locked_async(|world, player| go_impl(direction, world, player))
+            .await
+    }
+
+    /// Run inventory helpers under the async world lock (IRC).
+    pub async fn with_inventory_async<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::inventory::InventoryContext<'_>) -> R,
+    ) -> R {
+        self.with_locked_async(|world, player| {
+            let mut ctx = player.inventory_context(world);
+            f(&mut ctx)
+        })
+        .await
     }
 
     /// Builder `@dig` — holds the world lock for the whole factory + graph mutation (rare).

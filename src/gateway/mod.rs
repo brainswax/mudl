@@ -6,6 +6,8 @@ mod registry;
 mod session_manager;
 
 #[cfg(test)]
+mod load;
+#[cfg(test)]
 mod multi_user;
 
 pub use persistence::{hydrate_actor, persist_connection_state};

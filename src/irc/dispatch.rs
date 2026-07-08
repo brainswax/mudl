@@ -1,5 +1,9 @@
 //! Command dispatch from IRC input to [`Session`] operations.
 
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
+
 use crate::command::parse_command_line;
 use crate::command::{authorize_meta_command, authorize_plain_command, CommandLine};
 use crate::display::{
@@ -15,7 +19,9 @@ use crate::world::{exit_index, movement_from_line};
 use super::channels::{room_channel_name, room_join_notice};
 use super::config::IrcConfig;
 use super::social::{format_emote, format_say, format_tell, format_tell_sent};
-use super::visibility::{actor_display_name, players_in_room, resolve_connected_nick};
+use super::visibility::{
+    actor_display_name_async, players_in_room_async, resolve_connected_nick,
+};
 
 /// IRC routing instructions produced by command dispatch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -66,9 +72,11 @@ pub fn resolve_player_for_login(
 }
 
 /// Dispatch one parsed command for a connected or connecting IRC nick.
-pub async fn dispatch_command<P: Persistence + Clone>(
-    manager: &mut SessionManager<P>,
-    persistence: &P,
+///
+/// The outer [`SessionManager`] mutex is held only for registry/login/logout work.
+/// Per-nick session and world locks allow concurrent commands from different players.
+pub async fn dispatch_command<P: Persistence + Clone + Send + Sync>(
+    manager: Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     input: &str,
     config: &IrcConfig,
@@ -76,12 +84,19 @@ pub async fn dispatch_command<P: Persistence + Clone>(
     let line = parse_command_line(input);
     let sender = normalize_nick(nick);
 
-    if manager.session(nick).is_none() {
-        return dispatch_logged_out(manager, persistence, nick, &line, config).await;
+    let logged_in = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick).is_some()
+    };
+
+    if !logged_in {
+        let mut mgr = manager.lock().await;
+        let persistence = mgr.persistence().clone();
+        return dispatch_logged_out(&mut mgr, &persistence, nick, &line, config).await;
     }
 
     if line.is_meta {
-        return dispatch_meta(manager, nick, &line, sender);
+        return dispatch_meta(&manager, nick, &line, sender).await;
     }
 
     match line.verb.as_str() {
@@ -90,14 +105,14 @@ pub async fn dispatch_command<P: Persistence + Clone>(
             to_sender: vec![help_text()],
             ..Default::default()
         },
-        "quit" | "logout" | "exit" => dispatch_quit(manager, nick, sender, config).await,
-        "look" | "l" => dispatch_look(manager, persistence, nick, &line.args, sender).await,
-        "inventory" | "i" => dispatch_inventory(manager, nick, sender),
-        "say" | "'" => dispatch_say(manager, nick, &line.args, sender, config),
-        "emote" | ":" => dispatch_emote(manager, nick, &line.args, sender, config),
-        "tell" | "whisper" => dispatch_tell(manager, nick, &line.args, sender),
-        "take" | "get" => dispatch_take(manager, nick, &line.args, sender),
-        "go" | _ => dispatch_movement(manager, nick, &line, sender, config).await,
+        "quit" | "logout" | "exit" => dispatch_quit(&manager, nick, sender, config).await,
+        "look" | "l" => dispatch_look(&manager, nick, &line.args, sender).await,
+        "inventory" | "i" => dispatch_inventory(&manager, nick, sender).await,
+        "say" | "'" => dispatch_say(&manager, nick, &line.args, sender, config).await,
+        "emote" | ":" => dispatch_emote(&manager, nick, &line.args, sender, config).await,
+        "tell" | "whisper" => dispatch_tell(&manager, nick, &line.args, sender).await,
+        "take" | "get" => dispatch_take(&manager, nick, &line.args, sender).await,
+        "go" | _ => dispatch_movement(&manager, nick, &line, sender, config).await,
     }
 }
 
@@ -126,7 +141,7 @@ async fn dispatch_logged_out<P: Persistence + Clone>(
 
 async fn dispatch_login<P: Persistence + Clone>(
     manager: &mut SessionManager<P>,
-    persistence: &P,
+    _persistence: &P,
     nick: &str,
     args: &[String],
     sender: String,
@@ -134,7 +149,7 @@ async fn dispatch_login<P: Persistence + Clone>(
 ) -> DispatchOutcome {
     let explicit = args.first().map(String::as_str);
     let player_id = {
-        let guard = manager.world().lock_blocking();
+        let guard = manager.world().lock().await;
         resolve_player_for_login(nick, explicit, guard.objects())
     };
 
@@ -148,11 +163,10 @@ async fn dispatch_login<P: Persistence + Clone>(
         };
     };
 
-    let bootstrap_location = manager
-        .world()
-        .lock_blocking()
-        .object(&player_id)
-        .and_then(|obj| obj.location.clone());
+    let bootstrap_location = {
+        let guard = manager.world().lock().await;
+        guard.object(&player_id).and_then(|obj| obj.location.clone())
+    };
 
     match manager.login(nick, player_id, bootstrap_location).await {
         Ok(()) => {
@@ -163,42 +177,41 @@ async fn dispatch_login<P: Persistence + Clone>(
                     nick: sender.clone(),
                     join: vec![
                         config.world_channel.clone(),
-                        manager
-                            .session(nick)
-                            .and_then(|s| s.current_location())
-                            .map(|room| room_channel_name(&config.room_channel_prefix, room))
-                            .unwrap_or_default(),
+                        {
+                            let room_id = if let Some(handle) = manager.session_handle(nick) {
+                                let session = handle.lock().await;
+                                session.current_location().cloned()
+                            } else {
+                                None
+                            };
+                            room_id
+                                .map(|room| room_channel_name(&config.room_channel_prefix, &room))
+                                .unwrap_or_default()
+                        },
                     ]
                     .into_iter()
                     .filter(|c| !c.is_empty())
                     .collect(),
                     part: Vec::new(),
                 }),
-                persist: false,
+                persist: true,
                 ..Default::default()
             };
 
-            if let Some(session) = manager.session_mut(nick) {
-                if let Some(room) = session
-                    .current_location()
-                    .and_then(|id| session.object(id))
-                {
-                    let ctx = session.display_context(DisplayMode::Player);
-                    outcome
-                        .to_sender
-                        .push(format_room_look_player(&room, &ctx));
-                }
-                if let Some(room_id) = session.current_location() {
-                    let channel = room_channel_name(&config.room_channel_prefix, room_id);
-                    outcome
-                        .to_sender
-                        .push(room_join_notice(&channel));
+            if let Some(handle) = manager.session_handle(nick) {
+                let session = handle.lock().await;
+                if let Some(room_id) = session.current_location().cloned() {
+                    let ctx = session.display_context_async(DisplayMode::Player).await;
+                    if let Some(room) = ctx.objects.get(&room_id) {
+                        outcome
+                            .to_sender
+                            .push(format_room_look_player(room, &ctx));
+                    }
+                    let channel = room_channel_name(&config.room_channel_prefix, &room_id);
+                    outcome.to_sender.push(room_join_notice(&channel));
                 }
             }
 
-            let _ = manager
-                .session_mut(nick)
-                .map(|session| session.persist_changes(persistence));
             outcome
         }
         Err(err) => DispatchOutcome {
@@ -209,16 +222,25 @@ async fn dispatch_login<P: Persistence + Clone>(
     }
 }
 
-async fn dispatch_quit<P: Persistence + Clone>(
-    manager: &mut SessionManager<P>,
+async fn dispatch_quit<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     sender: String,
     config: &IrcConfig,
 ) -> DispatchOutcome {
-    let old_room = manager
-        .session(nick)
-        .and_then(|s| s.current_location().cloned());
-    match manager.logout(nick).await {
+    let old_room = {
+        let mgr = manager.lock().await;
+        let handle = mgr.session_handle(nick);
+        drop(mgr);
+        if let Some(handle) = handle {
+            let session = handle.lock().await;
+            session.current_location().cloned()
+        } else {
+            None
+        }
+    };
+    let mut mgr = manager.lock().await;
+    match mgr.logout(nick).await {
         Ok(()) => {
             let mut part = vec![config.world_channel.clone()];
             if let Some(room_id) = old_room {
@@ -243,13 +265,17 @@ async fn dispatch_quit<P: Persistence + Clone>(
     }
 }
 
-fn dispatch_meta<P: Persistence + Clone>(
-    manager: &SessionManager<P>,
+async fn dispatch_meta<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     line: &CommandLine,
     sender: String,
 ) -> DispatchOutcome {
-    let Some(session) = manager.session(nick) else {
+    let handle = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick)
+    };
+    let Some(handle) = handle else {
         return DispatchOutcome {
             sender,
             to_sender: vec!["You are not logged in.".to_string()],
@@ -257,20 +283,23 @@ fn dispatch_meta<P: Persistence + Clone>(
         };
     };
 
-    let message = session.with_world(|world, player| {
-        let Some(actor) = world.object(player.actor_id()) else {
-            return "You seem to have lost yourself.".to_string();
-        };
-        let result = if line.verb == "create" || line.verb == "load" || line.verb == "save" {
-            authorize_plain_command(actor, &line.verb, line.args.first().map(String::as_str))
-        } else {
-            authorize_meta_command(actor, &line.verb)
-        };
-        match result {
-            Ok(()) => "Builder commands over IRC are not enabled yet. Use the REPL.".to_string(),
-            Err(err) => err.to_string(),
-        }
-    });
+    let session = handle.lock().await;
+    let message = session
+        .with_world_async(|world, player| {
+            let Some(actor) = world.object(player.actor_id()) else {
+                return "You seem to have lost yourself.".to_string();
+            };
+            let result = if line.verb == "create" || line.verb == "load" || line.verb == "save" {
+                authorize_plain_command(actor, &line.verb, line.args.first().map(String::as_str))
+            } else {
+                authorize_meta_command(actor, &line.verb)
+            };
+            match result {
+                Ok(()) => "Builder commands over IRC are not enabled yet. Use the REPL.".to_string(),
+                Err(err) => err.to_string(),
+            }
+        })
+        .await;
 
     DispatchOutcome {
         sender,
@@ -279,42 +308,55 @@ fn dispatch_meta<P: Persistence + Clone>(
     }
 }
 
-async fn dispatch_look<P: Persistence + Clone>(
-    manager: &mut SessionManager<P>,
-    persistence: &P,
+async fn dispatch_look<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     args: &[String],
     sender: String,
 ) -> DispatchOutcome {
-    let Some(session) = manager.session_mut(nick) else {
+    let persistence = {
+        let mgr = manager.lock().await;
+        mgr.persistence().clone()
+    };
+    let handle = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick)
+    };
+    let Some(handle) = handle else {
         return DispatchOutcome::default();
     };
 
     let target = args.first().map(String::as_str);
-    let resolution = if let Some(name) = target {
-        session.resolve_target(name, ResolveScope::General)
-    } else if let Some(loc) = session.current_location() {
-        TargetResolution::Found(loc.clone())
-    } else {
-        TargetResolution::NotFound
+    let resolution = {
+        let session = handle.lock().await;
+        if let Some(name) = target {
+            session.resolve_target_async(name, ResolveScope::General).await
+        } else if let Some(loc) = session.current_location() {
+            TargetResolution::Found(loc.clone())
+        } else {
+            TargetResolution::NotFound
+        }
     };
 
     if let TargetResolution::Found(ref id) = resolution {
-        let _ = session.ensure_object(persistence, id).await;
+        let mut session = handle.lock().await;
+        let _ = session.ensure_object(&persistence, id).await;
     }
 
     let mut lines = Vec::new();
+    let mut session = handle.lock().await;
     match resolution {
         TargetResolution::Found(id) => {
             let is_room = session
-                .objects()
+                .objects_async()
+                .await
                 .get(&id)
                 .is_some_and(|obj| obj.is_location());
             if is_room {
-                let discovery = session.perceive_hidden_on_look();
+                let discovery = session.perceive_hidden_on_look_async().await;
                 lines.extend(discovery.lines);
             }
-            let ctx = session.display_context(DisplayMode::Player);
+            let ctx = session.display_context_async(DisplayMode::Player).await;
             if let Some(obj) = ctx.objects.get(&id) {
                 if obj.is_location() {
                     lines.push(format_room_look_player(obj, &ctx));
@@ -344,21 +386,28 @@ async fn dispatch_look<P: Persistence + Clone>(
     }
 }
 
-fn dispatch_inventory<P: Persistence + Clone>(
-    manager: &mut SessionManager<P>,
+async fn dispatch_inventory<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     sender: String,
 ) -> DispatchOutcome {
-    let Some(session) = manager.session_mut(nick) else {
+    let handle = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick)
+    };
+    let Some(handle) = handle else {
         return DispatchOutcome::default();
     };
 
-    let text = session.with_world(|world, player| {
-        world
-            .object(player.actor_id())
-            .map(|obj| describe_inventory(obj, world.objects(), world.anatomy()))
-            .unwrap_or_else(|| "You seem to have lost yourself.".to_string())
-    });
+    let session = handle.lock().await;
+    let text = session
+        .with_world_async(|world, player| {
+            world
+                .object(player.actor_id())
+                .map(|obj| describe_inventory(obj, world.objects(), world.anatomy()))
+                .unwrap_or_else(|| "You seem to have lost yourself.".to_string())
+        })
+        .await;
 
     DispatchOutcome {
         sender,
@@ -367,8 +416,8 @@ fn dispatch_inventory<P: Persistence + Clone>(
     }
 }
 
-fn dispatch_say<P: Persistence + Clone>(
-    manager: &SessionManager<P>,
+async fn dispatch_say<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     args: &[String],
     sender: String,
@@ -382,11 +431,19 @@ fn dispatch_say<P: Persistence + Clone>(
         };
     }
 
-    let Some(session) = manager.session(nick) else {
+    let handle = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick)
+    };
+    let Some(handle) = handle else {
         return DispatchOutcome::default();
     };
 
-    let Some(room_id) = session.current_location().cloned() else {
+    let room_id = {
+        let session = handle.lock().await;
+        session.current_location().cloned()
+    };
+    let Some(room_id) = room_id else {
         return DispatchOutcome {
             sender,
             to_sender: vec![narrate_no_location()],
@@ -394,10 +451,12 @@ fn dispatch_say<P: Persistence + Clone>(
         };
     };
 
-    let speaker = actor_display_name(session);
+    let speaker = actor_display_name_async(&handle).await;
     let text = args.join(" ");
     let formatted = format_say(&speaker, &text);
-    let audience = players_in_room(manager, &room_id, Some(nick))
+    let mgr = manager.lock().await;
+    let audience = players_in_room_async(&mgr, &room_id, Some(nick))
+        .await
         .into_iter()
         .map(|p| p.nick)
         .collect();
@@ -415,8 +474,8 @@ fn dispatch_say<P: Persistence + Clone>(
     }
 }
 
-fn dispatch_emote<P: Persistence + Clone>(
-    manager: &SessionManager<P>,
+async fn dispatch_emote<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     args: &[String],
     sender: String,
@@ -430,11 +489,19 @@ fn dispatch_emote<P: Persistence + Clone>(
         };
     }
 
-    let Some(session) = manager.session(nick) else {
+    let handle = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick)
+    };
+    let Some(handle) = handle else {
         return DispatchOutcome::default();
     };
 
-    let Some(room_id) = session.current_location().cloned() else {
+    let room_id = {
+        let session = handle.lock().await;
+        session.current_location().cloned()
+    };
+    let Some(room_id) = room_id else {
         return DispatchOutcome {
             sender,
             to_sender: vec![narrate_no_location()],
@@ -442,10 +509,12 @@ fn dispatch_emote<P: Persistence + Clone>(
         };
     };
 
-    let speaker = actor_display_name(session);
+    let speaker = actor_display_name_async(&handle).await;
     let text = args.join(" ");
     let formatted = format_emote(&speaker, &text);
-    let audience = players_in_room(manager, &room_id, Some(nick))
+    let mgr = manager.lock().await;
+    let audience = players_in_room_async(&mgr, &room_id, Some(nick))
+        .await
         .into_iter()
         .map(|p| p.nick)
         .collect();
@@ -463,8 +532,8 @@ fn dispatch_emote<P: Persistence + Clone>(
     }
 }
 
-fn dispatch_tell<P: Persistence + Clone>(
-    manager: &SessionManager<P>,
+async fn dispatch_tell<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     args: &[String],
     sender: String,
@@ -479,7 +548,11 @@ fn dispatch_tell<P: Persistence + Clone>(
 
     let target_nick = &args[0];
     let text = args[1..].join(" ");
-    let Some(resolved) = resolve_connected_nick(manager, target_nick) else {
+    let resolved = {
+        let mgr = manager.lock().await;
+        resolve_connected_nick(&mgr, target_nick)
+    };
+    let Some(resolved) = resolved else {
         return DispatchOutcome {
             sender,
             to_sender: vec![format!("{target_nick} is not connected.")],
@@ -495,10 +568,14 @@ fn dispatch_tell<P: Persistence + Clone>(
         };
     }
 
-    let from_name = manager
-        .session(nick)
-        .map(actor_display_name)
-        .unwrap_or_else(|| nick.to_string());
+    let from_name = {
+        let mgr = manager.lock().await;
+        if let Some(handle) = mgr.session_handle(nick) {
+            actor_display_name_async(&handle).await
+        } else {
+            nick.to_string()
+        }
+    };
 
     DispatchOutcome {
         sender,
@@ -508,8 +585,8 @@ fn dispatch_tell<P: Persistence + Clone>(
     }
 }
 
-fn dispatch_take<P: Persistence + Clone>(
-    manager: &mut SessionManager<P>,
+async fn dispatch_take<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     args: &[String],
     sender: String,
@@ -522,11 +599,16 @@ fn dispatch_take<P: Persistence + Clone>(
         };
     };
 
-    let Some(session) = manager.session_mut(nick) else {
+    let handle = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick)
+    };
+    let Some(handle) = handle else {
         return DispatchOutcome::default();
     };
 
-    let result = session.inventory_context().with(|ctx| take_item(ctx, target));
+    let mut session = handle.lock().await;
+    let result = session.with_inventory_async(|ctx| take_item(ctx, target)).await;
     match result {
         Ok(msg) => DispatchOutcome {
             sender,
@@ -547,23 +629,32 @@ fn dispatch_take<P: Persistence + Clone>(
     }
 }
 
-async fn dispatch_movement<P: Persistence + Clone>(
-    manager: &mut SessionManager<P>,
+async fn dispatch_movement<P: Persistence + Clone + Send + Sync>(
+    manager: &Arc<Mutex<SessionManager<P>>>,
     nick: &str,
     line: &CommandLine,
     sender: String,
     config: &IrcConfig,
 ) -> DispatchOutcome {
-    let Some(session) = manager.session_mut(nick) else {
+    let handle = {
+        let mgr = manager.lock().await;
+        mgr.session_handle(nick)
+    };
+    let Some(handle) = handle else {
         return DispatchOutcome::default();
     };
 
-    let index = session.with_world(|world, player| {
-        player
-            .current_location()
-            .and_then(|loc| world.object(loc))
-            .map(exit_index)
-    });
+    let index = {
+        let session = handle.lock().await;
+        session
+            .with_world_async(|world, player| {
+                player
+                    .current_location()
+                    .and_then(|loc| world.object(loc))
+                    .map(exit_index)
+            })
+            .await
+    };
 
     let arg_refs: Vec<&str> = line.args.iter().map(String::as_str).collect();
     let direction = movement_from_line(&line.verb, &arg_refs, index.as_ref());
@@ -575,8 +666,12 @@ async fn dispatch_movement<P: Persistence + Clone>(
         };
     };
 
-    let old_room = session.current_location().cloned();
-    match session.go(&direction) {
+    let old_room = {
+        let session = handle.lock().await;
+        session.current_location().cloned()
+    };
+    let mut session = handle.lock().await;
+    match session.go_async(&direction).await {
         Ok(msg) => {
             let mut outcome = DispatchOutcome {
                 sender,
@@ -638,6 +733,8 @@ mod tests {
     use crate::object::{Object, PermissionFlags};
     use crate::persistence::SqlitePersistence;
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     fn bare(id: &str, name: &str) -> Object {
         Object {
@@ -687,22 +784,27 @@ mod tests {
         (persistence, manager, IrcConfig::default())
     }
 
+    async fn manager_arc() -> (Arc<Mutex<SessionManager<SqlitePersistence>>>, IrcConfig) {
+        let (_persistence, manager, config) = sample_manager().await;
+        (Arc::new(Mutex::new(manager)), config)
+    }
+
     #[tokio::test]
     async fn login_binds_nick_to_player_name() {
-        let (persistence, mut manager, config) = sample_manager().await;
-        let outcome = dispatch_command(&mut manager, &persistence, "alice", "login", &config).await;
+        let (manager, config) = manager_arc().await;
+        let outcome = dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
         assert!(outcome.to_sender.iter().any(|l| l.contains("Welcome")));
-        assert!(manager.is_connected("alice"));
+        assert!(manager.lock().await.is_connected("alice"));
     }
 
     #[tokio::test]
     async fn say_reaches_co_located_player() {
-        let (persistence, mut manager, config) = sample_manager().await;
-        dispatch_command(&mut manager, &persistence, "alice", "login", &config).await;
-        dispatch_command(&mut manager, &persistence, "bob", "login", &config).await;
+        let (manager, config) = manager_arc().await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+        dispatch_command(Arc::clone(&manager), "bob", "login", &config).await;
 
         let outcome =
-            dispatch_command(&mut manager, &persistence, "alice", "say hello there", &config).await;
+            dispatch_command(manager, "alice", "say hello there", &config).await;
         assert_eq!(outcome.room_audience.len(), 1);
         assert_eq!(outcome.room_audience[0].audience, vec!["bob".to_string()]);
         assert!(outcome.room_audience[0].lines[0].contains("hello there"));
@@ -711,12 +813,12 @@ mod tests {
 
     #[tokio::test]
     async fn tell_is_private_between_players() {
-        let (persistence, mut manager, config) = sample_manager().await;
-        dispatch_command(&mut manager, &persistence, "alice", "login", &config).await;
-        dispatch_command(&mut manager, &persistence, "bob", "login", &config).await;
+        let (manager, config) = manager_arc().await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+        dispatch_command(Arc::clone(&manager), "bob", "login", &config).await;
 
         let outcome =
-            dispatch_command(&mut manager, &persistence, "alice", "tell bob secret", &config).await;
+            dispatch_command(manager, "alice", "tell bob secret", &config).await;
         assert_eq!(outcome.private.len(), 1);
         assert_eq!(outcome.private[0].0, "bob");
         assert!(outcome.private[0].1.contains("secret"));
@@ -724,10 +826,10 @@ mod tests {
 
     #[tokio::test]
     async fn movement_syncs_room_channels() {
-        let (persistence, mut manager, config) = sample_manager().await;
-        dispatch_command(&mut manager, &persistence, "alice", "login", &config).await;
+        let (manager, config) = manager_arc().await;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
 
-        let outcome = dispatch_command(&mut manager, &persistence, "alice", "go north", &config).await;
+        let outcome = dispatch_command(manager, "alice", "go north", &config).await;
         let sync = outcome.channel_sync.expect("channel sync");
         assert!(sync.join.iter().any(|c| c.contains("north-001")));
         assert!(sync.part.iter().any(|c| c.contains("void-001")));

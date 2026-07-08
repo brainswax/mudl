@@ -58,11 +58,8 @@ where
 
     /// Handle a raw command line from an IRC nick (used by tests and direct adapters).
     pub async fn handle_input(&self, nick: &str, text: &str) -> anyhow::Result<DispatchOutcome> {
-        let outcome = {
-            let mut manager = self.manager.lock().await;
-            let persistence = manager.persistence().clone();
-            dispatch_command(&mut manager, &persistence, nick, text, &self.config).await
-        };
+        let outcome =
+            dispatch_command(Arc::clone(&self.manager), nick, text, &self.config).await;
         self.deliver(&outcome).await;
         Ok(outcome)
     }
@@ -158,11 +155,11 @@ where
         }
 
         if outcome.persist {
-            let mut manager = self.manager.lock().await;
-            let persistence = manager.persistence().clone();
-            if let Some(session) = manager.session_mut(&outcome.sender) {
-                let _ = session.persist_changes(&persistence).await;
-            }
+            let (world, persistence) = {
+                let manager = self.manager.lock().await;
+                (manager.world().clone(), manager.persistence().clone())
+            };
+            let _ = world.persist_changes(&persistence).await;
         }
     }
 }
@@ -286,17 +283,10 @@ mod tests {
         let transport_a = Arc::clone(&transport);
 
         let alice = tokio::spawn(async move {
-            let manager = bot_a.lock().await;
-            let persistence = manager.persistence().clone();
-            drop(manager);
-            let mut manager = bot_a.lock().await;
-            dispatch_command(&mut manager, &persistence, "alice", "look", &IrcConfig::default())
-                .await
+            dispatch_command(bot_a, "alice", "look", &IrcConfig::default()).await
         });
         let bob = tokio::spawn(async move {
-            let mut manager = bot_b.lock().await;
-            let persistence = manager.persistence().clone();
-            dispatch_command(&mut manager, &persistence, "bob", "look", &IrcConfig::default()).await
+            dispatch_command(bot_b, "bob", "look", &IrcConfig::default()).await
         });
 
         let (a_outcome, b_outcome) = tokio::join!(alice, bob);

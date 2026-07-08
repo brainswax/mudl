@@ -138,15 +138,31 @@ The bot joins room channels as players enter places and parts when they leave. P
 
 ## Concurrency
 
-- [`SessionManager`](../src/gateway/session_manager.rs) sits behind a `tokio::sync::Mutex`.
-- Each command acquires the manager lock, then [`Session::with_locked`](../src/repl/session.rs) holds the world mutex for the full command.
-- Disconnect persists per-player actor state and flushes world dirty objects (optimistic revision saves).
+Lock order is always **manager (brief) → per-session → world**. There is no re-entrant world lock on the same task.
+
+| Layer | Type | Scope |
+|-------|------|--------|
+| [`SessionManager`](../src/gateway/session_manager.rs) | `Arc<tokio::sync::Mutex<…>>` | Login, logout, registry — held only for lifecycle and nick lookup |
+| Per-connection session | `Arc<tokio::sync::Mutex<Session>>` | One mutex per IRC nick; different players can run commands in parallel |
+| [`SharedWorld`](../src/world/world_state.rs) | `Arc<tokio::sync::Mutex<WorldState>>` | Serializes in-memory graph mutations (movement, take, events) |
+
+IRC handlers use [`Session::with_locked_async`](../src/repl/session.rs) (`world.lock().await`). The sync REPL keeps [`with_locked`](../src/repl/session.rs) (`lock_blocking` with spin + yield).
+
+Persistence releases the world mutex before SQLite I/O so other connections can proceed. [`IrcBot::deliver`](../src/irc/bot.rs) flushes dirty objects via `SharedWorld::persist_changes` without holding the manager lock during disk writes.
+
+### Performance tips
+
+- Run load tests: `cargo test gateway::load`
+- Mock mode for local dev: `IRC_MOCK=1 cargo run --bin irc` (no TLS)
+- Contention shows up as parallel `look`/`say` waiting on the world lock — expected until per-room locking is added
+- Avoid long-running builder work over IRC; meta commands are RBAC-checked but deferred to the REPL
 
 ## Tests
 
 ```bash
 cargo test irc::
 cargo test gateway::multi_user
+cargo test gateway::load
 ```
 
 Coverage includes:

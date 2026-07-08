@@ -1,6 +1,9 @@
 //! Multi-user session lifecycle: login, active connections, disconnect persistence.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::mudl::AnatomyRegistry;
 use crate::object::ObjectId;
@@ -70,11 +73,14 @@ impl From<RegistryError> for LogoutError {
 }
 
 /// Hosts one shared world and many simultaneous player connections (IRC / REPL).
+///
+/// Each connection has its own [`AsyncMutex`] so IRC commands from different nicks
+/// can run concurrently; only the shared [`SharedWorld`] mutex serializes graph mutations.
 pub struct SessionManager<P> {
     world: SharedWorld,
     registry: ConnectionRegistry,
     persistence: P,
-    sessions: HashMap<String, Session>,
+    sessions: HashMap<String, Arc<AsyncMutex<Session>>>,
 }
 
 impl<P: Persistence + Clone> SessionManager<P> {
@@ -126,13 +132,20 @@ impl<P: Persistence + Clone> SessionManager<P> {
         self.sessions.keys().cloned().collect()
     }
 
-    pub fn session(&self, nick: &str) -> Option<&Session> {
-        self.sessions.get(&normalize_nick(nick))
+    /// Handle to a connection's session — lock independently of other nicks.
+    pub fn session_handle(&self, nick: &str) -> Option<Arc<AsyncMutex<Session>>> {
+        self.sessions.get(&normalize_nick(nick)).cloned()
     }
 
-    pub fn session_mut(&mut self, nick: &str) -> Option<&mut Session> {
-        let key = normalize_nick(nick);
-        self.sessions.get_mut(&key)
+    /// Run a closure against one connection (async).
+    pub async fn with_session<R>(
+        &self,
+        nick: &str,
+        f: impl FnOnce(&mut Session) -> R,
+    ) -> Option<R> {
+        let handle = self.session_handle(nick)?;
+        let mut guard = handle.lock().await;
+        Some(f(&mut guard))
     }
 
     /// Bind nick → actor, hydrate graph row, and store a connection [`Session`].
@@ -145,7 +158,8 @@ impl<P: Persistence + Clone> SessionManager<P> {
         let session = self
             .build_connection(nick, actor_id, bootstrap_location)
             .await?;
-        self.sessions.insert(normalize_nick(nick), session);
+        self.sessions
+            .insert(normalize_nick(nick), Arc::new(AsyncMutex::new(session)));
         Ok(())
     }
 
@@ -184,18 +198,23 @@ impl<P: Persistence + Clone> SessionManager<P> {
             return Err(LogoutError::NotConnected(key));
         }
 
-        let session = self
+        let handle = self
             .sessions
             .remove(&key)
             .ok_or_else(|| LogoutError::NotConnected(key.clone()))?;
 
-        match persist_connection_state(&self.world, &self.persistence, &session.player).await {
+        let player = {
+            let session = handle.lock().await;
+            session.player.clone()
+        };
+
+        match persist_connection_state(&self.world, &self.persistence, &player).await {
             Ok(()) => {
                 self.registry.unbind(nick)?;
                 Ok(())
             }
             Err(err) => {
-                self.sessions.insert(key, session);
+                self.sessions.insert(key, handle);
                 Err(LogoutError::PersistFailed(err.to_string()))
             }
         }
@@ -232,7 +251,7 @@ impl<P: Persistence + Clone> SessionManager<P> {
         }
 
         {
-            let guard = self.world.lock_blocking();
+            let guard = self.world.lock().await;
             if guard.object(&actor_id).is_none() {
                 return Err(LoginError::ActorNotFound(actor_id));
             }
@@ -241,7 +260,7 @@ impl<P: Persistence + Clone> SessionManager<P> {
         self.registry.bind(nick, actor_id.clone())?;
 
         let player = {
-            let guard = self.world.lock_blocking();
+            let guard = self.world.lock().await;
             PlayerSession::connect(actor_id, bootstrap_location, &guard)
         };
         Ok(Session::attach(self.world.clone(), player))
@@ -317,12 +336,16 @@ mod tests {
 
         assert_eq!(manager.connection_count(), 1);
         assert!(manager.is_connected("Alice"));
-        let session = manager.session("alice").unwrap();
-        assert_eq!(session.player_id().as_str(), "player:hero-001");
-        assert_eq!(
-            session.current_location().map(|id| id.as_str()),
-            Some("room:void-001")
-        );
+        let player_id = manager
+            .with_session("alice", |session| session.player_id().clone())
+            .await
+            .unwrap();
+        let location = manager
+            .with_session("alice", |session| session.current_location().cloned())
+            .await
+            .unwrap();
+        assert_eq!(player_id.as_str(), "player:hero-001");
+        assert_eq!(location.as_ref().map(|id| id.as_str()), Some("room:void-001"));
     }
 
     #[tokio::test]
@@ -358,24 +381,28 @@ mod tests {
             .await
             .unwrap();
 
-        {
-            let alice = manager.session_mut("alice").unwrap();
-            alice.go("north").unwrap();
-        }
+        manager
+            .with_session("alice", |session| session.go("north"))
+            .await
+            .unwrap()
+            .unwrap();
 
-        let bob = manager.session("bob").unwrap();
-        assert_eq!(
-            bob.with_world(|world, _| {
-                world
-                    .object(&ObjectId::new("player:hero-001"))
-                    .and_then(|p| p.location.as_ref().map(|id| id.as_str().to_string()))
-            }),
-            Some("room:north-001".to_string())
-        );
-        assert_eq!(
-            bob.current_location().map(|id| id.as_str()),
-            Some("room:void-001")
-        );
+        let hero1_loc = manager
+            .with_session("bob", |session| {
+                session.with_world(|world, _| {
+                    world
+                        .object(&ObjectId::new("player:hero-001"))
+                        .and_then(|p| p.location.as_ref().map(|id| id.as_str().to_string()))
+                })
+            })
+            .await
+            .unwrap();
+        let bob_loc = manager
+            .with_session("bob", |session| session.current_location().cloned())
+            .await
+            .unwrap();
+        assert_eq!(hero1_loc, Some("room:north-001".to_string()));
+        assert_eq!(bob_loc.as_ref().map(|id| id.as_str()), Some("room:void-001"));
     }
 
     #[tokio::test]
@@ -389,13 +416,14 @@ mod tests {
             .await
             .unwrap();
 
-        {
-            let session = manager.session_mut("alice").unwrap();
-            session.go("north").unwrap();
-            *session.player.prefs_mut() = PlayerPrefs {
-                look_flags: DisplayFlags::BRIEF,
-            };
-        }
+        manager
+            .with_session("alice", |session| {
+                session.go("north").unwrap();
+                *session.player.prefs_mut() = PlayerPrefs {
+                    look_flags: DisplayFlags::BRIEF,
+                };
+            })
+            .await;
 
         manager.logout("alice").await.unwrap();
         assert_eq!(manager.connection_count(), 0);
@@ -454,7 +482,11 @@ mod tests {
             .await
             .unwrap();
 
-        manager.session_mut("alice").unwrap().go("north").unwrap();
+        manager
+            .with_session("alice", |session| session.go("north"))
+            .await
+            .unwrap()
+            .unwrap();
         manager.logout_all().await.unwrap();
 
         assert_eq!(manager.connection_count(), 0);
