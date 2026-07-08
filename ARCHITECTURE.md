@@ -315,8 +315,8 @@ Lock order: **manager (brief) → per-session → world**. No re-entrant world l
 | **God-module bootstrap** | `world/bootstrap.rs` (~2.5k lines) | Hard to extend spawn phases or test in isolation | Split: `bootstrap/places.rs`, `bootstrap/creatures.rs`, `bootstrap/spawners.rs`, orchestrator only. |
 | **`event_script` growth** | `world/event_script.rs` (~1.3k lines) | Every new action needs Rust | Cap M4 actions; plan M9 sandboxed runtime. Short term: register actions via enum + `register_action` table driven from MUDL metadata. |
 | **Dual AI execution path** | `run_creature_behaviors()` after `execute_event(on_enter)` | Tactics (flee/attack/wander) still outside the bus; ordering is implicit in `Session::go` | Document ordering contract (done in room-entry diagram). Long term: optional `react` as subscriber or phase-3 of `on_enter`. |
-| **Inventory persist fallback** | `persist_inventory_dirty` → `persist_all` when dirty empty | Accidental full-graph writes if dirty not marked | Audit inventory/move paths; mark dirty in `MoveManager`; remove full-graph fallback in production builds. |
-| **Duplicate parsers** | `parse_behavior_line` in `npc_def.rs` and `spawner_def.rs` | Drift risk | Extract `mudl/behavior_line.rs` (listed in §4.4). |
+| ~~**Inventory persist fallback**~~ | ~~`persist_inventory_dirty` → `persist_all` when dirty empty~~ | **Done** — `persist` / `persist_changes` no-op when dirty empty; dead `persist_inventory_*` helpers removed. Inventory + `MoveManager` mark dirty via `InventoryContext` / `MoveContext`. | — |
+| ~~**Duplicate parsers**~~ | ~~`parse_behavior_line` in `npc_def.rs` and `spawner_def.rs`~~ | **Done** — shared [`mudl/behavior_line.rs`](src/mudl/behavior_line.rs). | — |
 
 #### P2 — Correctness / extensibility (can parallel content work)
 
@@ -385,7 +385,7 @@ Dedicated review: **[SECURITY.md](SECURITY.md)**. Summary for architects:
 | **P0** | **SEC-23** — single-writer ops policy or unified service process | Ops/M7 | Blocks REPL+IRC split-brain on one DB |
 | ~~**P0**~~ | ~~Extract `CommandDispatcher` + `CommandResult`~~ | **Done** | Shared player verbs; IRC/REPL adapters |
 | ~~**P0**~~ | ~~Generalize `IrcTransport` → `GameTransport` trait~~ | **Done** | Slack/WebSocket share deliver/join/leave semantics |
-| **P1** | M4 tail: `behavior_line` parser, persist fallback audit | M4 | Low risk; unblocks cleaner bootstrap |
+| ~~**P1**~~ | ~~M4 tail: `behavior_line` parser, persist fallback audit~~ | **Done** | Shared parser; incremental-only persist |
 | **P1** | IRC `attack` + `drop` via dispatcher | M7 | Needed for expansion playtests over IRC/Slack |
 | **P1** | Builder meta execution + undo/audit | M7 | Prerequisite for M10 LLM apply |
 | **P2** | Rate limiting on dispatch entry | M9 | Before public deployment |
@@ -426,7 +426,7 @@ Creatures now use a **single script surface** with split storage:
 | Issue | Location | Fix |
 |-------|----------|-----|
 | ~~`@trigger react attack` uses hardcoded damage 10~~ | ~~`event_script.rs`~~ | Done — `creature_attack_damage()` shared helper |
-| Duplicate `parse_behavior_line` | `npc_def.rs`, `spawner_def.rs` | Shared `mudl/behavior_line.rs` |
+| ~~Duplicate `parse_behavior_line`~~ | ~~`npc_def.rs`, `spawner_def.rs`~~ | **Done** — `mudl/behavior_line.rs` |
 | Legacy `npc_behaviors` fallback | `behavior.rs` | Remove after migration |
 | ~~`on_discovered` on generic objects~~ | ~~—~~ | Done — `world/discovery.rs`, `hidden_until_discovered` role |
 | ~~No central scheduler~~ | ~~spawner `periodic`, loot `timer`~~ | Done — `world/scheduler.rs`, room `scheduler_tick_on_enter` |
@@ -681,7 +681,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 |------|----------------|
 | `ObjectFactory::create*` | New object immediately (`save_object`) |
 | `create` / `create_at_location` / `@create` | Object + updated `location` |
-| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Dirty-marked objects via `Session::persist_changes`; `persist_inventory_dirty` still falls back to `persist_all` if dirty set empty (see P1 debt) |
+| `take`, `drop`, `put`, `remove`, `wield`, `wear` | Dirty-marked objects via `Session::persist_changes`; empty dirty set is a no-op (no full-graph fallback) |
 | `go` | Player `location` |
 | `@set`, `@unset`, `save` | Target object |
 | Bootstrap | World areas, exits, default player (idempotent) |
@@ -690,7 +690,7 @@ All world state is stored in SQLite as JSON-serialized `Object` rows plus an ID 
 
 **Roundtrip guarantee (M1)**: `milestone1_complex_scene_persist_reload_identical` builds a post-play graph (worn container, nested stack, two-handed wield, split ground piles), runs `persist_all` → `hydrate_world`, and asserts byte-identical `Object` equality for every node plus reference integrity across the graph.
 
-**Incremental saves**: `DirtyTracker` marks touched IDs; REPL uses `Session::persist_changes` → `persist_dirty` (batch transactional save + revision retry on conflict). Remaining risk: `persist_inventory_dirty` full-graph fallback when dirty is empty — audit move/inventory paths before multi-user scale.
+**Incremental saves**: `DirtyTracker` marks touched IDs; REPL/IRC use `Session::persist_changes` → `persist_dirty` (batch transactional save + revision retry on conflict). `persist` with an empty dirty set is a no-op; use `persist_all` only for intentional full-graph flushes.
 
 **Optimistic locking**: Each save expects the in-memory `revision` to match SQLite. On `RevisionConflict`, `persist_dirty` / `save_object_with_retry` reload the row, refresh `revision`, and retry (bounded). New inserts start at revision 1.
 

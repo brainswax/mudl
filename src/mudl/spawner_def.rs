@@ -1,5 +1,6 @@
 //! Creature spawner definitions — weighted templates attached to locations.
 
+use super::behavior_line::parse_behavior_line;
 use super::npc_def::NpcBehaviorDef;
 use super::trigger_def::parse_trigger_line;
 use super::TriggerDef;
@@ -65,22 +66,6 @@ pub struct SpawnerDef {
 
 fn strip_comment(line: &str) -> &str {
     line.split(';').next().unwrap_or(line).trim()
-}
-
-fn parse_behavior_line(rest: &str) -> Option<NpcBehaviorDef> {
-    let mut parts = rest.split_whitespace();
-    let event = parts.next()?.to_string();
-    let action = parts.next()?.to_string();
-    let text = parts.collect::<Vec<_>>().join(" ").trim().to_string();
-    if text.is_empty() {
-        return None;
-    }
-    Some(NpcBehaviorDef {
-        event,
-        action,
-        text,
-        react: None,
-    })
 }
 
 /// Parse `@spawn-template`, `@spawner`, and related blocks from MUDL source.
@@ -258,6 +243,20 @@ mod tests {
         assert_eq!(spawners[0].location, "haunted-moon");
         assert_eq!(spawners[0].entries.len(), 2);
         assert_eq!(spawners[0].entries[0].weight, 3);
+    }
+
+    #[test]
+    fn spawn_template_parses_react_behavior() {
+        let content = r#"
+@spawn-template lurker
+  creature=human
+  @behavior on_enter attack
+@end
+"#;
+        let (templates, _) = parse_spawner_file(content);
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].behaviors.len(), 1);
+        assert_eq!(templates[0].behaviors[0].react, Some(crate::mudl::CreatureReact::Attack));
     }
 
     #[test]

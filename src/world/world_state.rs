@@ -174,18 +174,12 @@ impl SharedWorld {
         guard.flush_dirty(persistence).await
     }
 
-    /// Persist dirty objects, or the full graph when the dirty set is empty.
+    /// Persist dirty objects only. No-op when the dirty set is empty.
+    ///
+    /// Use [`Self::persist_all`] when an intentional full-graph flush is required.
     pub async fn persist<P: Persistence>(&self, persistence: &P) -> anyhow::Result<()> {
-        let dirty_empty = {
-            let guard = self.lock().await;
-            guard.dirty().is_empty()
-        };
-        if dirty_empty {
-            self.persist_all(persistence).await
-        } else {
-            self.persist_changes(persistence).await?;
-            Ok(())
-        }
+        self.persist_changes(persistence).await?;
+        Ok(())
     }
 
     /// Persist every object in one transactional batch (mutex released during I/O).
@@ -355,12 +349,11 @@ impl WorldState {
         persist_dirty(persistence, &mut self.objects, &mut self.dirty).await
     }
 
+    /// Persist dirty objects only. No-op when the dirty set is empty.
+    ///
+    /// Use [`Self::persist_all`] when an intentional full-graph flush is required.
     pub async fn persist<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
-        if self.dirty.is_empty() {
-            persist_all(persistence, &mut self.objects).await?;
-        } else {
-            self.flush_dirty(persistence).await?;
-        }
+        self.flush_dirty(persistence).await?;
         Ok(())
     }
 
@@ -430,6 +423,24 @@ mod tests {
             "second lock should wait for the first writer"
         );
         writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn persist_empty_dirty_is_noop() {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let mut objects = HashMap::new();
+        let a = sample("item:a-001");
+        objects.insert(a.id.clone(), a.clone());
+        persistence.save_object(&a).await.unwrap();
+
+        let world = WorldState::with_objects(AnatomyRegistry::default(), objects);
+        let shared = Arc::new(world.into_shared());
+
+        let saved = shared.persist_changes(&persistence).await.unwrap();
+        assert_eq!(saved, 0);
+
+        let loaded = persistence.load_object(&a.id).await.unwrap().unwrap();
+        assert_eq!(loaded.revision, 1);
     }
 
     #[tokio::test]

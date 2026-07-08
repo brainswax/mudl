@@ -429,8 +429,10 @@ impl Session {
         self.world.persist_changes(persistence).await
     }
 
+    /// Persist dirty objects only. No-op when nothing is marked dirty.
     pub async fn persist<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
-        self.world.persist(persistence).await
+        self.persist_changes(persistence).await?;
+        Ok(())
     }
 
     pub async fn persist_all<P: Persistence>(&mut self, persistence: &P) -> anyhow::Result<()> {
@@ -1078,6 +1080,13 @@ mod tests {
         assert_eq!(cached.revision, saved.revision);
         assert_eq!(cached.name, "Renamed");
         assert!(!session.is_dirty(&hero_id));
+    }
+
+    #[tokio::test]
+    async fn persist_noop_when_nothing_dirty() {
+        let (persistence, mut session) = sample_session().await;
+        session.persist(&persistence).await.unwrap();
+        assert_eq!(session.dirty_len(), 0);
     }
 
     #[tokio::test]

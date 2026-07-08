@@ -38,9 +38,7 @@ use crate::world::DispatchStack;
 use crate::mudl::{load_module, AnatomyRegistry, LoadedUniverse, MudlRoleProps};
 use crate::object::{ContainerSpec, Object, ObjectFactory, ObjectId, WearableSpec};
 use crate::persistence::Persistence;
-use crate::world::{
-    bootstrap_world, bundle_module, persist_all, persist_dirty, DirtyTracker, ModuleManifest,
-};
+use crate::world::{bootstrap_world, bundle_module, ModuleManifest};
 
 /// Load the active MUDL universe from `MUDL_MODULE` / `MUDL_UNIVERSE` env or default.
 pub fn load_active_universe() -> anyhow::Result<LoadedUniverse> {
@@ -471,28 +469,6 @@ pub fn take_from_location(
     take_item(&mut ctx, item_name)
 }
 
-/// Persist inventory-related changes (player + all touched objects).
-pub async fn persist_inventory_changes<P: Persistence>(
-    persistence: &P,
-    objects: &mut HashMap<ObjectId, Object>,
-) -> anyhow::Result<()> {
-    persist_all(persistence, objects).await
-}
-
-/// Persist only dirty objects; falls back to full persist when tracker is empty.
-pub async fn persist_inventory_dirty<P: Persistence>(
-    persistence: &P,
-    objects: &mut HashMap<ObjectId, Object>,
-    dirty: &mut DirtyTracker,
-) -> anyhow::Result<()> {
-    if dirty.is_empty() {
-        persist_all(persistence, objects).await?;
-    } else {
-        persist_dirty(persistence, objects, dirty).await?;
-    }
-    Ok(())
-}
-
 /// Soft-delete an object by ID (wizard). Object remains in the database.
 pub async fn soft_delete_object<P: Persistence>(
     persistence: &P,
@@ -804,7 +780,9 @@ mod tests {
 
         let mut objects = hydrate_world(&persistence).await.unwrap();
         take_from_location(&owner, Some(&area_id), "boots", &mut objects, &anatomy).unwrap();
-        persist_all(&persistence, &mut objects).await.unwrap();
+        crate::world::persist_all(&persistence, &mut objects)
+            .await
+            .unwrap();
 
         let restored = hydrate_world(&persistence).await.unwrap();
         let player = restored.get(&owner).unwrap();

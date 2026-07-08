@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use super::behavior_line::parse_behavior_line;
 use super::trigger_def::parse_trigger_line;
 use super::CreatureReact;
 use super::TriggerDef;
@@ -31,42 +32,6 @@ pub struct NpcDef {
 
 fn strip_comment(line: &str) -> &str {
     line.split(';').next().unwrap_or(line).trim()
-}
-
-fn parse_behavior_line(rest: &str) -> Option<NpcBehaviorDef> {
-    let mut parts = rest.split_whitespace();
-    let event = parts.next()?.to_string();
-    let action = parts.next()?.to_string();
-    let text = parts.collect::<Vec<_>>().join(" ").trim().to_string();
-    if action == "react" && !text.is_empty() {
-        return Some(NpcBehaviorDef {
-            event,
-            action: String::new(),
-            text: String::new(),
-            react: Some(CreatureReact::parse(&text)),
-        });
-    }
-    if text.is_empty() && matches!(event.as_str(), "on_discovered" | "on_enter") {
-        let react = CreatureReact::parse(&action);
-        if react != CreatureReact::Ignore || action.eq_ignore_ascii_case("ignore") {
-            return Some(NpcBehaviorDef {
-                event,
-                action: String::new(),
-                text: String::new(),
-                react: Some(react),
-            });
-        }
-        return None;
-    }
-    if text.is_empty() {
-        return None;
-    }
-    Some(NpcBehaviorDef {
-        event,
-        action,
-        text,
-        react: None,
-    })
 }
 
 /// Parse `@npc` blocks from MUDL source.
