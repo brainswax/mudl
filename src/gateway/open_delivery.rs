@@ -129,6 +129,7 @@ pub async fn is_open_channel_command<P: Persistence + Clone>(
     manager: &SessionManager<P>,
     actor_id: &str,
     line: &CommandLine,
+    auto_login: bool,
 ) -> bool {
     let logged_in = manager.is_connected(actor_id);
     let exit_index = if logged_in {
@@ -141,7 +142,7 @@ pub async fn is_open_channel_command<P: Persistence + Clone>(
     } else {
         None
     };
-    is_open_channel_game_command(line, logged_in, exit_index.as_ref())
+    is_open_channel_game_command(line, logged_in, exit_index.as_ref(), auto_login)
 }
 
 #[cfg(test)]

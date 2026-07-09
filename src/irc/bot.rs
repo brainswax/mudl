@@ -173,7 +173,13 @@ where
 
         let line = parse_command_line(trimmed);
         let manager = self.manager.lock().await;
-        let is_command = is_open_channel_command(&manager, nick, &line).await;
+        let is_command = is_open_channel_command(
+            &manager,
+            nick,
+            &line,
+            self.config.login_auth.auto_login,
+        )
+        .await;
         drop(manager);
 
         if is_command {
@@ -377,6 +383,52 @@ mod tests {
         config.play_mode = crate::gateway::PlayMode::Open;
         let bot = IrcBot::new(manager, Arc::clone(&transport), config);
         (bot, transport)
+    }
+
+    async fn open_bot_fixture_with_auto_login() -> (
+        IrcBot<SqlitePersistence, MockTransport>,
+        Arc<MockTransport>,
+    ) {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let room = ObjectId::new("room:void-001");
+        let mut hero = with_login_name(bare("player:hero-001", "Alice"), "alice");
+        hero.location = Some(room.clone());
+        let mut place = bare("room:void-001", "The Void");
+        place.set_property_string("description", "A featureless void stretches in every direction.");
+        persistence.save_object(&hero).await.unwrap();
+        persistence.save_object(&place).await.unwrap();
+
+        let manager = SessionManager::open(persistence, crate::mudl::AnatomyRegistry::default())
+            .await
+            .unwrap();
+        let transport = Arc::new(MockTransport::new());
+        let mut config = IrcConfig::default();
+        config.play_mode = crate::gateway::PlayMode::Open;
+        config.login_auth.auto_login = true;
+        config.world_channel = "#mudl".to_string();
+        let bot = IrcBot::new(manager, Arc::clone(&transport), config);
+        (bot, transport)
+    }
+
+    #[tokio::test]
+    async fn open_mode_auto_login_processes_first_channel_command() {
+        let (bot, transport) = open_bot_fixture_with_auto_login().await;
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "alice".to_string(),
+            account: None,
+            target: "#mudl".to_string(),
+            text: "look".to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert!(bot.manager().lock().await.is_connected("alice"));
+        assert!(transport.channel_messages("#mudl").iter().any(|line| {
+            line.contains("Alice @ The Void")
+                && (line.contains("void") || line.contains("Void") || line.contains("exit"))
+        }));
     }
 
     #[tokio::test]

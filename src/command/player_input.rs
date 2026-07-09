@@ -54,16 +54,28 @@ pub fn is_recognized_player_command(line: &CommandLine, exit_index: Option<&Exit
     movement_from_line(&line.verb, &[], exit_index).is_some()
 }
 
+/// Whether a logged-out line should be dispatched when [`LoginAuthPolicy::auto_login`] is enabled.
+///
+/// Used by open-channel routing so the first player command is not dropped before
+/// [`attempt_auto_login`](crate::gateway::attempt_auto_login) runs in dispatch.
+pub fn is_auto_login_channel_command(line: &CommandLine) -> bool {
+    is_known_player_verb(&line.verb) || is_recognized_player_command(line, None)
+}
+
 /// Whether an open-channel line should run through command dispatch (vs. plain chat).
 pub fn is_open_channel_game_command(
     line: &CommandLine,
     logged_in: bool,
     exit_index: Option<&ExitIndex>,
+    auto_login: bool,
 ) -> bool {
     if line.verb.is_empty() || line.is_meta {
         return false;
     }
     if !logged_in {
+        if auto_login && is_auto_login_channel_command(line) {
+            return true;
+        }
         return is_logged_out_channel_verb(&line.verb);
     }
     is_recognized_player_command(line, exit_index)
@@ -110,7 +122,7 @@ mod tests {
     fn free_chat_is_not_a_game_command() {
         let line = parse_command_line("hello everyone");
         assert!(!is_recognized_player_command(&line, None));
-        assert!(!is_open_channel_game_command(&line, true, None));
+        assert!(!is_open_channel_game_command(&line, true, None, false));
     }
 
     #[test]
@@ -123,11 +135,11 @@ mod tests {
     fn look_self_and_open_are_game_commands() {
         let look_self = parse_command_line("look self");
         assert!(is_recognized_player_command(&look_self, None));
-        assert!(is_open_channel_game_command(&look_self, true, None));
+        assert!(is_open_channel_game_command(&look_self, true, None, false));
 
         let open = parse_command_line("open chest");
         assert!(is_recognized_player_command(&open, None));
-        assert!(is_open_channel_game_command(&open, true, None));
+        assert!(is_open_channel_game_command(&open, true, None, false));
     }
 
     #[test]
@@ -151,12 +163,23 @@ mod tests {
     #[test]
     fn logged_out_login_is_recognized() {
         let line = parse_command_line("login");
-        assert!(is_open_channel_game_command(&line, false, None));
+        assert!(is_open_channel_game_command(&line, false, None, false));
     }
 
     #[test]
     fn logged_out_chatter_is_not_recognized() {
         let line = parse_command_line("hey there");
-        assert!(!is_open_channel_game_command(&line, false, None));
+        assert!(!is_open_channel_game_command(&line, false, None, false));
+    }
+
+    #[test]
+    fn auto_login_recognizes_player_commands_while_logged_out() {
+        let look = parse_command_line("look");
+        assert!(is_auto_login_channel_command(&look));
+        assert!(is_open_channel_game_command(&look, false, None, true));
+
+        let chat = parse_command_line("hey everyone");
+        assert!(!is_auto_login_channel_command(&chat));
+        assert!(!is_open_channel_game_command(&chat, false, None, true));
     }
 }

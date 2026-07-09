@@ -303,6 +303,34 @@ fn split_help_lines(text: &str) -> Vec<String> {
     text.lines().map(str::to_string).collect()
 }
 
+async fn dispatch_login_after_auto_register<P: Persistence + Clone>(
+    manager: &mut SessionManager<P>,
+    nick: &str,
+    sender: String,
+    config: &IrcConfig,
+) -> DispatchOutcome {
+    let room_id = if let Some(handle) = manager.session_handle(nick) {
+        let session = handle.lock().await;
+        session.current_location().cloned()
+    } else {
+        None
+    };
+    DispatchOutcome {
+        sender: sender.clone(),
+        to_sender: vec![
+            "Welcome to MUDL — you're already registered. Type 'help' for commands."
+                .to_string(),
+        ],
+        channel_sync: Some(ChannelSync {
+            nick: sender,
+            join: login_channel_joins(config, room_id.as_ref()),
+            part: Vec::new(),
+        }),
+        persist: true,
+        ..Default::default()
+    }
+}
+
 async fn dispatch_register<P: Persistence + Clone>(
     manager: &mut SessionManager<P>,
     persistence: &P,
@@ -379,7 +407,7 @@ async fn dispatch_register<P: Persistence + Clone>(
                         .await
                         .is_some()
                 {
-                    return dispatch_login(manager, persistence, nick, &[], sender, config).await;
+                    return dispatch_login_after_auto_register(manager, nick, sender, config).await;
                 }
             }
             DispatchOutcome {

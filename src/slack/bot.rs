@@ -156,7 +156,13 @@ where
 
         let line = parse_command_line(trimmed);
         let manager = self.manager.lock().await;
-        let is_command = is_open_channel_command(&manager, &message.user, &line).await;
+        let is_command = is_open_channel_command(
+            &manager,
+            &message.user,
+            &line,
+            self.config.login_auth.auto_login,
+        )
+        .await;
         drop(manager);
 
         if is_command {
