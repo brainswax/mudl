@@ -143,6 +143,13 @@ pub fn format_tell_sent(to: &str, text: &str) -> String {
     )
 }
 
+/// Plain shared-channel chat in open mode (no OOC prefix).
+pub fn format_open_chat(speaker: &str, text: &str) -> String {
+    let speaker = escape_mrkdwn(speaker.trim());
+    let body = escape_mrkdwn(&sanitize_inline(text));
+    format!("*{speaker}:* {body}")
+}
+
 /// Out-of-character speech on the world channel.
 pub fn format_ooc(speaker: &str, text: &str) -> String {
     let speaker = escape_mrkdwn(speaker.trim());
@@ -180,9 +187,10 @@ fn is_ooc_line(text: &str) -> bool {
 }
 
 fn is_in_character_line(text: &str) -> bool {
-    (text.contains(" says, \"") || text.contains(" says, “"))
-        && !text.contains(" tells you, ")
-        && !text.contains(" whispers, ")
+    let t = text.trim();
+    (t.contains(" says, \"") || t.contains(" says, “") || t.contains(" @ "))
+        && !t.contains(" tells you, ")
+        && !t.contains(" whispers, ")
 }
 
 fn is_private_tell_line(text: &str) -> bool {

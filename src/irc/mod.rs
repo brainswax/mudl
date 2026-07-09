@@ -24,7 +24,10 @@ pub use capability::{
     registration_commands, registration_error_message, IRCV3_CAPABILITIES,
 };
 pub use connect::log_outbound_command;
-pub use channels::{classify_target, room_channel_name, ChannelTarget};
+pub use channels::{
+    classify_target, ic_join_notice, login_channel_joins, logout_channel_parts, room_channel_name,
+    shared_ic_channel, speech_channel, ChannelTarget,
+};
 pub use config::IrcConfig;
 pub use connect::{connect, IrcConnection};
 pub use dispatch::{dispatch_command, DispatchOutcome};
@@ -43,7 +46,14 @@ pub use message::{
     IrcMessage, Ircv3Tags,
 };
 pub use nick::{sanitize_irc_nick, sanitize_nick_display, sanitize_ooc_text, MAX_OOC_TEXT_LEN};
-pub use social::{format_emote, format_ooc, format_say, format_tell, format_tell_sent};
-pub use visibility::{players_in_room, players_in_room_async, resolve_connected_nick, CoLocatedPlayer};
+pub use social::{
+    format_arrival, format_departure, format_emote, format_ooc, format_say, format_tell,
+    format_tell_sent,
+};
+pub use visibility::{
+    all_connected_nicks, connected_speech_audience, connected_speech_audience_async,
+    irc_look_scope, players_in_room, players_in_room_async, resolve_connected_nick,
+    CoLocatedPlayer,
+};
 pub use crate::transport::{GameTransport, MockTransport, OutgoingAction};
 pub use transport::{IrcTransport, OutgoingIrc, StreamTransport, TcpIrcClient, TcpTransport};

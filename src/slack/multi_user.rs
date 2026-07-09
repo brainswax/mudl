@@ -1,14 +1,14 @@
 //! Multi-user group play — room visibility, private tells, and channel fan-out.
 
-use crate::gateway::SessionManager;
-use crate::irc::players_in_room_async;
+use crate::gateway::{PlayMode, SessionManager};
+use crate::irc::connected_speech_audience_async;
 use crate::object::ObjectId;
 use crate::persistence::Persistence;
 
 use super::config::SlackConfig;
 use super::dispatch::{DispatchOutcome, RoomDelivery};
 use super::format::{format_arrival, format_departure};
-use super::channels::room_presence;
+use super::channels::speech_presence;
 
 /// Resolve a connected player's in-world display name from their Slack user id.
 pub async fn speaker_display_name_async<P: Persistence + Clone>(
@@ -45,35 +45,46 @@ pub async fn append_movement_visibility<P: Persistence + Clone + Send + Sync>(
     let departure = format_departure(&speaker);
     let arrival = format_arrival(&speaker);
 
-    let old_audience: Vec<String> = players_in_room_async(manager, old_room, Some(user_id))
-        .await
-        .into_iter()
-        .map(|p| p.nick)
-        .collect();
-    if !old_audience.is_empty() {
-        outcome.room_audience.push(RoomDelivery {
-            audience: old_audience,
-            lines: vec![departure.clone()],
-        });
-    }
-    outcome
-        .channel
-        .push((room_presence(config, old_room), departure));
+    let shared = speech_presence(config, new_room);
+    match config.play_mode {
+        PlayMode::Story => {
+            let old_audience = connected_speech_audience_async(
+                manager,
+                old_room,
+                Some(user_id),
+                config.play_mode,
+            )
+            .await;
+            if !old_audience.is_empty() {
+                outcome.room_audience.push(RoomDelivery {
+                    audience: old_audience,
+                    lines: vec![departure.clone()],
+                });
+            }
+            outcome
+                .channel
+                .push((speech_presence(config, old_room), departure));
 
-    let new_audience: Vec<String> = players_in_room_async(manager, new_room, Some(user_id))
-        .await
-        .into_iter()
-        .map(|p| p.nick)
-        .collect();
-    if !new_audience.is_empty() {
-        outcome.room_audience.push(RoomDelivery {
-            audience: new_audience,
-            lines: vec![arrival.clone()],
-        });
+            let new_audience = connected_speech_audience_async(
+                manager,
+                new_room,
+                Some(user_id),
+                config.play_mode,
+            )
+            .await;
+            if !new_audience.is_empty() {
+                outcome.room_audience.push(RoomDelivery {
+                    audience: new_audience,
+                    lines: vec![arrival.clone()],
+                });
+            }
+            outcome.channel.push((shared, arrival));
+        }
+        PlayMode::Open => {
+            outcome.channel.push((shared.clone(), departure));
+            outcome.channel.push((shared, arrival));
+        }
     }
-    outcome
-        .channel
-        .push((room_presence(config, new_room), arrival));
 }
 
 /// Whether `text` is a private tell line (not broadcast to room channels).

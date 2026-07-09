@@ -13,7 +13,9 @@
 //! `Gateway` type — use `SessionManager` for all multi-connection entry points.
 
 mod login_auth;
+mod open_delivery;
 mod persistence;
+mod play_mode;
 mod rate_limit;
 mod rbac;
 mod registry;
@@ -37,7 +39,12 @@ pub use login_auth::{
     parse_login_args, resolve_player_by_token, resolve_player_for_login, verify_login,
     LoginAuthError, LoginAuthPolicy, LoginRequest, ParsedLoginArgs, LOGIN_TOKEN_PROPERTY,
 };
+pub use open_delivery::{
+    actor_place_context, format_open_chat, format_open_context_post, is_open_private_actor_line,
+    open_channel_broadcast_body, transport_look_scope,
+};
 pub use persistence::{hydrate_actor, persist_connection_state};
+pub use play_mode::PlayMode;
 pub use rbac::{
     actor_has_tier, actor_tier, authorize_meta_command, authorize_plain_command,
     required_tier_for_meta_verb, required_tier_for_plain_command, tier_denied_message, ActorTier,

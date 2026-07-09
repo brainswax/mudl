@@ -3,17 +3,17 @@
 use std::collections::HashMap;
 
 use crate::display::ResolveScope;
-use crate::gateway::normalize_nick;
-use crate::gateway::SessionManager;
+use crate::gateway::{normalize_nick, PlayMode, SessionManager};
 use crate::object::ObjectId;
 use crate::persistence::Persistence;
 
-/// Scope for IRC player `look` — current room only (SEC-60).
+/// Scope for IRC player `look` in story mode — current room only (SEC-60).
 ///
 /// Builder `@look` over IRC remains deferred; REPL wizard `@look` uses [`ResolveScope::General`].
 pub const IRC_LOOK_SCOPE: ResolveScope = ResolveScope::RoomOnly;
 
-pub fn irc_look_scope() -> ResolveScope {
+pub fn irc_look_scope(mode: PlayMode) -> ResolveScope {
+    let _ = mode;
     IRC_LOOK_SCOPE
 }
 
@@ -84,6 +84,52 @@ pub fn players_in_room<P: Persistence + Clone>(
                 actor_id: session.player_id().clone(),
             })
         })
+        .collect()
+}
+
+/// Connected nicks for speech/movement fan-out, excluding an optional speaker.
+pub fn connected_speech_audience<P: Persistence + Clone>(
+    manager: &SessionManager<P>,
+    room_id: &ObjectId,
+    exclude_nick: Option<&str>,
+    mode: PlayMode,
+) -> Vec<String> {
+    match mode {
+        PlayMode::Story => players_in_room(manager, room_id, exclude_nick)
+            .into_iter()
+            .map(|p| p.nick)
+            .collect(),
+        PlayMode::Open => all_connected_nicks(manager, exclude_nick),
+    }
+}
+
+/// Async variant of [`connected_speech_audience`].
+pub async fn connected_speech_audience_async<P: Persistence + Clone>(
+    manager: &SessionManager<P>,
+    room_id: &ObjectId,
+    exclude_nick: Option<&str>,
+    mode: PlayMode,
+) -> Vec<String> {
+    match mode {
+        PlayMode::Story => players_in_room_async(manager, room_id, exclude_nick)
+            .await
+            .into_iter()
+            .map(|p| p.nick)
+            .collect(),
+        PlayMode::Open => all_connected_nicks(manager, exclude_nick),
+    }
+}
+
+/// All connected transport identities except an optional speaker.
+pub fn all_connected_nicks<P: Persistence + Clone>(
+    manager: &SessionManager<P>,
+    exclude_nick: Option<&str>,
+) -> Vec<String> {
+    let exclude = exclude_nick.map(normalize_nick);
+    manager
+        .connected_nicks()
+        .into_iter()
+        .filter(|nick| exclude.as_deref() != Some(nick.as_str()))
         .collect()
 }
 
@@ -190,8 +236,22 @@ mod tests {
     }
 
     #[test]
-    fn irc_look_scope_is_room_only() {
-        assert_eq!(irc_look_scope(), ResolveScope::RoomOnly);
+    fn irc_look_scope_follows_play_mode() {
+        assert_eq!(irc_look_scope(PlayMode::Story), ResolveScope::RoomOnly);
+        assert_eq!(irc_look_scope(PlayMode::Open), ResolveScope::RoomOnly);
+    }
+
+    #[tokio::test]
+    async fn open_mode_speech_audience_is_all_connected() {
+        let manager = manager_with_two_players().await;
+        let room = ObjectId::new("room:void-001");
+        let audience =
+            connected_speech_audience(&manager, &room, Some("alice"), PlayMode::Open);
+        let mut expected = vec!["bob".to_string(), "scout".to_string()];
+        let mut actual = audience;
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]

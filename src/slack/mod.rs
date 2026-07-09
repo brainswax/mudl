@@ -21,17 +21,18 @@ mod visibility;
 
 pub use bot::SlackBot;
 pub use channels::{
-    classify_channel, room_channel_name, room_join_notice, room_presence, room_routing_mode,
-    room_thread_presence, ChannelTarget, RoomRoutingMode,
+    classify_channel, ic_join_notice, login_presence_joins, logout_presence_parts,
+    room_channel_name, room_join_notice, room_presence, room_routing_mode, room_thread_presence,
+    shared_ic_presence, speech_presence, ChannelTarget, RoomRoutingMode,
 };
 pub use dispatch::{
     dispatch_command, slack_help_text, DispatchOutcome, PresenceSync, RoomDelivery,
 };
 pub use config::SlackConfig;
 pub use format::{
-    classify_slack_output, escape_mrkdwn, format_emote, format_help_text, format_ooc,
-    format_say, format_slack_message, format_tell, format_tell_sent, SlackFormattedMessage,
-    SlackOutputKind,
+    classify_slack_output, escape_mrkdwn, format_emote, format_help_text, format_open_chat,
+    format_ooc, format_say, format_slack_message, format_tell, format_tell_sent,
+    SlackFormattedMessage, SlackOutputKind,
 };
 pub use events::{
     classify_slack_channel, classify_slack_channel_with_rooms, parse_events_payload,
@@ -52,6 +53,9 @@ pub use transport::{
     OutgoingSlack, SlackFormattedDelivery, SlackTransport, SlackWebTransport,
 };
 pub use verify::verify_slack_signature;
-pub use visibility::{resolve_connected_user_async, slack_look_scope, SLACK_LOOK_SCOPE};
+pub use visibility::{
+    all_connected_nicks, connected_speech_audience_async, resolve_connected_user_async,
+    slack_look_scope, SLACK_LOOK_SCOPE,
+};
 pub use crate::irc::CoLocatedPlayer;
 pub use crate::transport::{GameTransport, MockTransport};

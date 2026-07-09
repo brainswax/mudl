@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::gateway::{RateLimitKind, SessionManager};
+use crate::command::parse_command_line;
+use crate::gateway::{format_open_chat, is_open_private_actor_line, RateLimitKind, SessionManager};
 use crate::persistence::Persistence;
 
 use super::channels::{classify_target, ChannelTarget};
@@ -137,6 +138,9 @@ where
         }
 
         match classify_target(target, &self.config) {
+            ChannelTarget::World if self.config.play_mode.is_open() => {
+                self.handle_open_channel_message(&nick, &display_nick, text).await
+            }
             ChannelTarget::World => self.handle_world_ooc(&nick, &display_nick, text).await,
             ChannelTarget::Bot | ChannelTarget::Private(_) => {
                 self.handle_input(&nick, text).await?;
@@ -152,6 +156,45 @@ where
                 Ok(())
             }
         }
+    }
+
+    async fn handle_open_channel_message(
+        &self,
+        nick: &str,
+        display_nick: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+
+        let line = parse_command_line(trimmed);
+        if line.verb.is_empty() {
+            let manager = self.manager.lock().await;
+            if !manager.is_connected(nick) {
+                self.transport
+                    .send_notice(nick, "You are not logged in. Message the bot with 'login'.")
+                    .await;
+                return Ok(());
+            }
+            if let Err(denied) = manager.check_rate_limit(nick, RateLimitKind::Ooc) {
+                self.transport
+                    .send_notice(nick, &manager.rate_limit_denial_message(denied.kind))
+                    .await;
+                return Ok(());
+            }
+            drop(manager);
+
+            let chat = format_open_chat(display_nick, trimmed);
+            self.transport
+                .send_direct(&self.config.world_channel, &chat)
+                .await;
+            return Ok(());
+        }
+
+        self.handle_input(nick, trimmed).await?;
+        Ok(())
     }
 
     async fn handle_world_ooc(
@@ -181,15 +224,19 @@ where
         }
 
         let line = format_ooc(display_nick, trimmed);
-        let nicks = manager.connected_nicks();
         drop(manager);
 
         self.transport
             .send_direct(&self.config.world_channel, &line)
             .await;
-        for recipient in nicks {
-            if recipient != nick {
-                self.transport.send_direct(&recipient, &line).await;
+
+        // Story mode also relays OOC to connected players via DM; open mode keeps it in-channel.
+        if self.config.play_mode.is_story() {
+            let nicks = self.manager.lock().await.connected_nicks();
+            for recipient in nicks {
+                if recipient != nick {
+                    self.transport.send_direct(&recipient, &line).await;
+                }
             }
         }
         Ok(())
@@ -205,7 +252,9 @@ where
 
     async fn deliver(&self, outcome: &DispatchOutcome) {
         for line in &outcome.to_sender {
-            self.send_direct_lines(&outcome.sender, line).await;
+            if self.config.play_mode.is_story() || is_open_private_actor_line(line) {
+                self.send_direct_lines(&outcome.sender, line).await;
+            }
         }
 
         for (nick, line) in &outcome.private {
@@ -271,6 +320,11 @@ mod tests {
     use crate::persistence::SqlitePersistence;
     use std::collections::HashMap;
 
+    fn with_login_name(mut hero: Object, login: &str) -> Object {
+        hero.set_property_string(crate::object::LOGIN_NAME_PROPERTY, login);
+        hero
+    }
+
     fn bare(id: &str, name: &str) -> Object {
         Object {
             id: ObjectId::new(id),
@@ -297,9 +351,9 @@ mod tests {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let room = ObjectId::new("room:void-001");
 
-        let mut hero1 = bare("player:hero-001", "Alice");
+        let mut hero1 = with_login_name(bare("player:hero-001", "Alice"), "alice");
         hero1.location = Some(room.clone());
-        let mut hero2 = bare("player:hero-002", "Bob");
+        let mut hero2 = with_login_name(bare("player:hero-002", "Bob"), "bob");
         hero2.location = Some(room);
 
         let mut place = bare("room:void-001", "The Void");
@@ -405,7 +459,7 @@ mod tests {
     async fn ooc_flood_is_rate_limited() {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let room = ObjectId::new("room:void-001");
-        let mut hero = bare("player:hero-001", "Alice");
+        let mut hero = with_login_name(bare("player:hero-001", "Alice"), "alice");
         hero.location = Some(room.clone());
         let place = bare("room:void-001", "The Void");
         persistence.save_object(&hero).await.unwrap();
@@ -543,7 +597,7 @@ mod tests {
     async fn require_account_tag_blocks_unidentified_privmsg() {
         let persistence = SqlitePersistence::new(":memory:").await.unwrap();
         let room = ObjectId::new("room:void-001");
-        let mut hero = bare("player:hero-001", "Alice");
+        let mut hero = with_login_name(bare("player:hero-001", "Alice"), "alice");
         hero.location = Some(room.clone());
         let place = bare("room:void-001", "The Void");
         persistence.save_object(&hero).await.unwrap();

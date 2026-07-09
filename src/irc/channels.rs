@@ -1,5 +1,6 @@
 //! IRC channel naming for world and per-room visibility.
 
+use crate::gateway::PlayMode;
 use crate::object::ObjectId;
 
 use super::config::IrcConfig;
@@ -44,6 +45,79 @@ pub fn classify_target(target: &str, config: &IrcConfig) -> ChannelTarget {
 /// Notice text inviting a player IRC client to join a room channel.
 pub fn room_join_notice(channel: &str) -> String {
     format!("Join {channel} to see speech and actions in your current location.")
+}
+
+/// Shared in-character channel for open-world play.
+pub fn shared_ic_channel(config: &IrcConfig) -> &str {
+    &config.world_channel
+}
+
+/// In-character IRC channel or presence key for speech/movement routing.
+pub fn speech_channel(config: &IrcConfig, room_id: &ObjectId) -> String {
+    match config.play_mode {
+        PlayMode::Story => room_channel_name(&config.room_channel_prefix, room_id),
+        PlayMode::Open => shared_ic_channel(config).to_string(),
+    }
+}
+
+/// Login/movement notice for the active play mode.
+pub fn ic_join_notice(config: &IrcConfig, room_id: &ObjectId) -> String {
+    match config.play_mode {
+        PlayMode::Story => room_join_notice(&room_channel_name(
+            &config.room_channel_prefix,
+            room_id,
+        )),
+        PlayMode::Open => format!(
+            "Join {} for in-character speech and actions.",
+            shared_ic_channel(config)
+        ),
+    }
+}
+
+/// Channels to join on login for the active play mode.
+pub fn login_channel_joins(config: &IrcConfig, room_id: Option<&ObjectId>) -> Vec<String> {
+    match config.play_mode {
+        PlayMode::Story => {
+            let mut joins = Vec::new();
+            if !config.world_channel.is_empty() {
+                joins.push(config.world_channel.clone());
+            }
+            if let Some(room_id) = room_id {
+                joins.push(room_channel_name(&config.room_channel_prefix, room_id));
+            }
+            joins
+        }
+        PlayMode::Open => {
+            if config.world_channel.is_empty() {
+                Vec::new()
+            } else {
+                vec![config.world_channel.clone()]
+            }
+        }
+    }
+}
+
+/// Channels to part on logout for the active play mode.
+pub fn logout_channel_parts(config: &IrcConfig, room_id: Option<&ObjectId>) -> Vec<String> {
+    match config.play_mode {
+        PlayMode::Story => {
+            let mut parts = Vec::new();
+            if !config.world_channel.is_empty() {
+                parts.push(config.world_channel.clone());
+            }
+            if let Some(room_id) = room_id {
+                parts.push(room_channel_name(&config.room_channel_prefix, room_id));
+            }
+            parts
+        }
+        PlayMode::Open => {
+            if config.world_channel.is_empty() {
+                Vec::new()
+            } else {
+                vec![config.world_channel.clone()]
+            }
+        }
+    }
 }
 
 #[cfg(test)]

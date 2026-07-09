@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::gateway::{RateLimitKind, SessionManager};
+use crate::command::parse_command_line;
+use crate::gateway::{is_open_private_actor_line, RateLimitKind, SessionManager};
 use crate::persistence::Persistence;
 
 use super::config::SlackConfig;
@@ -107,7 +108,16 @@ where
                     .await?;
                 Ok(())
             }
+            SlackChannelKind::World if self.config.play_mode.is_open() => {
+                self.handle_open_channel_message(&message).await
+            }
             SlackChannelKind::World => self.handle_world_ooc(&message).await,
+            SlackChannelKind::Room
+                if self.config.play_mode.is_open()
+                    && self.is_shared_open_channel(&message.channel) =>
+            {
+                self.handle_open_channel_message(&message).await
+            }
             SlackChannelKind::Room => {
                 self.send_notice(
                     &message.channel,
@@ -119,6 +129,71 @@ where
             }
             SlackChannelKind::Other => Ok(()),
         }
+    }
+
+    fn is_shared_open_channel(&self, channel_id: &str) -> bool {
+        if !self.config.play_mode.is_open() {
+            return false;
+        }
+        channel_id == super::channels::shared_ic_presence(&self.config)
+            || self
+                .config
+                .rooms_channel
+                .as_deref()
+                .is_some_and(|rooms| channel_id == rooms)
+    }
+
+    async fn handle_open_channel_message(
+        &self,
+        message: &SlackMessageEvent,
+    ) -> anyhow::Result<()> {
+        let trimmed = message.text.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+
+        let line = parse_command_line(trimmed);
+        if line.verb.is_empty() {
+            let manager = self.manager.lock().await;
+            if !manager.is_connected(&message.user) {
+                self.send_notice(
+                    &message.channel,
+                    &message.user,
+                    "You are not logged in. DM the bot with `login`.",
+                )
+                .await;
+                return Ok(());
+            }
+            if let Err(denied) = manager.check_rate_limit(&message.user, RateLimitKind::Ooc) {
+                self.send_notice(
+                    &message.channel,
+                    &message.user,
+                    &manager.rate_limit_denial_message(denied.kind),
+                )
+                .await;
+                return Ok(());
+            }
+            let display = manager
+                .with_session(&message.user, |session| {
+                    session.with_world(|world, player| {
+                        world
+                            .object(player.actor_id())
+                            .map(|obj| obj.name.clone())
+                            .unwrap_or_else(|| message.user.clone())
+                    })
+                })
+                .await
+                .unwrap_or_else(|| message.user.clone());
+            drop(manager);
+
+            let chat = super::format::format_open_chat(&display, trimmed);
+            self.send_to_presence(&message.channel, &chat).await;
+            return Ok(());
+        }
+
+        self.handle_input(&message.user, &message.channel, trimmed)
+            .await?;
+        Ok(())
     }
 
     async fn handle_world_ooc(&self, message: &SlackMessageEvent) -> anyhow::Result<()> {
@@ -160,22 +235,26 @@ where
             .await
             .unwrap_or_else(|| message.user.clone());
 
-        let connected: Vec<String> = manager.connected_nicks();
         drop(manager);
 
         let line = format_ooc(&display, trimmed);
         self.send_to_presence(&self.config.world_channel, &line).await;
-        let sessions = self.slack_sessions.lock().await;
-        for user_id in connected {
-            if user_id != message.user {
-                let target = sessions.delivery_target(&user_id);
-                let formatted = format_slack_message(
-                    &line,
-                    classify_slack_output(&target, &line),
-                );
-                self.transport
-                    .send_slack_message(&target, &formatted)
-                    .await;
+
+        // Story mode also relays OOC to connected players via DM; open mode keeps it in-channel.
+        if self.config.play_mode.is_story() {
+            let connected: Vec<String> = self.manager.lock().await.connected_nicks();
+            let sessions = self.slack_sessions.lock().await;
+            for user_id in connected {
+                if user_id != message.user {
+                    let target = sessions.delivery_target(&user_id);
+                    let formatted = format_slack_message(
+                        &line,
+                        classify_slack_output(&target, &line),
+                    );
+                    self.transport
+                        .send_slack_message(&target, &formatted)
+                        .await;
+                }
             }
         }
         Ok(())
@@ -193,7 +272,9 @@ where
                 .await;
         } else {
             for line in &outcome.to_sender {
-                self.send_to_presence(&outcome.reply_channel, line).await;
+                if self.config.play_mode.is_story() || is_open_private_actor_line(line) {
+                    self.send_to_presence(&outcome.reply_channel, line).await;
+                }
             }
         }
 
@@ -314,6 +395,7 @@ mod tests {
         let persistence = SqlitePersistence::new("sqlite::memory:").await.unwrap();
         let room = ObjectId::new("room:void-001");
         let mut hero = bare("player:hero-001", "alice");
+        hero.set_property_string(crate::object::LOGIN_NAME_PROPERTY, "alice");
         hero.location = Some(room);
         let mut place = bare("room:void-001", "The Void");
         place.set_property_string("description", "void");

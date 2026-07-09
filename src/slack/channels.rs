@@ -1,5 +1,6 @@
 //! Slack channel naming for world and per-room visibility.
 
+use crate::gateway::PlayMode;
 use crate::object::ObjectId;
 
 use super::config::SlackConfig;
@@ -77,6 +78,14 @@ pub fn room_routing_mode(config: &SlackConfig) -> RoomRoutingMode {
     }
 }
 
+/// Shared in-character Slack presence for open-world play.
+pub fn shared_ic_presence(config: &SlackConfig) -> String {
+    config
+        .rooms_channel
+        .clone()
+        .unwrap_or_else(|| config.world_channel.clone())
+}
+
 /// Presence key for in-character speech and movement sync for a game room.
 pub fn room_presence(config: &SlackConfig, room_id: &ObjectId) -> String {
     match room_routing_mode(config) {
@@ -93,9 +102,57 @@ pub fn room_presence(config: &SlackConfig, room_id: &ObjectId) -> String {
     }
 }
 
+/// In-character presence key for speech/movement routing.
+pub fn speech_presence(config: &SlackConfig, room_id: &ObjectId) -> String {
+    match config.play_mode {
+        PlayMode::Story => room_presence(config, room_id),
+        PlayMode::Open => shared_ic_presence(config),
+    }
+}
+
+/// Presence surfaces to join on login for the active play mode.
+pub fn login_presence_joins(config: &SlackConfig, room_id: Option<&ObjectId>) -> Vec<String> {
+    match config.play_mode {
+        PlayMode::Story => {
+            let mut joins = Vec::new();
+            if !config.world_channel.is_empty() {
+                joins.push(config.world_channel.clone());
+            }
+            if let Some(room_id) = room_id {
+                joins.push(room_presence(config, room_id));
+            }
+            joins
+        }
+        PlayMode::Open => {
+            let mut joins = Vec::new();
+            let shared = shared_ic_presence(config);
+            if !shared.is_empty() {
+                joins.push(shared);
+            }
+            joins
+        }
+    }
+}
+
+/// Presence surfaces to leave on logout for the active play mode.
+pub fn logout_presence_parts(config: &SlackConfig, room_id: Option<&ObjectId>) -> Vec<String> {
+    login_presence_joins(config, room_id)
+}
+
 /// Ephemeral notice inviting a player to a room channel or thread.
 pub fn room_join_notice(presence: &str) -> String {
     format!("Follow {presence} for speech and actions in your current location.")
+}
+
+/// Login/movement notice for the active play mode.
+pub fn ic_join_notice(config: &SlackConfig, room_id: &ObjectId) -> String {
+    match config.play_mode {
+        PlayMode::Story => room_join_notice(&room_presence(config, room_id)),
+        PlayMode::Open => format!(
+            "Follow {} for in-character speech and actions.",
+            shared_ic_presence(config)
+        ),
+    }
 }
 
 #[cfg(test)]

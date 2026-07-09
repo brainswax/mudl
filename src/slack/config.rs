@@ -1,6 +1,6 @@
 //! Slack bot configuration from environment variables.
 
-use crate::gateway::{LoginAuthPolicy, RateLimitConfig};
+use crate::gateway::{LoginAuthPolicy, PlayMode, RateLimitConfig};
 
 /// Runtime settings for the MUDL Slack gateway.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +31,8 @@ pub struct SlackConfig {
     pub login_auth: LoginAuthPolicy,
     /// Anti-flood rate limits on command, movement, and OOC entry (SEC-50).
     pub rate_limits: RateLimitConfig,
+    /// Story vs open-world visibility and channel routing.
+    pub play_mode: PlayMode,
 }
 
 impl Default for SlackConfig {
@@ -48,6 +50,7 @@ impl Default for SlackConfig {
             default_player: "player:admin-001".to_string(),
             login_auth: LoginAuthPolicy::permissive(),
             rate_limits: RateLimitConfig::disabled(),
+            play_mode: PlayMode::Story,
         }
     }
 }
@@ -99,6 +102,7 @@ impl SlackConfig {
         }
         config.login_auth = LoginAuthPolicy::from_env();
         config.rate_limits = RateLimitConfig::from_env();
+        config.play_mode = PlayMode::from_env();
         config
     }
 

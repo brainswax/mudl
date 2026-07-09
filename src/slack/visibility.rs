@@ -1,15 +1,18 @@
 //! Audience resolution for room-local speech and Slack look scope.
 
 use crate::display::ResolveScope;
-use crate::gateway::SessionManager;
+use crate::gateway::{PlayMode, SessionManager};
 use crate::persistence::Persistence;
 
-/// Scope for Slack player `look` — current room only (SEC-60).
+/// Scope for Slack player `look` in story mode — current room only (SEC-60).
 pub const SLACK_LOOK_SCOPE: ResolveScope = ResolveScope::RoomOnly;
 
-pub fn slack_look_scope() -> ResolveScope {
+pub fn slack_look_scope(mode: PlayMode) -> ResolveScope {
+    let _ = mode;
     SLACK_LOOK_SCOPE
 }
+
+pub use crate::irc::{all_connected_nicks, connected_speech_audience_async};
 
 /// Resolve a connected Slack user id by id or in-world player display name.
 pub async fn resolve_connected_user_async<P: Persistence + Clone>(
@@ -99,8 +102,9 @@ mod tests {
     }
 
     #[test]
-    fn slack_look_scope_is_room_only() {
-        assert_eq!(slack_look_scope(), ResolveScope::RoomOnly);
+    fn slack_look_scope_follows_play_mode() {
+        assert_eq!(slack_look_scope(PlayMode::Story), ResolveScope::RoomOnly);
+        assert_eq!(slack_look_scope(PlayMode::Open), ResolveScope::RoomOnly);
     }
 
     #[tokio::test]

@@ -37,8 +37,10 @@ mod tests {
         let room_id = ObjectId::new("room:void-001");
 
         let mut hero1 = bare("player:hero-001", "Alice");
+        hero1.set_property_string(crate::object::LOGIN_NAME_PROPERTY, "alice");
         hero1.location = Some(room_id.clone());
         let mut hero2 = bare("player:hero-002", "Bob");
+        hero2.set_property_string(crate::object::LOGIN_NAME_PROPERTY, "bob");
         hero2.location = Some(room_id.clone());
 
         let mut room = bare("room:void-001", "The Void");

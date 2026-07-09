@@ -22,6 +22,16 @@ pub fn format_tell_sent(to: &str, text: &str) -> String {
     format!("You tell {to}, \"{text}\"")
 }
 
+/// Movement arrival visible to other players.
+pub fn format_arrival(speaker: &str) -> String {
+    format!("{} has arrived.", sanitize_nick_display(speaker))
+}
+
+/// Movement departure visible to other players.
+pub fn format_departure(speaker: &str) -> String {
+    format!("{} has left.", sanitize_nick_display(speaker))
+}
+
 /// Out-of-character speech on the world channel.
 ///
 /// Speaker and body are sanitized — no embedded newlines or control characters.
