@@ -9,24 +9,23 @@ use tokio::sync::Mutex;
 
 use crate::command::parse_command_line;
 use crate::command::{
-    CommandDispatcher, CommandLine, CommandResult, LookOptions, PlayerDispatchOptions, SocialIntent,
+    CommandDispatcher, CommandLine, CommandResult, LookOptions, PlayerDispatchOptions,
 };
 use crate::display::{format_room_look_player, DisplayMode};
 use crate::gateway::{
-    actor_place_context, format_open_context_post, open_channel_broadcast_body, parse_login_args,
-    rate_limit_kind_for_line, resolve_player_for_login, verify_login, LoginRequest, RateLimitKind,
-    SessionManager,
+    parse_login_args, rate_limit_kind_for_line, resolve_player_for_login, verify_login,
+    LoginRequest, RateLimitKind, SessionManager,
 };
-use crate::irc::{format_emote, format_say, format_tell, format_tell_sent};
 use crate::persistence::Persistence;
+use crate::transport::{
+    outcome_fields_from_plan, MessageRouter, SlackPresenceResolver, SlackTellResolver,
+};
 
-use super::channels::{ic_join_notice, login_presence_joins, logout_presence_parts, speech_presence};
+use super::channels::{ic_join_notice, login_presence_joins, logout_presence_parts};
 use super::config::SlackConfig;
-use crate::irc::connected_speech_audience_async;
-
-use super::multi_user::append_movement_visibility;
+use super::multi_user::speaker_display_name_async;
 use super::session::slack_logged_out_help;
-use super::visibility::{resolve_connected_user_async, slack_look_scope};
+use super::visibility::slack_look_scope;
 
 /// Slack routing instructions produced by command dispatch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -188,155 +187,43 @@ async fn deliver_command_result<P: Persistence + Clone + Send + Sync>(
     manager: &Arc<Mutex<SessionManager<P>>>,
     config: &SlackConfig,
 ) -> DispatchOutcome {
-    let social_for_broadcast = result.social.clone();
-    let mut outcome = DispatchOutcome {
-        user_id: user_id.clone(),
-        reply_channel,
-        to_sender: result.lines_to_actor,
-        persist: result.persist_world,
-        ..Default::default()
-    };
-
-    if let Some(social) = result.social {
-        match social {
-            SocialIntent::Say {
-                room_id,
-                speaker_name,
-                text,
-            } => {
-                let formatted = format_say(&speaker_name, &text);
-                outcome.to_sender.push(formatted.clone());
-                let presence = speech_presence(config, &room_id);
-                if config.play_mode.is_story() {
-                    let mgr = manager.lock().await;
-                    let audience = connected_speech_audience_async(
-                        &mgr,
-                        &room_id,
-                        Some(actor_id),
-                        config.play_mode,
-                    )
-                    .await;
-                    outcome.room_audience.push(RoomDelivery {
-                        audience,
-                        lines: vec![formatted.clone()],
-                    });
-                }
-                outcome.channel.push((presence, formatted));
-            }
-            SocialIntent::Emote {
-                room_id,
-                speaker_name,
-                text,
-            } => {
-                let formatted = format_emote(&speaker_name, &text);
-                outcome.to_sender.push(formatted.clone());
-                let presence = speech_presence(config, &room_id);
-                if config.play_mode.is_story() {
-                    let mgr = manager.lock().await;
-                    let audience = connected_speech_audience_async(
-                        &mgr,
-                        &room_id,
-                        Some(actor_id),
-                        config.play_mode,
-                    )
-                    .await;
-                    outcome.room_audience.push(RoomDelivery {
-                        audience,
-                        lines: vec![formatted.clone()],
-                    });
-                }
-                outcome.channel.push((presence, formatted));
-            }
-            SocialIntent::Tell {
-                target_identity,
-                speaker_name,
-                text,
-            } => {
-                let mgr = manager.lock().await;
-                let Some(resolved) =
-                    resolve_connected_user_async(&mgr, &target_identity).await
-                else {
-                    outcome.to_sender =
-                        vec![format!("{target_identity} is not connected.")];
-                    outcome.persist = false;
-                    return outcome;
-                };
-                if crate::gateway::normalize_nick(&resolved)
-                    == crate::gateway::normalize_nick(actor_id)
-                {
-                    outcome.to_sender = vec!["You talk to yourself.".to_string()];
-                    outcome.persist = false;
-                    return outcome;
-                }
-                outcome.to_sender = vec![format_tell_sent(&target_identity, &text)];
-                outcome
-                    .private
-                    .push((resolved, format_tell(&speaker_name, &text)));
-            }
-        }
-    }
-
-    if let Some(movement) = result.movement {
-        outcome.to_sender.extend(movement.lines);
-        if let (Some(old_id), Some(new_id)) = (movement.old_room, movement.new_room) {
-            if old_id != new_id {
-                if config.play_mode.is_story() {
-                    outcome.presence_sync = Some(PresenceSync {
-                        user_id: outcome.user_id.clone(),
-                        join: vec![speech_presence(config, &new_id)],
-                        part: vec![speech_presence(config, &old_id)],
-                    });
-                    outcome
-                        .to_sender
-                        .push(ic_join_notice(config, &new_id));
-                }
-
-                let mgr = manager.lock().await;
-                append_movement_visibility(
-                    &mut outcome,
-                    &mgr,
-                    actor_id,
-                    &old_id,
-                    &new_id,
-                    config,
-                )
-                .await;
-            }
-        }
-    }
-
-    if config.play_mode.is_open() {
-        append_open_channel_broadcast(
-            &mut outcome,
-            social_for_broadcast.as_ref(),
-            manager,
-            actor_id,
-            config,
-        )
+    let mgr = manager.lock().await;
+    let actor_label = speaker_display_name_async(&mgr, actor_id).await;
+    let presence = SlackPresenceResolver { config };
+    let router = MessageRouter::new(config.play_mode, actor_id, &mgr);
+    let plan = router
+        .plan_command_deliveries(result, &presence, &SlackTellResolver, &actor_label)
         .await;
-    }
-
-    outcome
+    drop(mgr);
+    outcome_from_plan(user_id, reply_channel, &plan)
 }
 
-async fn append_open_channel_broadcast<P: Persistence + Clone + Send + Sync>(
-    outcome: &mut DispatchOutcome,
-    social: Option<&SocialIntent>,
-    manager: &Arc<Mutex<SessionManager<P>>>,
-    actor_id: &str,
-    config: &SlackConfig,
-) {
-    let Some(body) = open_channel_broadcast_body(social, &outcome.to_sender) else {
-        return;
+fn outcome_from_plan(
+    user_id: String,
+    reply_channel: String,
+    plan: &crate::transport::DeliveryPlan,
+) -> DispatchOutcome {
+    let fields = outcome_fields_from_plan(plan);
+    let mut outcome = DispatchOutcome {
+        user_id,
+        reply_channel,
+        to_sender: fields.to_sender,
+        persist: fields.persist,
+        ..Default::default()
     };
-    let mgr = manager.lock().await;
-    let Some((speaker, room_id, room_name)) = actor_place_context(&mgr, actor_id).await else {
-        return;
-    };
-    let formatted = format_open_context_post(&speaker, &room_name, &body);
+    outcome.private = fields.private;
+    for (audience, lines) in fields.room_audience {
+        outcome.room_audience.push(RoomDelivery { audience, lines });
+    }
+    outcome.channel = fields.channel;
+    if let Some(sync) = fields.presence_sync {
+        outcome.presence_sync = Some(PresenceSync {
+            user_id: sync.actor,
+            join: sync.join,
+            part: sync.part,
+        });
+    }
     outcome
-        .channel
-        .push((speech_presence(config, &room_id), formatted));
 }
 
 async fn dispatch_logged_out<P: Persistence + Clone>(

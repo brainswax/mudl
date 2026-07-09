@@ -1,8 +1,28 @@
 //! Transport-neutral delivery surface for game frontends (IRC, Slack, WebSocket).
 //!
 //! [`GameTransport`] captures deliver/join/leave semantics shared across transports.
-//! Protocol-specific setup (IRC registration, Slack socket mode) stays on per-transport
-//! extensions such as [`crate::irc::IrcTransport`] and [`crate::slack::SlackWebTransport`].
+//! [`MessageRouter`] decides *where* output goes by play mode; [`MessageFormatter`]
+//! adapts semantic [`GameMessage`]s to each client (plain text, Slack blocks, …).
+
+mod adapters;
+mod formatter;
+mod message;
+mod plan;
+mod router;
+
+pub use adapters::{
+    IrcPresenceResolver, IrcTellResolver, SlackPresenceResolver, SlackTellResolver,
+};
+pub use plan::{outcome_fields_from_plan, OutcomeFields};
+pub use formatter::{
+    format_plan, FormattedDelivery, FormattedPlan, MessageFormatter, PlainTextFormatter,
+    SlackMessageFormatter,
+};
+pub use message::{
+    DeliveryPlan, DeliveryTarget, GameMessage, PlannedDelivery, PresenceResolver,
+    PresenceSyncPlan,
+};
+pub use router::{MessageRouter, TellResolver};
 
 use std::sync::{Arc, Mutex};
 
