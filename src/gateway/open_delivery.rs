@@ -23,6 +23,13 @@ pub fn format_open_chat(speaker: &str, text: &str) -> String {
     format!("{speaker}: {text}")
 }
 
+/// Compact open-mode movement notice (one line, no departure spam).
+pub fn format_open_movement_enter(speaker: &str, room_name: &str) -> String {
+    let speaker = speaker.trim();
+    let room_name = room_name.trim();
+    format!("{speaker} enters {room_name}.")
+}
+
 /// Prefix an action or command response with speaker and place context.
 pub fn format_open_context_post(speaker: &str, room_name: &str, body: &str) -> String {
     let speaker = speaker.trim();
@@ -161,6 +168,14 @@ mod tests {
         let post = format_open_context_post("Alice", "The Void", "A dusty room.");
         assert!(post.starts_with("Alice @ The Void:"));
         assert!(post.contains("A dusty room."));
+    }
+
+    #[test]
+    fn compact_movement_enter_is_one_line() {
+        assert_eq!(
+            format_open_movement_enter("Alice", "The North Woods"),
+            "Alice enters The North Woods."
+        );
     }
 
     #[test]

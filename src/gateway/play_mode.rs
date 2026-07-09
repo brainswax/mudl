@@ -8,6 +8,38 @@ use crate::display::ResolveScope;
 
 use super::open_delivery::transport_look_scope;
 
+/// Arrival/departure fan-out on movement in open-world mode.
+///
+/// Movement narration and room context still post via [`OpenContext`](crate::transport::GameMessage::OpenContext)
+/// on the shared channel; this only controls generic "has left" / "has arrived" lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OpenMovementNotices {
+    /// No generic movement notices (default — avoids spam on the shared channel).
+    #[default]
+    Off,
+    /// One line: `Alice enters The North Woods.`
+    Compact,
+    /// Legacy: separate departure and arrival lines.
+    Full,
+}
+
+impl OpenMovementNotices {
+    /// Load from `MUDL_OPEN_MOVEMENT_NOTICES` (`off`, `compact`, `full`).
+    pub fn from_env() -> Self {
+        match std::env::var("MUDL_OPEN_MOVEMENT_NOTICES")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("full" | "true" | "1" | "yes" | "on") => Self::Full,
+            Some("compact") => Self::Compact,
+            Some("off" | "false" | "0" | "no") | None | Some(_) => Self::Off,
+        }
+    }
+}
+
 /// How a live transport maps game visibility to chat surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PlayMode {
@@ -61,4 +93,8 @@ mod tests {
         assert_eq!(PlayMode::Open.look_scope(), ResolveScope::RoomOnly);
     }
 
+    #[test]
+    fn open_movement_notices_default_off() {
+        assert_eq!(OpenMovementNotices::default(), OpenMovementNotices::Off);
+    }
 }

@@ -134,6 +134,15 @@ pub fn format_departure(speaker: &str) -> String {
     format!("*{}* has left.", escape_mrkdwn(speaker.trim()))
 }
 
+/// Compact open-mode movement notice (one line).
+pub fn format_open_movement_enter(speaker: &str, room: &str) -> String {
+    format!(
+        "*{}* enters {}.",
+        escape_mrkdwn(speaker.trim()),
+        escape_mrkdwn(room.trim())
+    )
+}
+
 /// Confirmation shown to the tell sender.
 pub fn format_tell_sent(to: &str, text: &str) -> String {
     format!(

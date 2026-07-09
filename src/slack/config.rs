@@ -1,6 +1,6 @@
 //! Slack bot configuration from environment variables.
 
-use crate::gateway::{LoginAuthPolicy, PlayMode, RateLimitConfig};
+use crate::gateway::{LoginAuthPolicy, OpenMovementNotices, PlayMode, RateLimitConfig};
 
 /// Runtime settings for the MUDL Slack gateway.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +33,8 @@ pub struct SlackConfig {
     pub rate_limits: RateLimitConfig,
     /// Story vs open-world visibility and channel routing.
     pub play_mode: PlayMode,
+    /// Generic arrival/departure lines on movement in open mode (`MUDL_OPEN_MOVEMENT_NOTICES`).
+    pub open_movement_notices: OpenMovementNotices,
 }
 
 impl Default for SlackConfig {
@@ -51,6 +53,7 @@ impl Default for SlackConfig {
             login_auth: LoginAuthPolicy::permissive(),
             rate_limits: RateLimitConfig::disabled(),
             play_mode: PlayMode::Story,
+            open_movement_notices: OpenMovementNotices::Off,
         }
     }
 }
@@ -103,6 +106,7 @@ impl SlackConfig {
         config.login_auth = LoginAuthPolicy::from_env();
         config.rate_limits = RateLimitConfig::from_env();
         config.play_mode = PlayMode::from_env();
+        config.open_movement_notices = OpenMovementNotices::from_env();
         config
     }
 

@@ -5,8 +5,8 @@
 
 use crate::command::{CommandResult, SocialIntent};
 use crate::gateway::{
-    actor_place_context, is_open_private_actor_line, open_channel_broadcast_body, PlayMode,
-    SessionManager,
+    actor_place_context, is_open_private_actor_line, open_channel_broadcast_body,
+    OpenMovementNotices, PlayMode, SessionManager,
 };
 use crate::irc::connected_speech_audience_async;
 use crate::object::ObjectId;
@@ -31,14 +31,21 @@ pub trait TellResolver: Send + Sync {
 /// Map a transport-neutral command result to a delivery plan.
 pub struct MessageRouter<'a, P: Persistence + Clone> {
     pub mode: PlayMode,
+    pub open_movement_notices: OpenMovementNotices,
     pub actor_id: &'a str,
     pub manager: &'a SessionManager<P>,
 }
 
 impl<'a, P: Persistence + Clone> MessageRouter<'a, P> {
-    pub fn new(mode: PlayMode, actor_id: &'a str, manager: &'a SessionManager<P>) -> Self {
+    pub fn new(
+        mode: PlayMode,
+        open_movement_notices: OpenMovementNotices,
+        actor_id: &'a str,
+        manager: &'a SessionManager<P>,
+    ) -> Self {
         Self {
             mode,
+            open_movement_notices,
             actor_id,
             manager,
         }
@@ -251,9 +258,23 @@ impl<'a, P: Persistence + Clone> MessageRouter<'a, P> {
                     .await;
             }
         } else {
-            self.route_open_movement_visibility(plan, new_id, actor_label, presence)
-                .await;
+            self.route_open_movement_visibility(
+                plan,
+                new_id,
+                actor_label,
+                presence,
+                self.open_movement_notices,
+            )
+            .await;
         }
+    }
+
+    async fn room_display_name(&self, room_id: &ObjectId) -> String {
+        let guard = self.manager.world().lock().await;
+        guard
+            .object(room_id)
+            .map(|obj| obj.name.clone())
+            .unwrap_or_else(|| room_id.as_str().to_string())
     }
 
     async fn route_story_movement_visibility(
@@ -302,28 +323,44 @@ impl<'a, P: Persistence + Clone> MessageRouter<'a, P> {
         new_room: &ObjectId,
         actor_label: &str,
         presence: &dyn PresenceResolver,
+        notices: OpenMovementNotices,
     ) {
-        let shared = presence.speech_presence(new_room);
-        plan.shared(
-            shared.clone(),
-            GameMessage::Departure {
-                speaker: actor_label.to_string(),
-            },
-        );
-        plan.shared(
-            shared,
-            GameMessage::Arrival {
-                speaker: actor_label.to_string(),
-            },
-        );
+        match notices {
+            OpenMovementNotices::Off => {}
+            OpenMovementNotices::Compact => {
+                let room_name = self.room_display_name(new_room).await;
+                plan.shared(
+                    presence.speech_presence(new_room),
+                    GameMessage::MovementEnter {
+                        speaker: actor_label.to_string(),
+                        room: room_name,
+                    },
+                );
+            }
+            OpenMovementNotices::Full => {
+                let shared = presence.speech_presence(new_room);
+                plan.shared(
+                    shared.clone(),
+                    GameMessage::Departure {
+                        speaker: actor_label.to_string(),
+                    },
+                );
+                plan.shared(
+                    shared,
+                    GameMessage::Arrival {
+                        speaker: actor_label.to_string(),
+                    },
+                );
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::CommandResult;
-    use crate::gateway::SessionManager;
+    use crate::command::{CommandResult, MovementChange};
+    use crate::gateway::{OpenMovementNotices, SessionManager};
     use crate::object::{Object, ObjectId, PermissionFlags};
     use crate::persistence::SqlitePersistence;
     use std::collections::HashMap;
@@ -394,7 +431,12 @@ mod tests {
             .await
             .unwrap();
 
-        let router = MessageRouter::new(PlayMode::Story, "alice", &manager);
+        let router = MessageRouter::new(
+            PlayMode::Story,
+            OpenMovementNotices::Off,
+            "alice",
+            &manager,
+        );
         let plan = router
             .plan_command_deliveries(
                 CommandResult {
@@ -435,7 +477,12 @@ mod tests {
             .await
             .unwrap();
 
-        let router = MessageRouter::new(PlayMode::Open, "alice", &manager);
+        let router = MessageRouter::new(
+            PlayMode::Open,
+            OpenMovementNotices::Off,
+            "alice",
+            &manager,
+        );
         let plan = router
             .plan_command_deliveries(
                 CommandResult {
@@ -461,5 +508,96 @@ mod tests {
             .deliveries
             .iter()
             .any(|d| matches!(d.target, DeliveryTarget::Actor)));
+    }
+
+    async fn movement_fixture(
+        play_mode: PlayMode,
+        notices: OpenMovementNotices,
+    ) -> DeliveryPlan {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let room = ObjectId::new("room:void-001");
+        let north = ObjectId::new("room:north-001");
+        let mut hero = bare("player:hero-001", "Alice");
+        hero.location = Some(room.clone());
+        let mut place = bare("room:void-001", "The Void");
+        place.set_property_map(
+            "exits",
+            HashMap::from([("north".to_string(), north.clone())]),
+        );
+        let north_room = bare("room:north-001", "North");
+        persistence.save_object(&hero).await.unwrap();
+        persistence.save_object(&place).await.unwrap();
+        persistence.save_object(&north_room).await.unwrap();
+
+        let mut manager = SessionManager::open(persistence, Default::default())
+            .await
+            .unwrap();
+        manager
+            .login("alice", hero.id.clone(), Some(room.clone()))
+            .await
+            .unwrap();
+
+        let router = MessageRouter::new(play_mode, notices, "alice", &manager);
+        router
+            .plan_command_deliveries(
+                CommandResult {
+                    lines_to_actor: vec!["You go north.".to_string()],
+                    movement: Some(MovementChange {
+                        old_room: Some(room),
+                        new_room: Some(north),
+                        lines: Vec::new(),
+                    }),
+                    persist_world: true,
+                    ..Default::default()
+                },
+                &TestPresence,
+                &NoTell,
+                "Alice",
+            )
+            .await
+    }
+
+    fn movement_notice_lines(plan: &DeliveryPlan) -> Vec<String> {
+        plan.deliveries
+            .iter()
+            .filter(|d| matches!(d.target, DeliveryTarget::SharedPresence(_)))
+            .filter_map(|d| match &d.message {
+                GameMessage::Arrival { speaker }
+                | GameMessage::Departure { speaker }
+                | GameMessage::MovementEnter { speaker, .. } => Some(speaker.clone()),
+                GameMessage::OpenContext { .. } => None,
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn open_mode_default_skips_arrival_departure_spam() {
+        let plan = movement_fixture(PlayMode::Open, OpenMovementNotices::Off).await;
+        assert!(movement_notice_lines(&plan).is_empty());
+        assert!(plan.deliveries.iter().any(|d| {
+            matches!(
+                &d.message,
+                GameMessage::OpenContext { body, .. } if body.contains("go north")
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn open_mode_compact_posts_single_enter_line() {
+        let plan = movement_fixture(PlayMode::Open, OpenMovementNotices::Compact).await;
+        assert_eq!(movement_notice_lines(&plan), vec!["Alice".to_string()]);
+        assert!(plan.deliveries.iter().any(|d| {
+            matches!(
+                &d.message,
+                GameMessage::MovementEnter { room, .. } if room == "North"
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn open_mode_full_posts_legacy_arrival_and_departure() {
+        let plan = movement_fixture(PlayMode::Open, OpenMovementNotices::Full).await;
+        assert_eq!(movement_notice_lines(&plan), vec!["Alice", "Alice"]);
     }
 }

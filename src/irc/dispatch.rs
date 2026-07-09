@@ -183,7 +183,12 @@ async fn deliver_command_result<P: Persistence + Clone + Send + Sync>(
         .flatten()
         .unwrap_or_else(|| sender.clone());
     let presence = IrcPresenceResolver { config };
-    let router = MessageRouter::new(config.play_mode, nick, &mgr);
+    let router = MessageRouter::new(
+        config.play_mode,
+        config.open_movement_notices,
+        nick,
+        &mgr,
+    );
     let plan = router
         .plan_command_deliveries(result, &presence, &IrcTellResolver, &actor_label)
         .await;
@@ -1261,7 +1266,17 @@ mod tests {
 
         let outcome = dispatch_command(manager, "alice", "go north", &config).await;
         assert!(outcome.channel_sync.is_none());
-        assert!(outcome.channel.iter().any(|(ch, _)| ch == &config.world_channel));
+        assert!(outcome.channel.iter().any(|(ch, line)| {
+            ch == &config.world_channel
+                && line.contains("Alice @ North")
+                && line.contains("head north")
+        }));
+        assert!(
+            !outcome
+                .channel
+                .iter()
+                .any(|(_, line)| line.contains("has left") || line.contains("has arrived"))
+        );
     }
 
     #[tokio::test]

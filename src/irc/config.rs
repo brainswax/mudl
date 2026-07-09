@@ -1,6 +1,6 @@
 //! IRC bot configuration from environment variables.
 
-use crate::gateway::{LoginAuthPolicy, PlayMode, RateLimitConfig};
+use crate::gateway::{LoginAuthPolicy, OpenMovementNotices, PlayMode, RateLimitConfig};
 
 use super::identity::IrcIdentityPolicy;
 use super::nickserv::IrcNickServConfig;
@@ -41,6 +41,8 @@ pub struct IrcConfig {
     pub nickserv: IrcNickServConfig,
     /// Story vs open-world visibility and channel routing.
     pub play_mode: PlayMode,
+    /// Generic arrival/departure lines on movement in open mode (`MUDL_OPEN_MOVEMENT_NOTICES`).
+    pub open_movement_notices: OpenMovementNotices,
     /// TCP/TLS connect timeout in seconds.
     pub connect_timeout_secs: u64,
     /// Per-line read timeout while waiting on the server.
@@ -69,6 +71,7 @@ impl Default for IrcConfig {
             identity_policy: IrcIdentityPolicy::default(),
             nickserv: IrcNickServConfig::default(),
             play_mode: PlayMode::Story,
+            open_movement_notices: OpenMovementNotices::Off,
             connect_timeout_secs: 30,
             read_timeout_secs: 120,
             registration_timeout_secs: 90,
@@ -118,6 +121,7 @@ impl IrcConfig {
         config.identity_policy = IrcIdentityPolicy::from_env();
         config.nickserv = IrcNickServConfig::from_env();
         config.play_mode = PlayMode::from_env();
+        config.open_movement_notices = OpenMovementNotices::from_env();
         config.connect_timeout_secs =
             parse_u64_env(std::env::var("IRC_CONNECT_TIMEOUT").ok().as_deref(), 30);
         config.read_timeout_secs =

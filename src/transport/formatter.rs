@@ -31,6 +31,9 @@ impl MessageFormatter for PlainTextFormatter {
             }
             GameMessage::Arrival { speaker } => crate::irc::format_arrival(speaker),
             GameMessage::Departure { speaker } => crate::irc::format_departure(speaker),
+            GameMessage::MovementEnter { speaker, room } => {
+                crate::gateway::format_open_movement_enter(speaker, room)
+            }
             GameMessage::Ooc { speaker, text } => crate::irc::format_ooc(speaker, text),
         }
     }
@@ -55,6 +58,9 @@ impl MessageFormatter for SlackMessageFormatter {
             }
             GameMessage::Arrival { speaker } => crate::slack::format_arrival(speaker),
             GameMessage::Departure { speaker } => crate::slack::format_departure(speaker),
+            GameMessage::MovementEnter { speaker, room } => {
+                crate::slack::format_open_movement_enter(speaker, room)
+            }
             GameMessage::Ooc { speaker, text } => crate::slack::format_ooc(speaker, text),
         };
         let kind = crate::slack::classify_slack_output("", &text);

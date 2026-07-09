@@ -200,7 +200,12 @@ async fn deliver_command_result<P: Persistence + Clone + Send + Sync>(
     let mgr = manager.lock().await;
     let actor_label = speaker_display_name_async(&mgr, actor_id).await;
     let presence = SlackPresenceResolver { config };
-    let router = MessageRouter::new(config.play_mode, actor_id, &mgr);
+    let router = MessageRouter::new(
+        config.play_mode,
+        config.open_movement_notices,
+        actor_id,
+        &mgr,
+    );
     let plan = router
         .plan_command_deliveries(result, &presence, &SlackTellResolver, &actor_label)
         .await;

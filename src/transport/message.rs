@@ -44,6 +44,11 @@ pub enum GameMessage {
     Departure {
         speaker: String,
     },
+    /// Open-mode compact movement: actor entered a named place.
+    MovementEnter {
+        speaker: String,
+        room: String,
+    },
     /// Out-of-character chat on the world channel (story mode).
     Ooc {
         speaker: String,

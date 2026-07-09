@@ -44,11 +44,12 @@ pub use login_auth::{
     LOGIN_TOKEN_PROPERTY,
 };
 pub use open_delivery::{
-    actor_place_context, format_open_chat, format_open_context_post, is_open_channel_command,
-    is_open_private_actor_line, open_channel_broadcast_body, transport_look_scope,
+    actor_place_context, format_open_chat, format_open_context_post, format_open_movement_enter,
+    is_open_channel_command, is_open_private_actor_line, open_channel_broadcast_body,
+    transport_look_scope,
 };
 pub use persistence::{hydrate_actor, persist_connection_state};
-pub use play_mode::PlayMode;
+pub use play_mode::{OpenMovementNotices, PlayMode};
 pub use rbac::{
     actor_has_tier, actor_tier, authorize_meta_command, authorize_plain_command,
     required_tier_for_meta_verb, required_tier_for_plain_command, tier_denied_message, ActorTier,

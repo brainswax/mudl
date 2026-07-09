@@ -31,8 +31,8 @@ pub use dispatch::{
 pub use config::SlackConfig;
 pub use format::{
     classify_slack_output, escape_mrkdwn, format_arrival, format_departure, format_emote,
-    format_help_text, format_open_chat, format_ooc, format_say, format_slack_message,
-    format_tell, format_tell_sent, SlackFormattedMessage, SlackOutputKind,
+    format_help_text, format_open_chat, format_open_movement_enter, format_ooc, format_say,
+    format_slack_message, format_tell, format_tell_sent, SlackFormattedMessage, SlackOutputKind,
 };
 pub use events::{
     classify_slack_channel, classify_slack_channel_with_rooms, parse_events_payload,

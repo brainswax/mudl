@@ -1,6 +1,6 @@
 //! Multi-user group play — room visibility, private tells, and channel fan-out.
 
-use crate::gateway::{PlayMode, SessionManager};
+use crate::gateway::{OpenMovementNotices, PlayMode, SessionManager};
 use crate::irc::connected_speech_audience_async;
 use crate::object::ObjectId;
 use crate::persistence::Persistence;
@@ -80,10 +80,26 @@ pub async fn append_movement_visibility<P: Persistence + Clone + Send + Sync>(
             }
             outcome.channel.push((shared, arrival));
         }
-        PlayMode::Open => {
-            outcome.channel.push((shared.clone(), departure));
-            outcome.channel.push((shared, arrival));
-        }
+        PlayMode::Open => match config.open_movement_notices {
+            OpenMovementNotices::Off => {}
+            OpenMovementNotices::Compact => {
+                let room_name = manager
+                    .world()
+                    .lock()
+                    .await
+                    .object(new_room)
+                    .map(|obj| obj.name.clone())
+                    .unwrap_or_else(|| new_room.as_str().to_string());
+                outcome.channel.push((
+                    shared,
+                    super::format::format_open_movement_enter(&speaker, &room_name),
+                ));
+            }
+            OpenMovementNotices::Full => {
+                outcome.channel.push((shared.clone(), departure));
+                outcome.channel.push((shared, arrival));
+            }
+        },
     }
 }
 
