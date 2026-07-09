@@ -74,10 +74,20 @@ pub async fn dispatch_command<P: Persistence + Clone + Send + Sync>(
     let user_id = user_id.trim().to_string();
     let reply_channel = reply_channel.trim().to_string();
 
-    let logged_in = {
+    let mut logged_in = {
         let mgr = manager.lock().await;
         mgr.session_handle(&user_id).is_some()
     };
+
+    if !logged_in && config.login_auth.auto_login {
+        let mut mgr = manager.lock().await;
+        if crate::gateway::attempt_auto_login(&mut mgr, &user_id, &config.login_auth)
+            .await
+            .is_some()
+        {
+            logged_in = true;
+        }
+    }
 
     if line.verb.is_empty() {
         let hint = if logged_in {

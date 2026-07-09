@@ -12,6 +12,8 @@ pub const LOGIN_TOKEN_PROPERTY: &str = "login_token";
 pub struct LoginAuthPolicy {
     /// When true, a valid token (and optional identity binding) is required before `SessionManager::login`.
     pub require_auth: bool,
+    /// When true, passwordless players log in automatically on reconnect (no `login` command).
+    pub auto_login: bool,
     /// Transport identity (lowercase) → player id. Restricts which actor an identity may claim.
     pub identity_bindings: HashMap<String, ObjectId>,
     /// Player id → token from environment (`MUDL_LOGIN_TOKENS`). Overrides object property when both set.
@@ -29,6 +31,7 @@ impl LoginAuthPolicy {
     pub fn permissive() -> Self {
         Self {
             require_auth: false,
+            auto_login: false,
             identity_bindings: HashMap::new(),
             env_tokens: HashMap::new(),
         }
@@ -44,6 +47,9 @@ impl LoginAuthPolicy {
         };
         Self {
             require_auth,
+            auto_login: std::env::var("MUDL_AUTO_LOGIN")
+                .ok()
+                .is_some_and(|raw| parse_bool_env(&raw, false)),
             identity_bindings: parse_identity_bindings(
                 std::env::var("MUDL_LOGIN_IDENTITY_BINDINGS").ok().as_deref(),
             ),
@@ -195,22 +201,50 @@ pub fn resolve_player_by_token(
     }
 }
 
-/// Verify identity binding and token before attaching a session.
-pub fn verify_login(policy: &LoginAuthPolicy, request: LoginRequest<'_>) -> Result<(), LoginAuthError> {
-    if !policy.require_auth {
-        return Ok(());
+/// Whether a player has a login secret (env token or `login_token` property).
+pub fn player_has_login_secret(
+    player_id: &ObjectId,
+    player: &Object,
+    policy: &LoginAuthPolicy,
+) -> bool {
+    expected_token(player_id, player, policy).is_some()
+}
+
+/// Resolve a passwordless auto-login target by transport identity (nick / Slack user id).
+pub fn resolve_player_for_auto_login(
+    identity: &str,
+    policy: &LoginAuthPolicy,
+    objects: &HashMap<ObjectId, Object>,
+) -> Option<ObjectId> {
+    if !policy.auto_login {
+        return None;
     }
 
-    let identity_key = normalize_identity(request.identity);
+    let identity_key = normalize_identity(identity);
+    if let Some(bound) = policy.identity_bindings.get(&identity_key) {
+        return objects
+            .get(bound)
+            .filter(|obj| obj.is_active() && !player_has_login_secret(bound, obj, policy))
+            .map(|obj| obj.id.clone());
+    }
+    if !policy.identity_bindings.is_empty() {
+        return None;
+    }
 
-    match policy.identity_bindings.get(&identity_key) {
-        Some(bound) if bound != request.player_id => {
-            return Err(LoginAuthError::AuthenticationFailed);
-        }
-        None if !policy.identity_bindings.is_empty() => {
-            return Err(LoginAuthError::AuthenticationFailed);
-        }
-        _ => {}
+    objects
+        .values()
+        .filter(|obj| obj.is_active() && obj.id.as_str().starts_with("player:"))
+        .find(|obj| crate::object::player_login_name_matches(obj, identity))
+        .filter(|obj| !player_has_login_secret(&obj.id, obj, policy))
+        .map(|obj| obj.id.clone())
+}
+
+/// Verify identity binding and token before attaching a session.
+pub fn verify_login(policy: &LoginAuthPolicy, request: LoginRequest<'_>) -> Result<(), LoginAuthError> {
+    verify_identity_binding(policy, request.identity, request.player_id)?;
+
+    if !policy.require_auth {
+        return Ok(());
     }
 
     let Some(token) = request.token else {
@@ -226,6 +260,20 @@ pub fn verify_login(policy: &LoginAuthPolicy, request: LoginRequest<'_>) -> Resu
         Ok(())
     } else {
         Err(LoginAuthError::AuthenticationFailed)
+    }
+}
+
+/// Verify transport identity may claim a player (binding table), without checking tokens.
+pub fn verify_identity_binding(
+    policy: &LoginAuthPolicy,
+    identity: &str,
+    player_id: &ObjectId,
+) -> Result<(), LoginAuthError> {
+    let identity_key = normalize_identity(identity);
+    match policy.identity_bindings.get(&identity_key) {
+        Some(bound) if bound != player_id => Err(LoginAuthError::AuthenticationFailed),
+        None if !policy.identity_bindings.is_empty() => Err(LoginAuthError::AuthenticationFailed),
+        _ => Ok(()),
     }
 }
 
@@ -488,6 +536,40 @@ mod tests {
             },
         );
         assert_eq!(result, Err(LoginAuthError::AuthenticationFailed));
+    }
+
+    #[test]
+    fn auto_login_resolves_passwordless_player_by_nick() {
+        let policy = LoginAuthPolicy {
+            auto_login: true,
+            ..LoginAuthPolicy::permissive()
+        };
+        let mut objs = objects(&[("player:alice", "Alice", None)]);
+        objs.get_mut(&ObjectId::new("player:alice"))
+            .unwrap()
+            .set_property_string(crate::object::LOGIN_NAME_PROPERTY, "alice");
+        let id = resolve_player_for_auto_login("alice", &policy, &objs);
+        assert_eq!(id.as_ref().map(|i| i.as_str()), Some("player:alice"));
+    }
+
+    #[test]
+    fn auto_login_skips_player_with_login_token() {
+        let policy = LoginAuthPolicy {
+            auto_login: true,
+            ..LoginAuthPolicy::permissive()
+        };
+        let objs = objects(&[("player:alice", "Alice", Some("sekrit"))]);
+        assert!(resolve_player_for_auto_login("alice", &policy, &objs).is_none());
+    }
+
+    #[test]
+    fn auto_login_disabled_returns_none() {
+        let policy = LoginAuthPolicy::permissive();
+        let mut objs = objects(&[("player:alice", "Alice", None)]);
+        objs.get_mut(&ObjectId::new("player:alice"))
+            .unwrap()
+            .set_property_string(crate::object::LOGIN_NAME_PROPERTY, "alice");
+        assert!(resolve_player_for_auto_login("alice", &policy, &objs).is_none());
     }
 
     #[test]

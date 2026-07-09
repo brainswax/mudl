@@ -76,10 +76,20 @@ pub async fn dispatch_command<P: Persistence + Clone + Send + Sync>(
     let line = parse_command_line(input);
     let sender = normalize_nick(nick);
 
-    let logged_in = {
+    let mut logged_in = {
         let mgr = manager.lock().await;
         mgr.session_handle(nick).is_some()
     };
+
+    if !logged_in && config.login_auth.auto_login {
+        let mut mgr = manager.lock().await;
+        if crate::gateway::attempt_auto_login(&mut mgr, nick, &config.login_auth)
+            .await
+            .is_some()
+        {
+            logged_in = true;
+        }
+    }
 
     if line.verb.is_empty() {
         let hint = if logged_in {
@@ -362,11 +372,22 @@ async fn dispatch_register<P: Persistence + Clone>(
             };
             outcome
         }
-        Err(err) => DispatchOutcome {
-            sender,
-            to_sender: vec![err.to_string()],
-            ..Default::default()
-        },
+        Err(err) => {
+            if let crate::gateway::RegisterError::LoginNameTaken { .. } = &err {
+                if config.login_auth.auto_login
+                    && crate::gateway::attempt_auto_login(manager, nick, &config.login_auth)
+                        .await
+                        .is_some()
+                {
+                    return dispatch_login(manager, persistence, nick, &[], sender, config).await;
+                }
+            }
+            DispatchOutcome {
+                sender,
+                to_sender: vec![err.to_string()],
+                ..Default::default()
+            }
+        }
     }
 }
 
@@ -706,6 +727,23 @@ mod tests {
         let (manager, config) = manager_arc().await;
         let outcome = dispatch_command(manager, "alice", "   ", &config).await;
         assert!(outcome.to_sender.iter().any(|l| l.contains("login")));
+    }
+
+    #[tokio::test]
+    async fn auto_login_runs_look_without_explicit_login() {
+        let (manager, mut config) = manager_arc().await;
+        config.login_auth.auto_login = true;
+        let outcome = dispatch_command(manager.clone(), "alice", "look", &config).await;
+        assert!(manager.lock().await.is_connected("alice"));
+        assert!(
+            !outcome.to_sender.is_empty(),
+            "look should return room output after auto-login: {:?}",
+            outcome.to_sender
+        );
+        assert!(outcome
+            .to_sender
+            .iter()
+            .any(|l| l.contains("exit") || l.contains("north")));
     }
 
     #[tokio::test]

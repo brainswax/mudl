@@ -12,6 +12,7 @@
 //! call `SessionManager` / `dispatch_command`, and deliver output. There is no parallel
 //! `Gateway` type — use `SessionManager` for all multi-connection entry points.
 
+mod auto_login;
 mod login_auth;
 mod open_delivery;
 mod persistence;
@@ -35,9 +36,12 @@ mod m6_multi_user;
 #[cfg(test)]
 mod multi_user;
 
+pub use auto_login::attempt_auto_login;
 pub use login_auth::{
-    parse_login_args, resolve_player_by_token, resolve_player_for_login, verify_login,
-    LoginAuthError, LoginAuthPolicy, LoginRequest, ParsedLoginArgs, LOGIN_TOKEN_PROPERTY,
+    parse_login_args, player_has_login_secret, resolve_player_by_token,
+    resolve_player_for_auto_login, resolve_player_for_login, verify_identity_binding,
+    verify_login, LoginAuthError, LoginAuthPolicy, LoginRequest, ParsedLoginArgs,
+    LOGIN_TOKEN_PROPERTY,
 };
 pub use open_delivery::{
     actor_place_context, format_open_chat, format_open_context_post, is_open_channel_command,
