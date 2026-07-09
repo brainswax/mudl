@@ -4,6 +4,7 @@ use crate::gateway::{LoginAuthPolicy, PlayMode, RateLimitConfig};
 
 use super::identity::IrcIdentityPolicy;
 use super::nickserv::IrcNickServConfig;
+use super::reconnect::IrcReconnectConfig;
 
 /// Runtime settings for the MUDL IRC gateway.
 ///
@@ -46,6 +47,8 @@ pub struct IrcConfig {
     pub read_timeout_secs: u64,
     /// Max seconds to wait for `001` welcome during registration.
     pub registration_timeout_secs: u64,
+    /// Automatic reconnect with exponential backoff after transport loss.
+    pub reconnect: IrcReconnectConfig,
 }
 
 impl Default for IrcConfig {
@@ -69,6 +72,7 @@ impl Default for IrcConfig {
             connect_timeout_secs: 30,
             read_timeout_secs: 120,
             registration_timeout_secs: 90,
+            reconnect: IrcReconnectConfig::default(),
         }
     }
 }
@@ -120,6 +124,7 @@ impl IrcConfig {
             parse_u64_env(std::env::var("IRC_READ_TIMEOUT").ok().as_deref(), 120);
         config.registration_timeout_secs =
             parse_u64_env(std::env::var("IRC_REGISTRATION_TIMEOUT").ok().as_deref(), 90);
+        config.reconnect = IrcReconnectConfig::from_env();
         config
     }
 

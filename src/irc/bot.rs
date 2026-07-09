@@ -49,6 +49,11 @@ where
         Arc::clone(&self.manager)
     }
 
+    /// Point the bot at a new transport after IRC reconnect.
+    pub fn set_transport(&mut self, transport: Arc<T>) {
+        self.transport = transport;
+    }
+
     /// Handle NickServ NOTICE/PRIVMSG feedback and relay results to players when possible.
     pub async fn handle_nickserv_reply(&self, text: &str) -> anyhow::Result<()> {
         match parse_nickserv_reply(text) {

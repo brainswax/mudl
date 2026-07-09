@@ -8,6 +8,8 @@ mod channels;
 mod config;
 mod connect;
 mod dispatch;
+mod reconnect;
+mod runner;
 mod identity;
 mod input;
 mod message;
@@ -30,6 +32,8 @@ pub use channels::{
 };
 pub use config::IrcConfig;
 pub use connect::{connect, IrcConnection};
+pub use reconnect::{ExponentialBackoff, IrcReconnectConfig};
+pub use runner::{run_irc_session, SessionEnd, SessionFatal};
 pub use dispatch::{dispatch_command, DispatchOutcome};
 pub use crate::gateway::{
     parse_login_args, resolve_player_for_login, LoginAuthPolicy, LoginRequest, ParsedLoginArgs,

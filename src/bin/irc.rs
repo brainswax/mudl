@@ -3,25 +3,20 @@
 //! Connects to IRCv3 servers over TLS by default (see `IRC_TLS`, `IRC_PORT`).
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use mudl::command::bootstrap_active_universe;
 use mudl::gateway::{ensure_bootstrap_wizard, SessionManager};
 use mudl::irc::{
-    cap_end_command, cap_ls_complete, cap_request_command, connect, is_nick_in_use, is_ping,
-    is_registration_incomplete, is_welcome, log_outbound_command, parse_nickserv_reply,
-    registration_commands, registration_error_message, send_bot_nickserv_bootstrap, IrcBot,
-    IrcConfig,
-    IrcMessage, IrcTransport, MockTransport, NickServNotice,
+    connect, run_irc_session, ExponentialBackoff, IrcBot, IrcConfig, MockTransport, SessionEnd,
+    SessionFatal,
 };
 use mudl::mudl::default_module_dir;
 use mudl::object::{ObjectFactory, ObjectId};
 use mudl::persistence::{
     SqlitePersistence, WriterGuard, WriterLockOptions, WriterMode,
 };
-use mudl::transport::GameTransport;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 fn init_tracing() {
     tracing_subscriber::fmt()
@@ -94,6 +89,7 @@ async fn main() -> Result<()> {
         nick = %config.bot_nick,
         world_channel = %config.world_channel,
         database = %config.database_url,
+        reconnect = config.reconnect.enabled,
         "MUDL IRC bot starting"
     );
 
@@ -132,180 +128,84 @@ async fn run_mock_bot(
     Ok(())
 }
 
-fn handle_nickserv_during_registration(
-    message: &IrcMessage,
-    service: &str,
-    welcomed: bool,
-) -> Result<()> {
-    if welcomed {
-        return Ok(());
-    }
-    let (from, text) = match message {
-        IrcMessage::Notice { from, text, .. } | IrcMessage::Privmsg { from, text, .. } => {
-            (from.as_str(), text.as_str())
-        }
-        _ => return Ok(()),
-    };
-    if !from.eq_ignore_ascii_case(service) {
-        return Ok(());
-    }
-    match parse_nickserv_reply(text) {
-        NickServNotice::Identified { .. } => {
-            info!("NickServ accepted bot credentials — awaiting server welcome (001)");
-        }
-        NickServNotice::InvalidPassword => {
-            anyhow::bail!(
-                "NickServ rejected IRC_NICKSERV_PASSWORD — fix credentials and restart"
-            );
-        }
-        NickServNotice::Other(body) => {
-            info!(response = %body, "NickServ response during registration");
-        }
-    }
-    Ok(())
-}
-
 async fn run_live_bot(
     manager: SessionManager<SqlitePersistence>,
     config: IrcConfig,
     _writer_guard: WriterGuard,
 ) -> Result<()> {
-    let mut connection = connect(&config).await?;
+    let mut reconnect_attempts = 0u32;
+    let mut backoff = ExponentialBackoff::new(&config.reconnect);
+
+    let mut connection = connect_with_retry(&config, &mut reconnect_attempts, &mut backoff).await?;
     let transport = Arc::new(connection.transport.clone());
-
-    let registration_deadline =
-        Instant::now() + Duration::from_secs(config.registration_timeout_secs);
-    info!(
-        nick = %config.bot_nick,
-        ircv3 = config.ircv3,
-        timeout_secs = config.registration_timeout_secs,
-        nickserv = config.nickserv.is_configured(),
-        "sending IRC registration"
-    );
-
-    for command in registration_commands(&config.bot_nick, &config.realname, config.ircv3) {
-        log_outbound_command(&command);
-        transport.send_raw(&command).await;
-    }
-
-    if !config.nickserv.is_configured() {
-        warn!(
-            "IRC_NICKSERV_PASSWORD is not set — registered-nick networks may withhold messages until identified. \
-             If it is in .env, quote values containing $ (e.g. IRC_NICKSERV_PASSWORD='your$pass')"
-        );
-    }
-
-    let bot = IrcBot::new(manager, Arc::clone(&transport), config.clone());
-    let mut caps_requested = !config.ircv3;
-    let mut nickserv_sent = !config.ircv3 && config.nickserv.is_configured();
-    let mut welcomed = false;
-
-    if nickserv_sent {
-        info!(
-            service = %config.nickserv.service,
-            "NickServ auto-identify — sent after NICK/USER (legacy registration)"
-        );
-        send_bot_nickserv_bootstrap(transport.as_ref(), &config.nickserv).await;
-    }
+    let mut bot = IrcBot::new(manager, transport, config.clone());
 
     loop {
-        if !welcomed && Instant::now() >= registration_deadline {
-            let hint = if config.nickserv.is_configured() {
-                "Check IRC_NICKSERV_PASSWORD, IRC_NICKSERV_ACCOUNT (if IRC_BOT_NICK differs), and IRC_BOT_NICK."
-            } else {
-                "Set IRC_NICKSERV_PASSWORD for registered-nick networks, or try IRC_IRCV3=false."
-            };
-            anyhow::bail!(
-                "IRC registration timed out after {}s waiting for server welcome (001). {hint}",
-                config.registration_timeout_secs
-            );
-        }
+        match run_irc_session(&mut connection, &bot, &config).await {
+            Ok(SessionEnd::Disconnected { was_registered }) => {
+                if was_registered {
+                    info!("IRC session ended — players remain in world; transport will reconnect");
+                    backoff.reset();
+                    reconnect_attempts = 0;
+                } else {
+                    reconnect_attempts = reconnect_attempts.saturating_add(1);
+                }
 
-        let line = connection
-            .next_line()
-            .await
-            .context("IRC connection lost while waiting for server")?;
-        let Some(line) = line else {
-            warn!("IRC server closed the connection");
-            break;
-        };
+                if !config.reconnect.should_retry(reconnect_attempts) {
+                    if config.reconnect.enabled {
+                        warn!(
+                            attempts = reconnect_attempts,
+                            max = config.reconnect.max_attempts,
+                            "IRC reconnect limit reached — exiting"
+                        );
+                    } else {
+                        info!("IRC disconnected — reconnect disabled (IRC_RECONNECT=false)");
+                    }
+                    break;
+                }
 
-        if is_ping(&line) {
-            let token = line
-                .trim_start()
-                .strip_prefix("PING ")
-                .map(|t| t.trim_start_matches(':').trim())
-                .unwrap_or("");
-            info!("IRC PING received — sending PONG");
-            let pong = mudl::irc::format_outgoing("PONG", &[token], None);
-            log_outbound_command(&pong);
-            transport.send_raw(&pong).await;
-            continue;
-        }
-
-        if let Some(message) = registration_error_message(&line) {
-            if is_nick_in_use(&line) {
-                error!(message = %message, line = %line, "IRC registration rejected");
-                anyhow::bail!("{message}");
-            } else if is_registration_incomplete(&line) {
-                debug!(
-                    message = %message,
-                    line = %line,
-                    "IRC server deferred a command until registration completes"
+                let delay = backoff.next_delay();
+                warn!(
+                    delay_secs = delay.as_secs(),
+                    attempt = reconnect_attempts,
+                    was_registered,
+                    "IRC disconnected — reconnecting after backoff"
                 );
-            } else {
-                error!(message = %message, line = %line, "IRC registration rejected");
+                tokio::time::sleep(delay).await;
+
+                connection =
+                    connect_with_retry(&config, &mut reconnect_attempts, &mut backoff).await?;
+                bot.set_transport(Arc::new(connection.transport.clone()));
             }
-        } else if !welcomed && line.contains(" 00") {
-            info!(line = %line, "IRC server message during registration");
-        }
-
-        let message = mudl::irc::parse_irc_line(&line);
-        handle_nickserv_during_registration(
-            &message,
-            &config.nickserv.service,
-            welcomed,
-        )?;
-
-        if config.ircv3 && cap_ls_complete(&line) && !caps_requested {
-            info!("IRC CAP LS complete — requesting IRCv3 capabilities");
-            let req = cap_request_command();
-            let end = cap_end_command();
-            log_outbound_command(&req);
-            log_outbound_command(&end);
-            transport.send_raw(&req).await;
-            transport.send_raw(&end).await;
-            caps_requested = true;
-            if config.nickserv.is_configured() && !nickserv_sent {
-                info!(
-                    service = %config.nickserv.service,
-                    "NickServ auto-identify — sent after CAP END"
-                );
-                send_bot_nickserv_bootstrap(transport.as_ref(), &config.nickserv).await;
-                nickserv_sent = true;
-            }
-        }
-
-        if !welcomed && is_welcome(&line) {
-            welcomed = true;
-            info!(nick = %config.bot_nick, "IRC registration complete (001 welcome)");
-            transport.join(&config.world_channel).await;
-            info!(channel = %config.world_channel, "joined world channel");
-        }
-
-        if !welcomed {
-            continue;
-        }
-
-        if let IrcMessage::Ping { token } = &message {
-            info!("IRC PING received — sending PONG");
-            transport
-                .send_raw(&mudl::irc::format_outgoing("PONG", &[token], None))
-                .await;
-        }
-        if let Err(err) = bot.handle_message(message).await {
-            warn!(error = %err, "IRC handler error");
+            Err(SessionFatal(err)) => return Err(err),
         }
     }
+
     Ok(())
+}
+
+async fn connect_with_retry(
+    config: &IrcConfig,
+    reconnect_attempts: &mut u32,
+    backoff: &mut ExponentialBackoff,
+) -> Result<mudl::irc::IrcConnection> {
+    loop {
+        match connect(config).await {
+            Ok(connection) => return Ok(connection),
+            Err(err) => {
+                *reconnect_attempts = reconnect_attempts.saturating_add(1);
+                if !config.reconnect.should_retry(*reconnect_attempts) {
+                    return Err(err);
+                }
+                let delay = backoff.next_delay();
+                warn!(
+                    error = %err,
+                    delay_secs = delay.as_secs(),
+                    attempt = *reconnect_attempts,
+                    "IRC connect failed — retrying after backoff"
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
 }
