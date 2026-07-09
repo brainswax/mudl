@@ -19,6 +19,9 @@ pub fn is_known_player_verb(verb: &str) -> bool {
         "help" | "?"
             | "look"
             | "l"
+            | "examine"
+            | "x"
+            | "read"
             | "inventory"
             | "i"
             | "say"
@@ -30,9 +33,22 @@ pub fn is_known_player_verb(verb: &str) -> bool {
             | "take"
             | "get"
             | "drop"
+            | "put"
             | "open"
             | "close"
             | "attack"
+            | "break"
+            | "smash"
+            | "harvest"
+            | "gather"
+            | "use"
+            | "drink"
+            | "apply"
+            | "lock"
+            | "unlock"
+            | "wield"
+            | "wear"
+            | "remove"
             | "go"
             | "quit"
             | "logout"
@@ -170,6 +186,18 @@ mod tests {
     fn logged_out_chatter_is_not_recognized() {
         let line = parse_command_line("hey there");
         assert!(!is_open_channel_game_command(&line, false, None, false));
+    }
+
+    #[test]
+    fn read_and_examine_are_open_channel_commands() {
+        let read = parse_command_line("read sign");
+        assert!(is_open_channel_game_command(&read, true, None, false));
+
+        let examine = parse_command_line("examine sword");
+        assert!(is_open_channel_game_command(&examine, true, None, false));
+
+        let alias = parse_command_line("x chest");
+        assert!(is_open_channel_game_command(&alias, true, None, false));
     }
 
     #[test]

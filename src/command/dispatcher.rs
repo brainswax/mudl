@@ -7,12 +7,14 @@
 use crate::command::parse::CommandLine;
 use crate::command::{authorize_meta_command, authorize_plain_command};
 use crate::display::{
-    format_room_look_player, narrate_no_location, narrate_target_not_found, Describable,
-    DisplayMode, ResolveScope, TargetResolution,
+    format_examine_output, format_no_parent_message, format_room_look_player,
+    narrate_no_location, narrate_target_not_found, parse_examine_request, resolve_examine_request,
+    Describable, DisplayMode, ExamineError, ExamineResolution, ResolveScope, TargetResolution,
 };
 use crate::creature::attack_creature;
 use crate::inventory::{
-    close_container, describe_inventory, drop_item, open_container, take_item, InventoryError,
+    close_container, describe_inventory, drop_item, open_container, read_item, take_item,
+    InventoryError,
 };
 use crate::object::ObjectId;
 use crate::persistence::Persistence;
@@ -125,6 +127,11 @@ impl CommandDispatcher {
                 Self::look_async(session, persistence, target.as_deref(), options.look.clone())
                     .await
             }
+            "examine" | "x" => Self::examine_async(session, persistence, &line.args).await,
+            "read" => {
+                let target = (!line.args.is_empty()).then(|| line.args.join(" "));
+                Self::read_async(session, target.as_deref()).await
+            }
             "inventory" | "i" => Self::inventory_async(session).await,
             "say" | "'" => Self::say_intent(session, &line.args).await,
             "emote" | ":" => Self::emote_intent(session, &line.args).await,
@@ -213,6 +220,80 @@ impl CommandDispatcher {
         CommandResult {
             lines_to_actor: lines,
             ..Default::default()
+        }
+    }
+
+    pub async fn read_async(session: &mut Session, target: Option<&str>) -> CommandResult {
+        let Some(target) = target else {
+            return Self::message("Usage: read <object>".to_string());
+        };
+        match session
+            .with_inventory_async(|ctx| read_item(ctx, target))
+            .await
+        {
+            Ok(msg) => Self::message(msg),
+            Err(InventoryError::NotFound(_)) => {
+                Self::message(narrate_target_not_found(target))
+            }
+            Err(err) => Self::message(err.to_string()),
+        }
+    }
+
+    pub async fn examine_async<P: Persistence>(
+        session: &mut Session,
+        persistence: &P,
+        args: &[String],
+    ) -> CommandResult {
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let request = parse_examine_request(&arg_refs);
+        let anatomy = session.anatomy();
+        let resolution = session
+            .with_world_async(|world, player| {
+                resolve_examine_request(
+                    &request,
+                    &anatomy,
+                    player.actor_id(),
+                    player.current_location(),
+                    world.objects(),
+                )
+            })
+            .await;
+
+        match resolution {
+            Ok(res) => {
+                if let ExamineResolution::Prototype { prototype_id, .. } = &res {
+                    let _ = session.ensure_object(persistence, prototype_id).await;
+                }
+                let ctx = session.display_context_async(DisplayMode::Player).await;
+                if let Some(output) = format_examine_output(&res, &ctx) {
+                    return Self::message(output);
+                }
+                if let ExamineResolution::Object(id) = res {
+                    if let Some(obj) = ctx.objects.get(&id) {
+                        return Self::message(obj.describe(&ctx));
+                    }
+                    let name = args.first().map(String::as_str).unwrap_or("target");
+                    return Self::message(narrate_target_not_found(name));
+                }
+                Self::message("You study it, but learn nothing new.".to_string())
+            }
+            Err(ExamineError::Ambiguous(msg)) => Self::message(msg),
+            Err(ExamineError::NoParent(id)) => {
+                let ctx = session.display_context_async(DisplayMode::Player).await;
+                if let Some(obj) = ctx.objects.get(&id) {
+                    Self::message(format_no_parent_message(obj))
+                } else {
+                    let name = args.first().map(String::as_str).unwrap_or("target");
+                    Self::message(narrate_target_not_found(name))
+                }
+            }
+            Err(ExamineError::NotFound) => {
+                if args.is_empty() {
+                    Self::message(narrate_no_location())
+                } else {
+                    Self::message(narrate_target_not_found(&args[0]))
+                }
+            }
         }
     }
 
@@ -461,6 +542,8 @@ impl CommandDispatcher {
             lines_to_actor: vec![
                 "MUDL IRC commands:".to_string(),
                 "  look (l) [target]   - view room or object".to_string(),
+                "  examine (x) [target]- detailed inspection (self, items, creatures)".to_string(),
+                "  read <object>       - read text on a note, sign, or mailbox".to_string(),
                 "  go <dir>            - move (or use exit name: north, n, ...)".to_string(),
                 "  inventory (i)       - list carried items".to_string(),
                 "  look self           - view your character and gear".to_string(),
@@ -592,5 +675,26 @@ mod tests {
             .lines_to_actor
             .iter()
             .any(|l| l.contains("Usage: attack")));
+    }
+
+    #[tokio::test]
+    async fn read_requires_target() {
+        let mut session = session_in_void().await;
+        let result = CommandDispatcher::read_async(&mut session, None).await;
+        assert!(result
+            .lines_to_actor
+            .iter()
+            .any(|l| l.contains("Usage: read")));
+    }
+
+    #[tokio::test]
+    async fn examine_without_target_describes_room() {
+        let mut session = session_in_void().await;
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let result = CommandDispatcher::examine_async(&mut session, &persistence, &[]).await;
+        assert!(result
+            .lines_to_actor
+            .iter()
+            .any(|l| l.contains("void") || l.contains("Void")));
     }
 }

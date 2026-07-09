@@ -432,6 +432,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_mode_examine_from_shared_channel() {
+        let (bot, transport) = open_bot_fixture().await;
+        bot.handle_input("alice", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "alice".to_string(),
+            account: None,
+            target: "#mudl".to_string(),
+            text: "examine self".to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert!(transport.channel_messages("#mudl").iter().any(|line| {
+            line.contains("Alice @ The Void")
+                && (line.contains("holding") || line.contains("wearing") || line.contains("Alice"))
+        }));
+    }
+
+    #[tokio::test]
     async fn open_mode_ignores_non_command_channel_chat() {
         let (bot, transport) = open_bot_fixture().await;
         bot.handle_input("alice", "login").await.unwrap();
