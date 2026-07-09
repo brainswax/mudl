@@ -5,7 +5,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::command::parse_command_line;
-use crate::gateway::{format_open_chat, is_open_private_actor_line, RateLimitKind, SessionManager};
+use crate::gateway::{
+    is_open_channel_command, is_open_private_actor_line, RateLimitKind, SessionManager,
+};
 use crate::persistence::Persistence;
 
 use super::channels::{classify_target, ChannelTarget};
@@ -139,7 +141,7 @@ where
 
         match classify_target(target, &self.config) {
             ChannelTarget::World if self.config.play_mode.is_open() => {
-                self.handle_open_channel_message(&nick, &display_nick, text).await
+                self.handle_open_channel_message(&nick, text).await
             }
             ChannelTarget::World => self.handle_world_ooc(&nick, &display_nick, text).await,
             ChannelTarget::Bot | ChannelTarget::Private(_) => {
@@ -158,42 +160,22 @@ where
         }
     }
 
-    async fn handle_open_channel_message(
-        &self,
-        nick: &str,
-        display_nick: &str,
-        text: &str,
-    ) -> anyhow::Result<()> {
+    async fn handle_open_channel_message(&self, nick: &str, text: &str) -> anyhow::Result<()> {
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Ok(());
         }
 
         let line = parse_command_line(trimmed);
-        if line.verb.is_empty() {
-            let manager = self.manager.lock().await;
-            if !manager.is_connected(nick) {
-                self.transport
-                    .send_notice(nick, "You are not logged in. Message the bot with 'login'.")
-                    .await;
-                return Ok(());
-            }
-            if let Err(denied) = manager.check_rate_limit(nick, RateLimitKind::Ooc) {
-                self.transport
-                    .send_notice(nick, &manager.rate_limit_denial_message(denied.kind))
-                    .await;
-                return Ok(());
-            }
-            drop(manager);
+        let manager = self.manager.lock().await;
+        let is_command = is_open_channel_command(&manager, nick, &line).await;
+        drop(manager);
 
-            let chat = format_open_chat(display_nick, trimmed);
-            self.transport
-                .send_direct(&self.config.world_channel, &chat)
-                .await;
-            return Ok(());
+        if is_command {
+            self.handle_input(nick, trimmed).await?;
         }
 
-        self.handle_input(nick, trimmed).await?;
+        // Non-commands: no bot action — the player's line is already in the channel.
         Ok(())
     }
 
@@ -368,6 +350,46 @@ mod tests {
         let transport = Arc::new(MockTransport::new());
         let bot = IrcBot::new(manager, Arc::clone(&transport), IrcConfig::default());
         (bot, transport)
+    }
+
+    async fn open_bot_fixture() -> (
+        IrcBot<SqlitePersistence, MockTransport>,
+        Arc<MockTransport>,
+    ) {
+        let persistence = SqlitePersistence::new(":memory:").await.unwrap();
+        let room = ObjectId::new("room:void-001");
+        let mut hero = with_login_name(bare("player:hero-001", "Alice"), "alice");
+        hero.location = Some(room.clone());
+        let place = bare("room:void-001", "The Void");
+        persistence.save_object(&hero).await.unwrap();
+        persistence.save_object(&place).await.unwrap();
+
+        let manager = SessionManager::open(persistence, crate::mudl::AnatomyRegistry::default())
+            .await
+            .unwrap();
+        let transport = Arc::new(MockTransport::new());
+        let mut config = IrcConfig::default();
+        config.play_mode = crate::gateway::PlayMode::Open;
+        let bot = IrcBot::new(manager, Arc::clone(&transport), config);
+        (bot, transport)
+    }
+
+    #[tokio::test]
+    async fn open_mode_ignores_non_command_channel_chat() {
+        let (bot, transport) = open_bot_fixture().await;
+        bot.handle_input("alice", "login").await.unwrap();
+        transport.clear();
+
+        bot.handle_message(IrcMessage::Privmsg {
+            from: "alice".to_string(),
+            account: None,
+            target: "#mudl".to_string(),
+            text: "and again".to_string(),
+        })
+        .await
+        .unwrap();
+
+        assert!(transport.recorded().is_empty());
     }
 
     #[tokio::test]

@@ -3,6 +3,7 @@
 pub mod dispatcher;
 pub mod editor;
 pub mod parse;
+pub mod player_input;
 pub mod place;
 pub mod trigger;
 
@@ -15,6 +16,10 @@ pub use dispatcher::{
     SocialIntent,
 };
 pub use parse::{is_meta_command, parse_command_line, CommandLine};
+pub use player_input::{
+    exit_index_for_current_room, is_known_player_verb, is_logged_out_channel_verb,
+    is_open_channel_game_command, is_recognized_player_command,
+};
 pub use crate::gateway::{
     authorize_meta_command, authorize_plain_command, ActorTier, AuthError,
 };

@@ -11,7 +11,9 @@ use crate::display::{
     DisplayMode, ResolveScope, TargetResolution,
 };
 use crate::creature::attack_creature;
-use crate::inventory::{describe_inventory, drop_item, take_item, InventoryError};
+use crate::inventory::{
+    close_container, describe_inventory, drop_item, open_container, take_item, InventoryError,
+};
 use crate::object::ObjectId;
 use crate::persistence::Persistence;
 use crate::repl::Session;
@@ -134,6 +136,14 @@ impl CommandDispatcher {
             "drop" => {
                 let target = (!line.args.is_empty()).then(|| line.args.join(" "));
                 Self::drop_async(session, target.as_deref()).await
+            }
+            "open" => {
+                let target = (!line.args.is_empty()).then(|| line.args.join(" "));
+                Self::open_async(session, target.as_deref()).await
+            }
+            "close" => {
+                let target = (!line.args.is_empty()).then(|| line.args.join(" "));
+                Self::close_async(session, target.as_deref()).await
             }
             "attack" => {
                 let target = (!line.args.is_empty()).then(|| line.args.join(" "));
@@ -292,6 +302,46 @@ impl CommandDispatcher {
         }
     }
 
+    pub async fn open_async(session: &mut Session, target: Option<&str>) -> CommandResult {
+        let Some(target) = target else {
+            return Self::message("Usage: open <container>".to_string());
+        };
+        match session
+            .with_inventory_async(|ctx| open_container(ctx, target))
+            .await
+        {
+            Ok(msg) => CommandResult {
+                lines_to_actor: vec![msg],
+                persist_world: true,
+                ..Default::default()
+            },
+            Err(InventoryError::NotFound(_)) => {
+                Self::message(narrate_target_not_found(target))
+            }
+            Err(err) => Self::message(err.to_string()),
+        }
+    }
+
+    pub async fn close_async(session: &mut Session, target: Option<&str>) -> CommandResult {
+        let Some(target) = target else {
+            return Self::message("Usage: close <container>".to_string());
+        };
+        match session
+            .with_inventory_async(|ctx| close_container(ctx, target))
+            .await
+        {
+            Ok(msg) => CommandResult {
+                lines_to_actor: vec![msg],
+                persist_world: true,
+                ..Default::default()
+            },
+            Err(InventoryError::NotFound(_)) => {
+                Self::message(narrate_target_not_found(target))
+            }
+            Err(err) => Self::message(err.to_string()),
+        }
+    }
+
     pub async fn movement_async(session: &mut Session, line: &CommandLine) -> CommandResult {
         let index = session
             .with_world_async(|world, player| {
@@ -413,8 +463,11 @@ impl CommandDispatcher {
                 "  look (l) [target]   - view room or object".to_string(),
                 "  go <dir>            - move (or use exit name: north, n, ...)".to_string(),
                 "  inventory (i)       - list carried items".to_string(),
+                "  look self           - view your character and gear".to_string(),
                 "  take <item>         - pick up an item".to_string(),
                 "  drop [count] <item> - drop a carried item".to_string(),
+                "  open <container>    - open a container or door".to_string(),
+                "  close <container>   - close a container or door".to_string(),
                 "  attack <creature>   - strike a creature (turn-based combat)".to_string(),
                 "  say <text>          - speak to players in your room".to_string(),
                 "  emote <text>        - perform an action in your room".to_string(),

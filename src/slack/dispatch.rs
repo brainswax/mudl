@@ -532,7 +532,7 @@ fn slack_help_lines(config: &SlackConfig) -> Vec<String> {
     let ooc = if config.play_mode.is_open() {
         let shared = super::channels::shared_ic_presence(config);
         format!(
-            "Open world: chat and commands in <#{shared}> (plain chat, no [OOC] prefix)."
+            "Open world: chat freely in <#{shared}>; bot only responds to game commands."
         )
     } else if config.world_channel.is_empty() {
         "OOC: configured world channel (ask your operator).".to_string()

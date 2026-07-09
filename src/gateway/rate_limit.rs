@@ -266,7 +266,8 @@ pub fn rate_limit_kind_for_line(line: &crate::command::CommandLine) -> RateLimit
     match line.verb.as_str() {
         "go" => RateLimitKind::Movement,
         "help" | "?" | "login" | "quit" | "logout" | "exit" | "look" | "l" | "inventory" | "i"
-        | "say" | "'" | "emote" | ":" | "tell" | "whisper" | "take" | "get" => {
+        | "say" | "'" | "emote" | ":" | "tell" | "whisper" | "take" | "get" | "drop" | "open"
+        | "close" | "attack" => {
             RateLimitKind::Command
         }
         _ => RateLimitKind::Movement,

@@ -5,7 +5,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::command::parse_command_line;
-use crate::gateway::{is_open_private_actor_line, RateLimitKind, SessionManager};
+use crate::gateway::{
+    is_open_channel_command, is_open_private_actor_line, RateLimitKind, SessionManager,
+};
 use crate::persistence::Persistence;
 
 use super::config::SlackConfig;
@@ -153,46 +155,16 @@ where
         }
 
         let line = parse_command_line(trimmed);
-        if line.verb.is_empty() {
-            let manager = self.manager.lock().await;
-            if !manager.is_connected(&message.user) {
-                self.send_notice(
-                    &message.channel,
-                    &message.user,
-                    "You are not logged in. DM the bot with `login`.",
-                )
-                .await;
-                return Ok(());
-            }
-            if let Err(denied) = manager.check_rate_limit(&message.user, RateLimitKind::Ooc) {
-                self.send_notice(
-                    &message.channel,
-                    &message.user,
-                    &manager.rate_limit_denial_message(denied.kind),
-                )
-                .await;
-                return Ok(());
-            }
-            let display = manager
-                .with_session(&message.user, |session| {
-                    session.with_world(|world, player| {
-                        world
-                            .object(player.actor_id())
-                            .map(|obj| obj.name.clone())
-                            .unwrap_or_else(|| message.user.clone())
-                    })
-                })
-                .await
-                .unwrap_or_else(|| message.user.clone());
-            drop(manager);
+        let manager = self.manager.lock().await;
+        let is_command = is_open_channel_command(&manager, &message.user, &line).await;
+        drop(manager);
 
-            let chat = super::format::format_open_chat(&display, trimmed);
-            self.send_to_presence(&message.channel, &chat).await;
-            return Ok(());
+        if is_command {
+            self.handle_input(&message.user, &message.channel, trimmed)
+                .await?;
         }
 
-        self.handle_input(&message.user, &message.channel, trimmed)
-            .await?;
+        // Non-commands: no bot action — the player's line is already in the channel.
         Ok(())
     }
 

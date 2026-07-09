@@ -3,7 +3,9 @@
 //! In **open** play mode the world/rooms channel is the single in-character surface.
 //! Player `look` stays room-scoped; output is labeled with the actor's current place.
 
-use crate::command::SocialIntent;
+use crate::command::{
+    exit_index_for_current_room, is_open_channel_game_command, CommandLine, SocialIntent,
+};
 use crate::display::ResolveScope;
 use crate::gateway::{PlayMode, SessionManager};
 use crate::object::ObjectId;
@@ -54,10 +56,6 @@ pub fn is_open_private_actor_line(line: &str) -> bool {
         || line.contains("too quickly")
         || line.contains("Invalid login")
         || line.contains("Registration is closed")
-        || line.contains("don't see anything")
-        || line.contains("You can't")
-        || line.contains("You are not carrying")
-        || line.contains("Say what")
 }
 
 /// Whether a [`CommandResult`] line is already posted via [`SocialIntent`] channel routing.
@@ -126,9 +124,30 @@ fn sanitize_open_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Whether a shared-channel line should be dispatched as a game command (open mode only).
+pub async fn is_open_channel_command<P: Persistence + Clone>(
+    manager: &SessionManager<P>,
+    actor_id: &str,
+    line: &CommandLine,
+) -> bool {
+    let logged_in = manager.is_connected(actor_id);
+    let exit_index = if logged_in {
+        manager
+            .with_session(actor_id, |session| {
+                session.with_world(|world, player| exit_index_for_current_room(world, player))
+            })
+            .await
+            .flatten()
+    } else {
+        None
+    };
+    is_open_channel_game_command(line, logged_in, exit_index.as_ref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::command::CommandResult;
     use crate::object::ObjectId;
 
     #[test]
@@ -170,5 +189,16 @@ mod tests {
         assert!(body.contains("pick up the sword"));
         assert!(!body.contains("Alice says"));
         assert!(!body.contains("You tell"));
+    }
+
+    #[test]
+    fn game_command_errors_broadcast_to_channel() {
+        let lines = vec![
+            "You don't see anything like \"boots\" here.".to_string(),
+            "Your hands are full.".to_string(),
+        ];
+        let body = open_channel_broadcast_body(None, &lines).expect("body");
+        assert!(body.contains("don't see anything"));
+        assert!(body.contains("hands are full"));
     }
 }

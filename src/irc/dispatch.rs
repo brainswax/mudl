@@ -675,7 +675,7 @@ mod tests {
     use super::*;
     use crate::gateway::SessionManager;
     use crate::irc::config::IrcConfig;
-    use crate::object::{Object, ObjectId, PermissionFlags};
+    use crate::object::{ContainerSpec, Object, ObjectId, PermissionFlags};
     use crate::persistence::SqlitePersistence;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -988,11 +988,20 @@ mod tests {
         let mut sword = bare("item:rusty-sword", "rusty sword");
         sword.location = Some(room_id.clone());
 
+        let mut chest = bare("item:chest-001", "chest");
+        chest.apply_container_role(&ContainerSpec {
+            capacity: 5,
+            open: false,
+            ..ContainerSpec::default()
+        });
+        chest.location = Some(room.clone());
+
         persistence.save_object(&hero1).await.unwrap();
         persistence.save_object(&hero2).await.unwrap();
         persistence.save_object(&place).await.unwrap();
         persistence.save_object(&north_room).await.unwrap();
         persistence.save_object(&sword).await.unwrap();
+        persistence.save_object(&chest).await.unwrap();
 
         let manager = SessionManager::open(persistence, human_anatomy())
             .await
@@ -1244,7 +1253,11 @@ mod tests {
             .to_sender
             .iter()
             .any(|l| l.contains("don't see anything like \"rusty sword\"")));
-        assert!(!outcome.channel.iter().any(|(_, line)| line.contains("rusty sword")));
+        assert!(outcome.channel.iter().any(|(ch, line)| {
+            ch == &config.world_channel
+                && line.contains("Alice @ The Void")
+                && line.contains("don't see anything like \"rusty sword\"")
+        }));
     }
 
     #[tokio::test]
@@ -1258,6 +1271,53 @@ mod tests {
             ch == &config.world_channel
                 && line.contains("Alice @ The Void")
                 && (line.contains("void") || line.contains("Void"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn open_mode_look_self_broadcasts_with_location_context() {
+        let (manager, mut config) = manager_arc().await;
+        config.play_mode = crate::gateway::PlayMode::Open;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+
+        let outcome = dispatch_command(manager, "alice", "look self", &config).await;
+        assert!(outcome.channel.iter().any(|(ch, line)| {
+            ch == &config.world_channel
+                && line.contains("Alice @ The Void")
+                && (line.contains("holding") || line.contains("wearing"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn open_mode_take_broadcasts_with_location_context() {
+        let room = ObjectId::new("room:void-001");
+        let (manager, mut config) = manager_with_sword_at(&room).await;
+        config.play_mode = crate::gateway::PlayMode::Open;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+
+        let outcome = dispatch_command(manager, "alice", "take rusty sword", &config).await;
+        assert!(outcome.persist);
+        assert!(outcome.channel.iter().any(|(ch, line)| {
+            ch == &config.world_channel
+                && line.contains("Alice @ The Void")
+                && line.contains("pick up")
+                && line.contains("rusty sword")
+        }));
+    }
+
+    #[tokio::test]
+    async fn open_mode_open_broadcasts_with_location_context() {
+        let room = ObjectId::new("room:void-001");
+        let (manager, mut config) = manager_with_sword_at(&room).await;
+        config.play_mode = crate::gateway::PlayMode::Open;
+        dispatch_command(Arc::clone(&manager), "alice", "login", &config).await;
+
+        let outcome = dispatch_command(manager, "alice", "open chest", &config).await;
+        assert!(outcome.persist);
+        assert!(outcome.channel.iter().any(|(ch, line)| {
+            ch == &config.world_channel
+                && line.contains("Alice @ The Void")
+                && line.contains("open the chest")
         }));
     }
 

@@ -40,8 +40,8 @@ pub use login_auth::{
     LoginAuthError, LoginAuthPolicy, LoginRequest, ParsedLoginArgs, LOGIN_TOKEN_PROPERTY,
 };
 pub use open_delivery::{
-    actor_place_context, format_open_chat, format_open_context_post, is_open_private_actor_line,
-    open_channel_broadcast_body, transport_look_scope,
+    actor_place_context, format_open_chat, format_open_context_post, is_open_channel_command,
+    is_open_private_actor_line, open_channel_broadcast_body, transport_look_scope,
 };
 pub use persistence::{hydrate_actor, persist_connection_state};
 pub use play_mode::PlayMode;
